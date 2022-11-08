@@ -8,7 +8,7 @@ from mpar_sim.radar_detection_generator import RadarDetectionGenerator
 import numpy as np
 from typing import Callable, List, Optional, Tuple, Union
 from scipy import constants
-from mpar_sim.job import Job, RadarJob
+from mpar_sim.look import Look, RadarLook
 
 
 class Radar():
@@ -120,14 +120,14 @@ class Radar():
         has_scan_loss=has_scan_loss,
     )
 
-  def load_job(self, job: Job) -> None:
+  def load_look(self, look: Look) -> None:
     """
-    Allocate resources for the given radar job
+    Allocate resources for the given radar look
 
     Parameters
     ----------
-    job: Job
-      The radar job to be scheduled and executed. The following parameters must be present in the job object:
+    look: Look
+      The radar look to be scheduled and executed. The following parameters must be present in the look object:
         - bandwidth
         - pulsewidth
         - prf
@@ -139,25 +139,25 @@ class Radar():
     """
 
     # Handle input errors
-    if job.azimuth_steering_angle < min(self.azimuth_limits) or job. azimuth_steering_angle > max(self.azimuth_limits):
+    if look.azimuth_steering_angle < min(self.azimuth_limits) or look. azimuth_steering_angle > max(self.azimuth_limits):
       warnings.warn(
           "Azimuth steering angle is outside the azimuth limits of the radar")
 
-    if job.elevation_steering_angle < min(self.elevation_limits) or job.elevation_steering_angle > max(self.elevation_limits):
+    if look.elevation_steering_angle < min(self.elevation_limits) or look.elevation_steering_angle > max(self.elevation_limits):
       warnings.warn(
           "Elevation steering angle is outside the elevation limits of the radar")
 
     # Compute range/velocity resolutions
-    range_resolution = constants.c / (2 * job.bandwidth)
-    velocity_resolution = (self.wavelength / 2) * (job.prf / job.n_pulses)
+    range_resolution = constants.c / (2 * look.bandwidth)
+    velocity_resolution = (self.wavelength / 2) * (look.prf / look.n_pulses)
 
     # Compute ambiguity limits
-    max_unambiguous_range = constants.c / (2 * job.prf)
-    max_unambiguous_radial_speed = (self.wavelength / 2) * (job.prf / 2)
+    max_unambiguous_range = constants.c / (2 * look.prf)
+    max_unambiguous_radial_speed = (self.wavelength / 2) * (look.prf / 2)
 
     # Compute required subarray resources from the beamwidth
     aperture_length_x, aperture_length_y = tuple(beamwidth2aperture(
-        np.array([job.azimuth_beamwidth, job.elevation_beamwidth]), self.wavelength))
+        np.array([look.azimuth_beamwidth, look.elevation_beamwidth]), self.wavelength))
     # Compute the number of elements in each dimension for this aperture size
     n_elements_x = int(
         np.ceil(aperture_length_x / (self.element_spacing*self.wavelength)))
@@ -176,24 +176,24 @@ class Radar():
 
     # Create a new beam from the parameter
     beam = self.beam_type(
-        azimuth_beamwidth=job.azimuth_beamwidth,
-        elevation_beamwidth=job.elevation_beamwidth,
-        azimuth_steering_angle=job.azimuth_steering_angle,
-        elevation_steering_angle=job.elevation_steering_angle,
+        azimuth_beamwidth=look.azimuth_beamwidth,
+        elevation_beamwidth=look.elevation_beamwidth,
+        azimuth_steering_angle=look.azimuth_steering_angle,
+        elevation_steering_angle=look.elevation_steering_angle,
         has_scan_loss=self.data_generator.has_scan_loss
     )
 
     # Compute power and gain for the beam
     tx_power = n_elements_total * self.element_tx_power
     array_gain = beam.gain
-    pulse_compression_gain = job.bandwidth * job.pulsewidth
+    pulse_compression_gain = look.bandwidth * look.pulsewidth
     noise_power = constants.Boltzmann * self.system_temperature * \
-        self.noise_figure * job.bandwidth * n_elements_total
-    loop_gain = job.n_pulses * pulse_compression_gain * tx_power * \
+        self.noise_figure * look.bandwidth * n_elements_total
+    loop_gain = look.n_pulses * pulse_compression_gain * tx_power * \
         array_gain**2 * self.wavelength**2 / ((4*np.pi)**3 * noise_power)
 
     # Assign results to data generator
-    self.data_generator.n_pulses = job.n_pulses
+    self.data_generator.n_pulses = look.n_pulses
     self.data_generator.max_unambiguous_range = max_unambiguous_range
     self.data_generator.max_unambiguous_radial_speed = max_unambiguous_radial_speed
     self.data_generator.range_resolution = range_resolution

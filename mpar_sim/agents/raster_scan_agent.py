@@ -1,5 +1,5 @@
 import numpy as np
-from mpar_sim.job import RadarJob
+from mpar_sim.look import RadarLook
 
 from mpar_sim.agents.agent import Agent
 
@@ -70,7 +70,7 @@ class RasterScanAgent(Agent):
     self.n_positions = self.beam_positions.shape[1]
     self.current_position = 0
 
-  def act(self, current_time: float) -> RadarJob:
+  def act(self, current_time: float) -> RadarLook:
     """
     Select a new set of task parameters
 
@@ -81,16 +81,16 @@ class RasterScanAgent(Agent):
 
     Returns
     -------
-    RadarJob
-        A new job at the next beam position in the raster scan
+    RadarLook
+        A new look at the next beam position in the raster scan
     """
 
     # Select a new beam position
     beam_position = self.beam_positions[:, self.current_position]
     self.current_position = (self.current_position +
                              1) % self.n_positions
-    # Create a new job
-    job = RadarJob(
+    # Create a new look
+    look = RadarLook(
         start_time=current_time,
         azimuth_steering_angle=beam_position[0],
         elevation_steering_angle=beam_position[1],
@@ -102,4 +102,4 @@ class RasterScanAgent(Agent):
         n_pulses=self.n_pulses
     )
 
-    return job
+    return look

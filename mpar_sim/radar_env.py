@@ -2,7 +2,7 @@ from copy import deepcopy
 from typing import List
 import numpy as np
 from mpar_sim.common.coordinate_transform import azel2rotmat
-from mpar_sim.job import RadarJob
+from mpar_sim.look import RadarLook
 
 from mpar_sim.platforms import Platform
 from mpar_sim.radar import Radar
@@ -34,9 +34,9 @@ class RadarEnvironment():
     self.last_observation = None
     self.fig = None
 
-  def step(self, action: RadarJob):
+  def step(self, action: RadarLook):
     self.radar.reset_subarrays()
-    self.radar.load_job(action)
+    self.radar.load_look(action)
 
     # Collect measurments
     detections = self.radar.detect(self.targets, self.global_time)
@@ -89,7 +89,7 @@ class RadarEnvironment():
     if self.render:
       plt.close()
 
-  def update_beam_coverage(self, action: RadarJob) -> None:
+  def update_beam_coverage(self, action: RadarLook) -> None:
     az_beamwidth = self.radar.data_generator.beam.azimuth_beamwidth
     el_beamwidth = self.radar.data_generator.beam.elevation_beamwidth
     az_axis = np.linspace(
@@ -117,7 +117,7 @@ class RadarEnvironment():
     self.el_axis = el_axis
 
   def create_range_velocity_map(self, 
-                                action: RadarJob, 
+                                action: RadarLook, 
                                 detections: DetectionReport) -> np.ndarray:
     prf = action.prf
     pri = 1 / prf

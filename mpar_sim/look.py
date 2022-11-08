@@ -1,8 +1,8 @@
-class Job():
+class Look():
   pass
 
 
-class RadarJob(Job):
+class RadarLook(Look):
   def __init__(self,
                start_time: float,
                # Beam parameters
