@@ -37,7 +37,7 @@ if __name__ == '__main__':
       noise_figure=4,
       # Scan settings
       beam_type=RectangularBeam,
-      azimuth_limits=np.array([-45, 45]),
+      azimuth_limits=np.array([-60, 60]),
       elevation_limits=np.array([-20, 20]),
       # Detection settings
       false_alarm_rate=1e-6,
