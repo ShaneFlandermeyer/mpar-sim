@@ -4,7 +4,7 @@ from typing import List
 import numpy as np
 from scipy import special
 
-from mpar_sim.beam import beam_scan_loss
+from mpar_sim.beam.beam import beam_scan_loss
 from mpar_sim.common.coordinate_transform import azel2rotmat, cart2sph
 from mpar_sim.common.wrap_to_interval import wrap_to_interval
 from mpar_sim.platforms import Platform
