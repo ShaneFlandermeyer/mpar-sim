@@ -99,7 +99,7 @@ class RasterScanAgent(Agent):
         bandwidth=self.bandwidth,
         pulsewidth=self.pulsewidth,
         prf=self.prf,
-        n_pulses=self.n_pulses
+        n_pulses=self.n_pulses,
     )
 
     return look

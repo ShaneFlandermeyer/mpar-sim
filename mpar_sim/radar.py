@@ -1,3 +1,4 @@
+import copy
 import time
 import warnings
 from mpar_sim.beam import Beam, RectangularBeam, beam_broadening_factor, beamwidth2aperture
@@ -9,6 +10,155 @@ import numpy as np
 from typing import Callable, List, Optional, Tuple, Union
 from scipy import constants
 from mpar_sim.look import Look, RadarLook
+
+# Stonesoup imports
+from stonesoup.sensor.sensor import Sensor
+from typing import Set
+from stonesoup.types.groundtruth import GroundTruthState
+from stonesoup.types.detection import TrueDetection
+from stonesoup.models.measurement import MeasurementModel
+from stonesoup.types.state import StateVector
+from stonesoup.base import Property
+from scipy import constants
+from stonesoup.models.measurement.nonlinear import RangeRangeRateBinning
+from stonesoup.sensor.radar.radar import RadarElevationBearingRangeRate
+
+
+class MultiBeamRadar(Sensor):
+  """An AESA that can form multiple beams on each time step."""
+
+  # Motion and orientation parameters
+  rotation_offset: StateVector = Property(
+      default=StateVector([0, 0, 0]),
+      doc="A 3x1 array of angles (rad), specifying the radar orientation in terms of the "
+      "counter-clockwise rotation around the :math:`x,y,z` axis. i.e Roll, Pitch and Yaw. "
+      "Default is ``StateVector([0, 0, 0])``")
+  position_mapping: Tuple[int, int, int] = Property(
+      default=(0, 1, 2),
+      doc="Mapping between or positions and state "
+          "dimensions. [x,y,z]")
+  # Array parameters
+  n_elements_x: int = Property(
+      default=16,
+      doc="The number of horizontal array elements")
+  n_elements_y: int = Property(
+      default=16,
+      doc="The number of vertical array elements")
+  element_spacing: float = Property(
+      default=0.5,
+      doc="The spacing between array elements (m)")
+  element_tx_power: float = Property(
+      default=10,
+      doc="Tx power of each element (W)")
+  # System parameters
+  center_frequency: float = Property(
+      default=3e9,
+      doc="Transmit frequency of the array")
+  system_temperature: float = Property(
+      default=290,
+      doc="System noise temperature (K)")
+  noise_figure: float = Property(
+      default=4,
+      doc="Receiver noise figure (dB)")
+  # Scan settings
+  beam_shape: Callable = Property(
+      default=RectangularBeam,
+      doc="Object describing the shape of the beam.")
+  # Detections settings
+  false_alarm_rate: float = Property(
+      default=1e-6,
+      doc="Probability of false alarm")
+
+  measurement_model: MeasurementModel = Property(
+      default=RadarElevationBearingRangeRate(
+          position_mapping=(0, 2, 4),
+          velocity_mapping=(1, 4, 5),
+          noise_covar=np.array([0, 0, 0, 0])),
+      doc="The measurement model used to generate "
+      "measurements."
+  )
+
+  def __init__(self, *args, **kwargs):
+    super().__init__(*args, **kwargs)
+    self.wavelength = constants.c / self.center_frequency
+    # TODO: Handle subarray resource allocation in a separate object.
+
+  @ measurement_model.getter
+  def measurement_model(self):
+    measurement_model = copy.deepcopy(self._property_measurement_model)
+    measurement_model.translation_offset = self.position.copy()
+    measurement_model.rotation_offset = self.rotation_offset.copy()
+    return measurement_model
+
+  @ property
+  def _rotation_matrix(self) -> np.ndarray:
+    """
+    Computes the 3D axis rotation matrix
+
+    TODO: Implement me
+
+    Returns
+    -------
+    np.ndarray
+      (3,3) rotation matrix
+    """
+    pass
+
+  def load_job(self, job: Job):
+    """
+    Allocate resources for the given radar job
+
+    Parameters
+    ----------
+    job: Job
+      The radar job to be scheduled and executed. The following parameters must be present in the job object:
+        - bandwidth
+        - pulsewidth
+        - prf
+        - n_pulses
+        - azimuth_beamwidth
+        - elevation_beamwidth
+        - azimuth_steering_angle
+        - elevation_steering_angle
+        - tx_power
+    """
+    # Compute range/velocity resolutions
+    self.range_resolution = constants.c / (2 * job.bandwidth)
+    self.velocity_resolution = (self.wavelength / 2) * (job.prf / job.n_pulses)
+
+    # Compute ambiguity limits
+    self.max_unambiguous_range = constants.c / (2 * job.prf)
+    self.max_unambiguous_radial_speed = (self.wavelength / 2) * (job.prf / 2)
+
+    # Create a new beam from the parameter set
+    self.beam = self.beam_type(
+        azimuth_beamwidth=job.azimuth_beamwidth,
+        elevation_beamwidth=job.elevation_beamwidth,
+        azimuth_steering_angle=job.azimuth_steering_angle,
+        elevation_steering_angle=job.elevation_steering_angle,
+    )
+
+    # Compute the loop gain (the part of the radar range equation that doesn't depend on the target)
+    pulse_compression_gain = job.bandwidth * job.pulsewidth
+    n_elements_total = int(job.tx_power / self.element_tx_power)
+    noise_power = constants.Boltzmann * self.system_temperature * \
+        self.noise_figure * job.bandwidth * n_elements_total
+    self.loop_gain = job.n_pulses * pulse_compression_gain * job.tx_power * \
+        self.beam.gain**2 * self.wavelength**2 / ((4*np.pi)**3 * noise_power)
+
+    # TODO: For now, assume a measurement model with no noise
+    self.measurement_model = RangeRangeRateBinning(
+        range_res=self.range_resolution,
+        range_rate_res=self.velocity_resolution,
+        ndim_state=6,
+        mapping=[0, 2, 4],
+        velocity_mapping=[1, 3, 5],
+        noise_covar=np.array([0, 0, 0, 0])
+    )
+
+  def measure(self, ground_truths: Set[GroundTruthState], noise: Union[np.ndarray, bool] = True, **kwargs) -> set[TrueDetection]:
+    # TODO: Should be able to mostly merge logic between radar detection generator and AESARadar object
+    pass
 
 
 class Radar():
@@ -167,12 +317,12 @@ class Radar():
 
     # Try to allocate the subarray
     if n_elements_total <= np.sum(self.subarray_indices == -1):
-        self.subarray_indices[:n_elements_x,
+      self.subarray_indices[:n_elements_x,
                             :n_elements_y] = self.data_generator.id
     else:
-        print(warnings.warn
-        ("Attempted to allocate a subarray larger than the available aperture"))
-        return 
+      print(warnings.warn
+            ("Attempted to allocate a subarray larger than the available aperture"))
+      return
 
     # Create a new beam from the parameter
     beam = self.beam_type(
@@ -209,7 +359,15 @@ class Radar():
     return self.data_generator.detect(targets, time)
 
   def reset_subarrays(self) -> None:
-      """
-      Reset subarray assignments
-      """
-      self.subarray_indices[:,:] = -1 
+    """
+    Reset subarray assignments
+    """
+    self.subarray_indices[:, :] = -1
+
+
+if __name__ == '__main__':
+  r = MultiBeamRadar(
+      position=StateVector([0, 0, 0])
+  )
+  print(r.measurement_model)
+  

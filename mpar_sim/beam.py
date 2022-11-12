@@ -139,24 +139,12 @@ class Beam():
                azimuth_beamwidth: float,
                elevation_beamwidth: float,
                azimuth_steering_angle: float = 0,
-               elevation_steering_angle: float = 0,
-               has_scan_loss: bool = False) -> None:
+               elevation_steering_angle: float = 0) -> None:
 
-    self.has_scan_loss = has_scan_loss
     self.azimuth_steering_angle = azimuth_steering_angle
     self.elevation_steering_angle = elevation_steering_angle
-    if self.has_scan_loss:
-      az_broadening, el_broadening = beam_broadening_factor(
-          az_steering_angle=azimuth_steering_angle,
-          el_steering_angle=elevation_steering_angle,
-      )
-      effective_azimuth_beamwidth = azimuth_beamwidth * az_broadening
-      effective_elevation_beamwidth = elevation_beamwidth * el_broadening
-      self.azimuth_beamwidth = effective_azimuth_beamwidth
-      self.elevation_beamwidth = effective_elevation_beamwidth
-    else:
-      self.azimuth_beamwidth = azimuth_beamwidth
-      self.elevation_beamwidth = elevation_beamwidth
+    self.azimuth_beamwidth = azimuth_beamwidth
+    self.elevation_beamwidth = elevation_beamwidth
 
     # Compute gain for the given beamwidth
     gain_db = beamwidth2gain(

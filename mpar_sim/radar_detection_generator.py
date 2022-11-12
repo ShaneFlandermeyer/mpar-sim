@@ -115,12 +115,14 @@ class RadarDetectionGenerator():
         target_azimuths, target_elevations)
 
     # Compute losses due to steering off boresight
-    array_scan_loss = beam_scan_loss(
-        self.beam.azimuth_steering_angle, self.beam.elevation_steering_angle)
+    # TODO: This should already be accounted for as a loss in directivity
+    # array_scan_loss = beam_scan_loss(
+    #     self.beam.azimuth_steering_angle, self.beam.elevation_steering_angle)
 
     # Compute the instantaneous power, accounting for the beam shape
-    snr_db = snr_db - \
-        beam_shape_loss_db - array_scan_loss
+    # snr_db = snr_db - \
+        # beam_shape_loss_db - array_scan_loss
+    snr_db = snr_db - beam_shape_loss_db    
 
     # Compute probability of detection from the mean SNR
     snr = 10**(snr_db/10)
