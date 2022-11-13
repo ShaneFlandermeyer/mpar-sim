@@ -103,3 +103,13 @@ raster_agent = RasterScanAgent(
       prf=1500,
       n_pulses=10)
 ```
+
+## Progress
+
+- [x] Phased Array Radar Model
+- [ ] Actionable phased array sensor
+- [ ] Deterministic task scheduling algorithm(s)
+- [ ] Basic simulation (raster scan + adaptive tracking)
+- [ ] Documentation
+- [ ] RL Gym environment
+- [ ] RL-based task scheduler

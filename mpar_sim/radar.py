@@ -8,18 +8,20 @@ from typing import Set
 from stonesoup.types.groundtruth import GroundTruthState
 from stonesoup.types.detection import TrueDetection
 from stonesoup.models.measurement import MeasurementModel
-from stonesoup.types.state import StateVector
+from stonesoup.types.state import StateVector, State
 from stonesoup.base import Property
 from scipy import constants
 from stonesoup.models.measurement.nonlinear import RangeRangeRateBinning
 from stonesoup.sensor.radar.radar import RadarElevationBearingRangeRate
-from mpar_sim.look import Look
+from mpar_sim.look import Look, RadarLook
 from typing import Callable, List, Optional, Tuple, Union
 from scipy import constants
 import numpy as np
 
+from mpar_sim.models.measurement.nonlinear import RangeRangeRateBinningAliasing
 
-class MultiBeamRadar(Sensor):
+
+class PhasedArrayRadar(Sensor):
   """An active electronically scanned array (AESA) radar sensor"""
 
   # Motion and orientation parameters
@@ -118,6 +120,8 @@ class MultiBeamRadar(Sensor):
         - elevation_steering_angle
         - tx_power
     """
+    # TODO: Look into action objects for a cleaner way to handle this
+    # See: https://stonesoup.readthedocs.io/en/latest/auto_examples/Creating_Actionable_Sensor.html
     self.n_pulses = look.n_pulses
     # Compute range/velocity resolutions
     self.range_resolution = constants.c / (2 * look.bandwidth)
@@ -129,13 +133,12 @@ class MultiBeamRadar(Sensor):
     self.max_unambiguous_radial_speed = (self.wavelength / 2) * (look.prf / 2)
 
     # Create a new beam from the parameter set
-    # NOTE: The beam object assumes you have already calculated any beam broadening terms before passing the beamwidths to the objects.
     az_broadening, el_broadening = beam_broadening_factor(
         look.azimuth_steering_angle,
         look.elevation_steering_angle)
     effective_az_beamwidth = look.azimuth_beamwidth * az_broadening
     effective_el_beamwidth = look.elevation_beamwidth * el_broadening
-    self.beam = self.beam_type(
+    self.beam = self.beam_shape(
         azimuth_beamwidth=effective_az_beamwidth,
         elevation_beamwidth=effective_el_beamwidth,
         azimuth_steering_angle=look.azimuth_steering_angle,
@@ -150,10 +153,15 @@ class MultiBeamRadar(Sensor):
     self.loop_gain = look.n_pulses * pulse_compression_gain * look.tx_power * \
         self.beam.gain**2 * self.wavelength**2 / ((4*np.pi)**3 * noise_power)
 
-    # TODO: For now, assume a measurement model with no measurement noise
-    self.measurement_model = RangeRangeRateBinning(
+    # TODO: Use SNR-based cramer rao accuracy approximations for noise in each measurement dimension. See:
+    # - Range accuracy: Richards eq. 7.36
+    # - Velocity accuracy: Richards eq. 7.64
+    # - Angle accuracy: Skolnik eq. 6.37
+    self.measurement_model = RangeRangeRateBinningAliasing(
         range_res=self.range_resolution,
         range_rate_res=self.velocity_resolution,
+        max_unambiguous_range=self.max_unambiguous_range,
+        max_unambiguous_range_rate=self.max_unambiguous_radial_speed,
         ndim_state=6,
         mapping=[0, 2, 4],
         velocity_mapping=[1, 3, 5],
@@ -161,10 +169,7 @@ class MultiBeamRadar(Sensor):
     )
 
   def measure(self, ground_truths: Set[GroundTruthState], noise: Union[np.ndarray, bool] = True, **kwargs) -> set[TrueDetection]:
-    # TODO: Should be able to mostly merge logic between radar detection generator and AESARadar object
-    # TODO: Add false alarms to this model
     detections = set()
-
     measurement_model = copy.deepcopy(self.measurement_model)
 
     # Loop through the targets and generate detections
@@ -185,20 +190,40 @@ class MultiBeamRadar(Sensor):
 
       snr = 10*np.log10(self.loop_gain) + 10*np.log10(truth.rcs) - \
           40*np.log10(r) - beam_shape_loss_db
-          
+
       # Probability of detection
       pfa = self.false_alarm_rate
       N = self.n_pulses
       pd = albersheim_pd(snr, pfa, N)
-      
-      # TODO: Use rand() to determine if there were any detections
-      # TODO: Account for false alarms
+
+      # Add detections based on the probability of detection
+      if np.random.rand() <= pd:
+        measurements = measurement_model.function(truth, noise=noise)
+
+        detection = TrueDetection(measurements,
+                                  timestamp=truth.timestamp,
+                                  measurement_model=measurement_model,
+                                  groundtruth_path=truth)
+        detections.add(detection)
+      # TODO: Add in some false alarms.
+
+    return detections
 
 
 if __name__ == '__main__':
-  r = MultiBeamRadar(
-      position=StateVector([0, 0, 0])
+  r = PhasedArrayRadar(
+      position=StateVector(np.array([0, 0, 0]))
   )
-#   r.load_look(Look())
-  print(r.measure(set()))
-#   print(r.measurement_model)
+  l = RadarLook(
+      start_time=0,
+      tx_power=10,
+      azimuth_steering_angle=0,
+      elevation_steering_angle=0,
+      azimuth_beamwidth=10,
+      elevation_beamwidth=10,
+      bandwidth=1e6,
+      pulsewidth=1e-6,
+      prf=5e3,
+      n_pulses=10,
+  )
+  r.load_look(l)
