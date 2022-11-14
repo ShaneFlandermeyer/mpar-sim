@@ -1,8 +1,10 @@
 import copy
+import datetime
 from mpar_sim.beam.common import beam_broadening_factor
 from mpar_sim.beam.beam import RectangularBeam
 from mpar_sim.common.albersheim import albersheim_pd
 from mpar_sim.common.coordinate_transform import cart2sph, sph2cart, rotx, roty, rotz
+from mpar_sim.beam.common import aperture2beamwidth
 from stonesoup.sensor.sensor import Sensor
 from typing import Set
 from stonesoup.types.groundtruth import GroundTruthState
@@ -10,12 +12,14 @@ from stonesoup.types.detection import TrueDetection
 from stonesoup.models.measurement import MeasurementModel
 from stonesoup.types.state import StateVector, State
 from stonesoup.base import Property
+from stonesoup.sensor.actionable import ActionableProperty
 from scipy import constants
 from stonesoup.models.measurement.nonlinear import RangeRangeRateBinning
 from stonesoup.sensor.radar.radar import RadarElevationBearingRangeRate
 from mpar_sim.look import Look, RadarLook
 from typing import Callable, List, Optional, Tuple, Union
 from scipy import constants
+from stonesoup.platform.base import FixedPlatform
 import numpy as np
 
 from mpar_sim.models.measurement.nonlinear import RangeRangeRateBinningAliasing
@@ -73,6 +77,14 @@ class PhasedArrayRadar(Sensor):
   false_alarm_rate: float = Property(
       default=1e-6,
       doc="Probability of false alarm")
+  max_range: float = Property(
+      default=np.inf,
+      doc="Maximum detection range of the radar (m)"
+  )
+  field_of_view: float = Property(
+      default=90,
+      doc="The width in each dimension for which targets can be detected (deg)."
+  )
 
   def __init__(self, *args, **kwargs):
     super().__init__(*args, **kwargs)
@@ -96,9 +108,9 @@ class PhasedArrayRadar(Sensor):
     np.ndarray
       (3,3) 3D rotation matrix
     """
-    theta_x = -self.rotation_offset[0, 0]  # Roll
-    theta_y = -self.rotation_offset[1, 0]  # Pitch/elevation
-    theta_z = -self.rotation_offset[2, 0]  # Yaw/azimuth
+    theta_x = -np.deg2rad(self.rotation_offset[0, 0])  # Roll
+    theta_y = -np.deg2rad(self.rotation_offset[1, 0])  # Pitch/elevation
+    theta_z = -np.deg2rad(self.rotation_offset[2, 0])  # Yaw/azimuth
 
     return rotz(theta_z) @ roty(theta_y) @ rotx(theta_x)
 
@@ -120,17 +132,18 @@ class PhasedArrayRadar(Sensor):
         - elevation_steering_angle
         - tx_power
     """
-    # TODO: Look into action objects for a cleaner way to handle this
-    # See: https://stonesoup.readthedocs.io/en/latest/auto_examples/Creating_Actionable_Sensor.html
+    self.bandwidth = look.bandwidth
+    self.pulsewidth = look.pulsewidth
+    self.prf = look.prf
     self.n_pulses = look.n_pulses
     # Compute range/velocity resolutions
-    self.range_resolution = constants.c / (2 * look.bandwidth)
+    self.range_resolution = constants.c / (2 * self.bandwidth)
     self.velocity_resolution = (
-        self.wavelength / 2) * (look.prf / look.n_pulses)
+        self.wavelength / 2) * (self.prf / self.n_pulses)
 
     # Compute ambiguity limits
-    self.max_unambiguous_range = constants.c / (2 * look.prf)
-    self.max_unambiguous_radial_speed = (self.wavelength / 2) * (look.prf / 2)
+    self.max_unambiguous_range = constants.c / (2 * self.prf)
+    self.max_unambiguous_radial_speed = (self.wavelength / 2) * (self.prf / 2)
 
     # Create a new beam from the parameter set
     az_broadening, el_broadening = beam_broadening_factor(
@@ -168,23 +181,37 @@ class PhasedArrayRadar(Sensor):
         noise_covar=np.array([0, 0, 0, 0])
     )
 
+  def is_detectable(self, state: GroundTruthState) -> bool:
+    measurement_vector = self.measurement_model.function(state, noise=False)
+    # Check if state falls within sensor's FOV
+    fov_min = -self.field_of_view / 2
+    fov_max = +self.field_of_view / 2
+    az_t = measurement_vector[0, 0]
+    el_t = measurement_vector[1, 0]
+    true_range = measurement_vector[2, 0]
+    return fov_min <= az_t.degrees <= fov_max and fov_min <= el_t.degrees <= fov_max and true_range <= self.max_range
+
   def measure(self, ground_truths: Set[GroundTruthState], noise: Union[np.ndarray, bool] = True, **kwargs) -> set[TrueDetection]:
     detections = set()
     measurement_model = copy.deepcopy(self.measurement_model)
 
     # Loop through the targets and generate detections
     for truth in ground_truths:
+      # Skip targets that are not detectable
+      if not self.is_detectable(truth):
+          continue
+
       # Get the position of the target in the radar coordinate frame
       relative_pos = truth.state_vector[self.position_mapping,
                                         :] - self.position
       relative_pos = self._rotation_matrix @ relative_pos
 
       # Convert target position to spherical coordinates
-      [r, target_az, target_el] = cart2sph(*relative_pos)
+      [target_az, target_el, r] = cart2sph(*relative_pos)
 
       # Compute target's az/el relative to the beam center
-      relative_az = target_az - self.beam.azimuth_steering_angle
-      relative_el = target_el - self.beam.elevation_steering_angle
+      relative_az = np.rad2deg(target_az) - self.beam.azimuth_steering_angle
+      relative_el = np.rad2deg(target_el) - self.beam.elevation_steering_angle
       # Compute loss due to the target being off-centered in the beam
       beam_shape_loss_db = self.beam.shape_loss(relative_az, relative_el)
 
@@ -194,7 +221,10 @@ class PhasedArrayRadar(Sensor):
       # Probability of detection
       pfa = self.false_alarm_rate
       N = self.n_pulses
-      pd = albersheim_pd(snr, pfa, N)
+      if snr > 0:
+        pd = albersheim_pd(snr, pfa, N)
+      else:
+        pd = 0  # Assume targets are not detected with negative SNR
 
       # Add detections based on the probability of detection
       if np.random.rand() <= pd:
@@ -211,19 +241,23 @@ class PhasedArrayRadar(Sensor):
 
 
 if __name__ == '__main__':
-  r = PhasedArrayRadar(
+  now = datetime.datetime.now()
+  sensor = PhasedArrayRadar(
       position=StateVector(np.array([0, 0, 0]))
   )
-  l = RadarLook(
-      start_time=0,
-      tx_power=10,
+  look = RadarLook(
+      start_time=now,
+      tx_power=2560,
       azimuth_steering_angle=0,
       elevation_steering_angle=0,
-      azimuth_beamwidth=10,
-      elevation_beamwidth=10,
+      azimuth_beamwidth=aperture2beamwidth(
+          sensor.element_spacing*sensor.n_elements_x, sensor.wavelength),
+      elevation_beamwidth=aperture2beamwidth(
+          sensor.element_spacing*sensor.n_elements_y, sensor.wavelength),
       bandwidth=1e6,
       pulsewidth=1e-6,
       prf=5e3,
       n_pulses=10,
   )
-  r.load_look(l)
+  sensor.load_look(look)
+  print(sensor)
