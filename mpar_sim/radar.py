@@ -21,8 +21,11 @@ from typing import Callable, List, Optional, Tuple, Union
 from scipy import constants
 from stonesoup.platform.base import FixedPlatform
 import numpy as np
+from stonesoup.types.array import StateVector, CovarianceMatrix
 
 from mpar_sim.models.measurement.nonlinear import RangeRangeRateBinningAliasing
+
+from stonesoup.models.measurement.nonlinear import CartesianToElevationBearingRangeRate, RangeRangeRateBinning
 
 
 class PhasedArrayRadar(Sensor):
@@ -130,12 +133,15 @@ class PhasedArrayRadar(Sensor):
         - elevation_beamwidth
         - azimuth_steering_angle
         - elevation_steering_angle
-        - tx_power
+        - n_elements_x
+        - n_elements_y
     """
+    # Waveform parameters
     self.bandwidth = look.bandwidth
     self.pulsewidth = look.pulsewidth
     self.prf = look.prf
     self.n_pulses = look.n_pulses
+
     # Compute range/velocity resolutions
     self.range_resolution = constants.c / (2 * self.bandwidth)
     self.velocity_resolution = (
@@ -157,19 +163,18 @@ class PhasedArrayRadar(Sensor):
         azimuth_steering_angle=look.azimuth_steering_angle,
         elevation_steering_angle=look.elevation_steering_angle,
     )
+    self.n_subarray_elements_x = look.n_elements_x
+    self.n_subarray_elements_y = look.n_elements_y
 
     # Compute the loop gain (the part of the radar range equation that doesn't depend on the target)
+    tx_power = self.element_tx_power * look.n_elements_x * look.n_elements_y
     pulse_compression_gain = look.bandwidth * look.pulsewidth
-    n_elements_total = int(look.tx_power / self.element_tx_power)
+    n_elements_total = look.n_elements_x * look.n_elements_y
     noise_power = constants.Boltzmann * self.system_temperature * \
         self.noise_figure * look.bandwidth * n_elements_total
-    self.loop_gain = look.n_pulses * pulse_compression_gain * look.tx_power * \
+    self.loop_gain = look.n_pulses * pulse_compression_gain * tx_power * \
         self.beam.gain**2 * self.wavelength**2 / ((4*np.pi)**3 * noise_power)
 
-    # TODO: Use SNR-based cramer rao accuracy approximations for noise in each measurement dimension. See:
-    # - Range accuracy: Richards eq. 7.36
-    # - Velocity accuracy: Richards eq. 7.64
-    # - Angle accuracy: Skolnik eq. 6.37
     self.measurement_model = RangeRangeRateBinningAliasing(
         range_res=self.range_resolution,
         range_rate_res=self.velocity_resolution,
@@ -178,8 +183,7 @@ class PhasedArrayRadar(Sensor):
         ndim_state=6,
         mapping=[0, 2, 4],
         velocity_mapping=[1, 3, 5],
-        noise_covar=np.array([0, 0, 0, 0])
-    )
+        noise_covar=np.array([0, 0, 0, 0]))
 
   def is_detectable(self, state: GroundTruthState) -> bool:
     measurement_vector = self.measurement_model.function(state, noise=False)
@@ -199,7 +203,7 @@ class PhasedArrayRadar(Sensor):
     for truth in ground_truths:
       # Skip targets that are not detectable
       if not self.is_detectable(truth):
-          continue
+        continue
 
       # Get the position of the target in the radar coordinate frame
       relative_pos = truth.state_vector[self.position_mapping,
@@ -215,21 +219,47 @@ class PhasedArrayRadar(Sensor):
       # Compute loss due to the target being off-centered in the beam
       beam_shape_loss_db = self.beam.shape_loss(relative_az, relative_el)
 
-      snr = 10*np.log10(self.loop_gain) + 10*np.log10(truth.rcs) - \
+      snr_db = 10*np.log10(self.loop_gain) + 10*np.log10(truth.rcs) - \
           40*np.log10(r) - beam_shape_loss_db
 
       # Probability of detection
-      pfa = self.false_alarm_rate
-      N = self.n_pulses
-      if snr > 0:
-        pd = albersheim_pd(snr, pfa, N)
+      if snr_db > 0:
+        N = self.n_pulses
+        pfa = self.false_alarm_rate
+        pd = albersheim_pd(snr_db, pfa, N)
       else:
         pd = 0  # Assume targets are not detected with negative SNR
 
       # Add detections based on the probability of detection
       if np.random.rand() <= pd:
-        measurements = measurement_model.function(truth, noise=noise)
 
+        # Use the SNR to compute the measurement accuracies in each dimension. These accuracies are set to the CRLB of each quantity (i.e., we assume we have efficient estimators)
+        # TODO: Account for the fact that the variances below should be no greater than uniform variance and break these into functions
+        snr_lin = 10**(snr_db/10)
+        single_pulse_snr = snr_lin / self.n_pulses
+        Nx = self.n_subarray_elements_x
+        Ny = self.n_subarray_elements_y
+        # The CRLB uses the RMS bandwidth. Assuming an LFM waveform with a rectangular spectrum, B_rms = B / sqrt(12)
+        rms_bandwidth = self.bandwidth / np.sqrt(12)
+        # Richards 2014 - Eq. (7.36)
+        # Note that the SNR used for this CRLB is the SNR of a single pulse, while the SNR computed above is for the entire dwell.
+        time_delay_variance = 1 / \
+            (8 * np.pi**2 * single_pulse_snr * rms_bandwidth**2)
+        range_variance = time_delay_variance * (constants.c / 2)**2
+        # Richard 2014 - Eq. (7.64)
+        velocity_variance = 6*self.velocity_resolution**2 / \
+            ((2*np.pi)**2 * snr_lin)
+        # Richards 2014 - Eq. (7.81)
+        k = 0.886
+        # TODO: This should be in terms of
+        azimuth_variance = 6*self.beam.azimuth_beamwidth**2 / \
+            ((2*np.pi)**2 * snr_lin * ((Nx+1)/(Nx-1)) * k**2)
+        elevation_variance = 6*self.beam.elevation_beamwidth**2 / \
+            ((2*np.pi)**2 * snr_lin * ((Ny+1)/(Ny-1)) * k**2)
+        measurement_model.noise_covar = np.array(
+            [elevation_variance, azimuth_variance, range_variance, velocity_variance])
+
+        measurements = measurement_model.function(truth, noise=noise)
         detection = TrueDetection(measurements,
                                   timestamp=truth.timestamp,
                                   measurement_model=measurement_model,
@@ -238,26 +268,3 @@ class PhasedArrayRadar(Sensor):
       # TODO: Add in some false alarms.
 
     return detections
-
-
-if __name__ == '__main__':
-  now = datetime.datetime.now()
-  sensor = PhasedArrayRadar(
-      position=StateVector(np.array([0, 0, 0]))
-  )
-  look = RadarLook(
-      start_time=now,
-      tx_power=2560,
-      azimuth_steering_angle=0,
-      elevation_steering_angle=0,
-      azimuth_beamwidth=aperture2beamwidth(
-          sensor.element_spacing*sensor.n_elements_x, sensor.wavelength),
-      elevation_beamwidth=aperture2beamwidth(
-          sensor.element_spacing*sensor.n_elements_y, sensor.wavelength),
-      bandwidth=1e6,
-      pulsewidth=1e-6,
-      prf=5e3,
-      n_pulses=10,
-  )
-  sensor.load_look(look)
-  print(sensor)
