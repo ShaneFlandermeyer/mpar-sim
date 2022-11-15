@@ -22,10 +22,12 @@ from scipy import constants
 from stonesoup.platform.base import FixedPlatform
 import numpy as np
 from stonesoup.types.array import StateVector, CovarianceMatrix
+from mpar_sim.models.measurement.estimation import angle_crlb, range_crlb, velocity_crlb
 
 from mpar_sim.models.measurement.nonlinear import RangeRangeRateBinningAliasing
 
 from stonesoup.models.measurement.nonlinear import CartesianToElevationBearingRangeRate, RangeRangeRateBinning
+from stonesoup.sensor.radar.radar import RadarElevationBearingRangeRate
 
 
 class PhasedArrayRadar(Sensor):
@@ -163,37 +165,35 @@ class PhasedArrayRadar(Sensor):
         azimuth_steering_angle=look.azimuth_steering_angle,
         elevation_steering_angle=look.elevation_steering_angle,
     )
-    self.n_subarray_elements_x = look.n_elements_x
-    self.n_subarray_elements_y = look.n_elements_y
 
     # Compute the loop gain (the part of the radar range equation that doesn't depend on the target)
-    tx_power = self.element_tx_power * look.n_elements_x * look.n_elements_y
+    self.tx_power = look.tx_power
     pulse_compression_gain = look.bandwidth * look.pulsewidth
-    n_elements_total = look.n_elements_x * look.n_elements_y
+    n_elements_total = np.ceil(look.tx_power / self.element_tx_power)
     noise_power = constants.Boltzmann * self.system_temperature * \
         self.noise_figure * look.bandwidth * n_elements_total
-    self.loop_gain = look.n_pulses * pulse_compression_gain * tx_power * \
+    self.loop_gain = look.n_pulses * pulse_compression_gain * self.tx_power * \
         self.beam.gain**2 * self.wavelength**2 / ((4*np.pi)**3 * noise_power)
 
-    self.measurement_model = RangeRangeRateBinningAliasing(
+    self.measurement_model = RangeRangeRateBinning(
         range_res=self.range_resolution,
         range_rate_res=self.velocity_resolution,
-        max_unambiguous_range=self.max_unambiguous_range,
-        max_unambiguous_range_rate=self.max_unambiguous_radial_speed,
+        # max_unambiguous_range=self.max_unambiguous_range,
+        # max_unambiguous_range_rate=self.max_unambiguous_radial_speed,
         ndim_state=6,
         mapping=[0, 2, 4],
         velocity_mapping=[1, 3, 5],
-        noise_covar=np.array([0, 0, 0, 0]))
+        noise_covar=CovarianceMatrix(np.diag([0,0,0,0])))
 
   def is_detectable(self, state: GroundTruthState) -> bool:
     measurement_vector = self.measurement_model.function(state, noise=False)
     # Check if state falls within sensor's FOV
     fov_min = -self.field_of_view / 2
     fov_max = +self.field_of_view / 2
-    az_t = measurement_vector[0, 0]
-    el_t = measurement_vector[1, 0]
+    az_t = measurement_vector[0, 0].degrees - self.beam.azimuth_steering_angle
+    el_t = measurement_vector[1, 0].degrees - self.beam.elevation_steering_angle
     true_range = measurement_vector[2, 0]
-    return fov_min <= az_t.degrees <= fov_max and fov_min <= el_t.degrees <= fov_max and true_range <= self.max_range
+    return fov_min <= az_t <= fov_max and fov_min <= el_t <= fov_max and true_range <= self.max_range
 
   def measure(self, ground_truths: Set[GroundTruthState], noise: Union[np.ndarray, bool] = True, **kwargs) -> set[TrueDetection]:
     detections = set()
@@ -234,29 +234,28 @@ class PhasedArrayRadar(Sensor):
       if np.random.rand() <= pd:
 
         # Use the SNR to compute the measurement accuracies in each dimension. These accuracies are set to the CRLB of each quantity (i.e., we assume we have efficient estimators)
-        # TODO: Account for the fact that the variances below should be no greater than uniform variance and break these into functions
         snr_lin = 10**(snr_db/10)
         single_pulse_snr = snr_lin / self.n_pulses
-        Nx = self.n_subarray_elements_x
-        Ny = self.n_subarray_elements_y
         # The CRLB uses the RMS bandwidth. Assuming an LFM waveform with a rectangular spectrum, B_rms = B / sqrt(12)
         rms_bandwidth = self.bandwidth / np.sqrt(12)
-        # Richards 2014 - Eq. (7.36)
-        # Note that the SNR used for this CRLB is the SNR of a single pulse, while the SNR computed above is for the entire dwell.
-        time_delay_variance = 1 / \
-            (8 * np.pi**2 * single_pulse_snr * rms_bandwidth**2)
-        range_variance = time_delay_variance * (constants.c / 2)**2
-        # Richard 2014 - Eq. (7.64)
-        velocity_variance = 6*self.velocity_resolution**2 / \
-            ((2*np.pi)**2 * snr_lin)
-        # Richards 2014 - Eq. (7.81)
-        k = 0.886
-        # TODO: This should be in terms of
-        azimuth_variance = 6*self.beam.azimuth_beamwidth**2 / \
-            ((2*np.pi)**2 * snr_lin * ((Nx+1)/(Nx-1)) * k**2)
-        elevation_variance = 6*self.beam.elevation_beamwidth**2 / \
-            ((2*np.pi)**2 * snr_lin * ((Ny+1)/(Ny-1)) * k**2)
-        measurement_model.noise_covar = np.array(
+        rms_range_res = constants.c / (2 * rms_bandwidth)
+        range_variance = range_crlb(
+            snr=single_pulse_snr, 
+            resolution=rms_range_res,
+            bias_fraction=0.01)
+        velocity_variance = velocity_crlb(
+            snr=snr_lin, 
+            resolution=self.velocity_resolution,
+            bias_fraction=0.01)
+        azimuth_variance = angle_crlb(
+            snr=snr_lin,
+            resolution=self.beam.azimuth_beamwidth,
+            bias_fraction=0.01)
+        elevation_variance = angle_crlb(
+            snr=snr_lin,
+            resolution=self.beam.elevation_beamwidth,
+            bias_fraction=0.01)
+        measurement_model.noise_covar = np.diag(
             [elevation_variance, azimuth_variance, range_variance, velocity_variance])
 
         measurements = measurement_model.function(truth, noise=noise)

@@ -6,8 +6,7 @@ class RadarLook(Look):
   def __init__(self,
                start_time: float,
                # Beam parameters
-               n_elements_x: float,
-               n_elements_y: float,
+               tx_power: float,
                azimuth_steering_angle: float,
                elevation_steering_angle: float,
                azimuth_beamwidth: float,
@@ -21,8 +20,7 @@ class RadarLook(Look):
     self.start_time = start_time
     
     # Subarray parameters
-    self.n_elements_x = n_elements_x
-    self.n_elements_y = n_elements_y
+    self.tx_power = tx_power
     
     # Beam parameters
     self.azimuth_steering_angle = azimuth_steering_angle
