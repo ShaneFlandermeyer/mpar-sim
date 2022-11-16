@@ -46,7 +46,7 @@ This object maintains information about the physical parameters of the system an
 
 ## Targets and Motion Models
 
-Target and platform maneuvering behavior is handled by the [Stone Soup](https://stonesoup.readthedocs.io/en/latest/index.html) library, which supports a large number of common motion models. See the sensor management program in the ```examples/``` subfolder for an example of how to simulate target motion. 
+Target and platform maneuvering behavior is handled by the [Stone Soup](https://stonesoup.readthedocs.io/en/latest/index.html) library, which supports a large number of common motion models. See the basic simulator in the ```examples/``` subfolder for an example of how to simulate target motion.
 
 ## Resource Management
 
@@ -90,13 +90,11 @@ raster_agent = RasterScanAgent(
       n_pulses=10)
 ```
 
-This agent is still being ported to the new Stone Soup compatible API. 
-
 ## Progress
 
 - [x] Phased array radar detection model
 - [x] Multi-target tracking scenario simulation
-- [ ] Raster scan agent
+- [x] Raster scan agent
 - [ ] Adaptive Tracking
 - [ ] Deterministic task scheduling algorithm(s)
 - [ ] False alarm detections
