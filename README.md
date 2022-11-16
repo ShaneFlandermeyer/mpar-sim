@@ -5,15 +5,26 @@ Multi-function Phased Array Radar (MPAR) Simulator
 ## Overview
 
 The MPAR simulator is a tool for rapidly simulating radar scenarios at the detection level.
-The tool is intended to help with rapid prototyping of resource management/tracking algorithms, and the user can
-easily modify all aspects of the scenario. Target trajectories can be set at the beginning of the simulation, while waveform/beam parameters can be modified at runtime.
+The tool is intended to help with rapid prototyping of resource management/tracking algorithms, and the user can easily modify all aspects of the scenario. Targets, waveform parameters, and beam parameters can be modified at runtime.
+
+## Installation
+
+This project can be installed as a python package by running the following in the top-level directory
+
+```bash
+pip install -e .
+```
 
 ## Radar System
 
-The radar system used in this simulator is assumed to be a uniform rectangular array positioned at the origin of the scenario coordinate system. A radar object can be instantiated as shown below:
+The radar system used in this simulator is assumed to be a uniform rectangular array. A radar object can be instantiated as shown below:
 
 ```python
-radar = Radar(
+radar = PhasedArrayRadar(
+      # Platform orientation and position parameters
+      position=np.array([0, 0, 0]),
+      rotation_offset=StateVector(np.array([0, 0, 0])),
+      position_mapping=(0, 2, 4),
       # Array parameters
       n_elements_x=16,
       n_element_y=16,
@@ -25,42 +36,17 @@ radar = Radar(
       noise_figure=4,
       # Scan settings
       beam_type=RectangularBeam,
-      azimuth_limits=np.array([-60, 60]),
-      elevation_limits=np.array([-20, 20]),
+      field_of_view=90,
       # Detection settings
       false_alarm_rate=1e-6,
   )
 ```
 
-This object maintains information about the physical parameters of the system, along with the subarray occupancy at a given time step. Internally, the radar has a ```RadarDetectionGenerator``` object that generates a list of detections given the targets in the scenario and the current beam allocations (using the radar range equation to compute detection probabilities and SNRs).
+This object maintains information about the physical parameters of the system and can attempt to detect a list of targets using the ```measure()``` function (with measurement probabilities calculated using SNRs from the radar range equation). False alarms are **currently disabled** in this function, but will be added back in after resource management algorithms have been implemented
 
 ## Targets and Motion Models
 
-The ```Platform``` object can be used to model targets in the environment. These targets are currently limited to constant position/velocity/acceleration/RCS, but more advanced target models are planned in a future release.
-
-Multi-target scenarios can be simulated by maintaining a list of targets in the scenario. For example, 50 targets with with uniformly distributed velocity coordinates and $RCS = 10\ m^2$ could be placed at the origin as follows:
-
-```python
-targets = [Platform(position=np.zeros((3,)),
-                    velocity=np.random.rand(3), 
-                    rcs=10) for _ in range(50)]
-```
-
-With a motion profile defined, target trajectories can be stepped through time using the ```update()``` function:
-
-```python
-for target in self.targets:
-      target.update(dt=action.dwell_time)
-```
-
-In a future release, ```Platform``` objects will be used to handle radar system motion as well.
-
-## Beams
-
-The MPAR simulator accounts for changes in beamwidth and directivity due to scanning off boresight, along with gains/losses due to the shape of the beam. The following beam shapes are currently supported:
-
-- Rectangular beam: Full power inside the az/el beamwidth, zero elsewhere
-- Gaussian beam with no sidelobes
+Target and platform maneuvering behavior is handled by the [Stone Soup](https://stonesoup.readthedocs.io/en/latest/index.html) library, which supports a large number of common motion models. See the sensor management program in the ```examples/``` subfolder for an example of how to simulate target motion. 
 
 ## Resource Management
 
@@ -104,12 +90,16 @@ raster_agent = RasterScanAgent(
       n_pulses=10)
 ```
 
+This agent is still being ported to the new Stone Soup compatible API. 
+
 ## Progress
 
-- [x] Phased Array Radar Model
-- [ ] Actionable phased array sensor
+- [x] Phased array radar detection model
+- [x] Multi-target tracking scenario simulation
+- [ ] Raster scan agent
+- [ ] Adaptive Tracking
 - [ ] Deterministic task scheduling algorithm(s)
-- [ ] Basic simulation (raster scan + adaptive tracking)
-- [ ] Documentation
-- [ ] RL Gym environment
+- [ ] False alarm detections
+- [ ] Gym environment (for RL)
 - [ ] RL-based task scheduler
+- [ ] Documentation
