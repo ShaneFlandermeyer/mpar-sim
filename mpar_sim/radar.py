@@ -1,133 +1,124 @@
-import time
-import warnings
-from mpar_sim.beam import Beam, RectangularBeam, beam_broadening_factor, beamwidth2aperture
-from mpar_sim.common.coordinate_transform import sph2cart
-from mpar_sim.platforms import Platform
-from mpar_sim.reports import DetectionReport
-from mpar_sim.radar_detection_generator import RadarDetectionGenerator
+import copy
+from typing import Callable, Set, Tuple, Union
+
 import numpy as np
-from typing import Callable, List, Optional, Tuple, Union
 from scipy import constants
-from mpar_sim.look import Look, RadarLook
+from stonesoup.base import Property
+from stonesoup.models.measurement import MeasurementModel
+from stonesoup.sensor.radar.radar import RadarElevationBearingRangeRate
+from stonesoup.sensor.sensor import Sensor
+from stonesoup.types.array import CovarianceMatrix, StateVector
+from stonesoup.types.detection import TrueDetection
+from stonesoup.types.groundtruth import GroundTruthState
+from stonesoup.types.state import StateVector
+
+from mpar_sim.beam.beam import RectangularBeam
+from mpar_sim.beam.common import beam_broadening_factor
+from mpar_sim.common.albersheim import albersheim_pd
+from mpar_sim.common.coordinate_transform import (cart2sph, rotx, roty, rotz)
+from mpar_sim.look import Look
+from mpar_sim.models.measurement.estimation import (angle_crlb, range_crlb,
+                                                    velocity_crlb)
+from mpar_sim.models.measurement.nonlinear import RangeRangeRateBinningAliasing
 
 
-class Radar():
-  """
-  A multi-function phased array radar system
+class PhasedArrayRadar(Sensor):
+  """An active electronically scanned array (AESA) radar sensor"""
 
-  Assumes a uniform rectangular array
+  # Motion and orientation parameters
+  rotation_offset: StateVector = Property(
+      default=StateVector([0, 0, 0]),
+      doc="A 3x1 array of angles (rad), specifying the radar orientation in terms of the "
+      "counter-clockwise rotation around the :math:`x,y,z` axis. i.e Roll, Pitch and Yaw. "
+      "Default is ``StateVector([0, 0, 0])``")
+  position_mapping: Tuple[int, int, int] = Property(
+      default=(0, 1, 2),
+      doc="Mapping between or positions and state "
+          "dimensions. [x,y,z]")
+  measurement_model: MeasurementModel = Property(
+      default=RadarElevationBearingRangeRate(
+          position_mapping=(0, 2, 4),
+          velocity_mapping=(1, 4, 5),
+          noise_covar=np.array([0, 0, 0, 0])),
+      doc="The measurement model used to generate "
+      "measurements. By default, this object measures range, range rate, azimuth, and elevation with no noise."
+  )
+  # Array parameters
+  n_elements_x: int = Property(
+      default=16,
+      doc="The number of horizontal array elements")
+  n_elements_y: int = Property(
+      default=16,
+      doc="The number of vertical array elements")
+  element_spacing: float = Property(
+      default=0.5,
+      doc="The spacing between array elements (m)")
+  element_tx_power: float = Property(
+      default=10,
+      doc="Tx power of each element (W)")
+  # System parameters
+  center_frequency: float = Property(
+      default=3e9,
+      doc="Transmit frequency of the array")
+  system_temperature: float = Property(
+      default=290,
+      doc="System noise temperature (K)")
+  noise_figure: float = Property(
+      default=4,
+      doc="Receiver noise figure (dB)")
+  # Scan settings
+  beam_shape: Callable = Property(
+      default=RectangularBeam,
+      doc="Object describing the shape of the beam.")
+  # Detections settings
+  false_alarm_rate: float = Property(
+      default=1e-6,
+      doc="Probability of false alarm")
+  max_range: float = Property(
+      default=np.inf,
+      doc="Maximum detection range of the radar (m)"
+  )
+  field_of_view: float = Property(
+      default=90,
+      doc="The width in each dimension for which targets can be detected (deg)."
+  )
 
-  Parameters
-    ----------
-    n_elements_x : int, optional
-        Number of horizontal array elements, by default 16
-    n_element_y : int, optional
-        Number of vertical array elements, by default 16
-    element_spacing : float, optional
-        Element spacing in wavelengths, by default 0.5
-    element_tx_power : float, optional
-        Peak transmit power per element, by default 10
-    center_frequency : float, optional
-        Transmit frequency, by default 3e9
-    system_temperature : float, optional
-        System operating temperature in Kelvin, by default 290
-    noise_figure : float, optional
-        System noise figure, by default 4
-    beam_type : Callable, optional
-        Subarray beam pattern shape, by default RectangularBeam
-    azimuth_limits : np.ndarray, optional
-        Azimuth scan limts of the array, by default np.array([-45, 45])
-    elevation_limits : np.ndarray, optional
-        Elevation scan limits of the array, by default np.array([-45, 45])
-    false_alarm_rate : float, optional
-        Probability of false alarms, by default 1e-6
-    has_azimuth : bool, optional
-        If true, detection report contains target azimuth information, by default True
-    has_elevation : bool, optional
-        If true, detection report contains target elevation information, by default True
-    has_velocity : bool, optional
-        If true, detection report contains target velocity information, by default True
-    has_measurement_noise : bool, optional
-        If true, radar measurements are corrupted by noise, by default False
-        TODO: CURRENTLY DOES NOTHING
-    has_false_alarms : bool, optional
-        If true, false alarms are added to the detection reports, by default True
-    has_range_ambiguities : bool, optional
-        If true, range-ambiguous targets are aliased into the unambiguous limits of the system, by default True
-    has_velocity_ambiguities : bool, optional
-        If true, velocity-ambiguous targets are aliased into the unambiguous limits of the system, by default True
-    has_scan_loss : bool, optional
-        If true, the beam object accounts for changes in beamwidth and directivity due to scanning off boresight, by default True
-  """
-
-  def __init__(self,
-               # Array parameters
-               n_elements_x: int = 16,
-               n_element_y: int = 16,
-               element_spacing: float = 0.5,
-               element_tx_power: float = 10,
-               # System parameters
-               center_frequency: float = 3e9,
-               system_temperature: float = 290,
-               noise_figure: float = 4,
-               # Scan settings
-               beam_type: Callable = RectangularBeam,
-               azimuth_limits: np.ndarray = np.array([-45, 45]),
-               elevation_limits: np.ndarray = np.array([-45, 45]),
-               # Detection settings
-               false_alarm_rate: float = 1e-6,
-               # Data generator settings
-               has_azimuth: bool = True,
-               has_elevation: bool = True,
-               has_velocity: bool = True,
-               has_measurement_noise: bool = False,
-               has_false_alarms: bool = True,
-               has_range_ambiguities: bool = True,
-               has_velocity_ambiguities: bool = True,
-               has_scan_loss: bool = True,
-               ) -> None:
-    # Array parameters
-    self.n_elements_x = n_elements_x
-    self.n_elements_y = n_element_y
-    self.element_spacing = element_spacing
-    self.element_tx_power = element_tx_power
-    # A matrix containing the data generator ID associated with each array element. If the element is currently unallocated, the value
-    self.subarray_indices = np.ones(
-        (n_elements_x, n_element_y), dtype=int)*-1
-
-    # Radar system parameters
-    self.center_frequency = center_frequency
+  def __init__(self, *args, **kwargs):
+    super().__init__(*args, **kwargs)
     self.wavelength = constants.c / self.center_frequency
-    self.element_spacing = element_spacing
-    self.system_temperature = system_temperature
-    self.noise_figure = noise_figure
+    # TODO: Handle subarray resource allocation in a separate object.
 
-    # Scan settings
-    self.beam_type = beam_type
-    self.azimuth_limits = azimuth_limits
-    self.elevation_limits = elevation_limits
+  @ measurement_model.getter
+  def measurement_model(self):
+    measurement_model = copy.deepcopy(self._property_measurement_model)
+    measurement_model.translation_offset = self.position.copy()
+    measurement_model.rotation_offset = self.rotation_offset.copy()
+    return measurement_model
 
-    # Create a detection generator object with the given settings
-    self.data_generator = RadarDetectionGenerator(
-        false_alarm_rate=false_alarm_rate,
-        has_azimuth=has_azimuth,
-        has_elevation=has_elevation,
-        has_velocity=has_velocity,
-        has_measurement_noise=has_measurement_noise,
-        has_false_alarms=has_false_alarms,
-        has_range_ambiguities=has_range_ambiguities,
-        has_velocity_ambiguities=has_velocity_ambiguities,
-        has_scan_loss=has_scan_loss,
-    )
-
-  def load_look(self, look: Look) -> None:
+  @property
+  def _rotation_matrix(self):
     """
-    Allocate resources for the given radar look
+    3D rotation matrix for converting target pointing vectors to the sensor frame
+
+    Returns
+    -------
+    np.ndarray
+      (3,3) 3D rotation matrix
+    """
+    theta_x = -np.deg2rad(self.rotation_offset[0, 0])  # Roll
+    theta_y = -np.deg2rad(self.rotation_offset[1, 0])  # Pitch/elevation
+    theta_z = -np.deg2rad(self.rotation_offset[2, 0])  # Yaw/azimuth
+
+    return rotz(theta_z) @ roty(theta_y) @ rotx(theta_x)
+
+  def load_look(self, look: Look):
+    """
+    Allocate resources for the given radar job
 
     Parameters
     ----------
     look: Look
-      The radar look to be scheduled and executed. The following parameters must be present in the look object:
+      The radar job to be scheduled and executed. The following parameters must be present in the job object:
         - bandwidth
         - pulsewidth
         - prf
@@ -136,80 +127,136 @@ class Radar():
         - elevation_beamwidth
         - azimuth_steering_angle
         - elevation_steering_angle
+        - n_elements_x
+        - n_elements_y
     """
-
-    # Handle input errors
-    if look.azimuth_steering_angle < min(self.azimuth_limits) or look. azimuth_steering_angle > max(self.azimuth_limits):
-      warnings.warn(
-          "Azimuth steering angle is outside the azimuth limits of the radar")
-
-    if look.elevation_steering_angle < min(self.elevation_limits) or look.elevation_steering_angle > max(self.elevation_limits):
-      warnings.warn(
-          "Elevation steering angle is outside the elevation limits of the radar")
+    # Waveform parameters
+    self.bandwidth = look.bandwidth
+    self.pulsewidth = look.pulsewidth
+    self.prf = look.prf
+    self.n_pulses = look.n_pulses
 
     # Compute range/velocity resolutions
-    range_resolution = constants.c / (2 * look.bandwidth)
-    velocity_resolution = (self.wavelength / 2) * (look.prf / look.n_pulses)
+    self.range_resolution = constants.c / (2 * self.bandwidth)
+    self.velocity_resolution = (
+        self.wavelength / 2) * (self.prf / self.n_pulses)
 
     # Compute ambiguity limits
-    max_unambiguous_range = constants.c / (2 * look.prf)
-    max_unambiguous_radial_speed = (self.wavelength / 2) * (look.prf / 2)
+    self.max_unambiguous_range = constants.c / (2 * self.prf)
+    self.max_unambiguous_radial_speed = (self.wavelength / 2) * (self.prf / 2)
 
-    # Compute required subarray resources from the beamwidth
-    aperture_length_x, aperture_length_y = tuple(beamwidth2aperture(
-        np.array([look.azimuth_beamwidth, look.elevation_beamwidth]), self.wavelength))
-    # Compute the number of elements in each dimension for this aperture size
-    n_elements_x = int(
-        np.ceil(aperture_length_x / (self.element_spacing*self.wavelength)))
-    n_elements_y = int(
-        np.ceil(aperture_length_y / (self.element_spacing*self.wavelength)))
-    n_elements_total = n_elements_x * n_elements_y
-
-    # Try to allocate the subarray
-    if n_elements_total <= np.sum(self.subarray_indices == -1):
-        self.subarray_indices[:n_elements_x,
-                            :n_elements_y] = self.data_generator.id
-    else:
-        print(warnings.warn
-        ("Attempted to allocate a subarray larger than the available aperture"))
-        return 
-
-    # Create a new beam from the parameter
-    beam = self.beam_type(
-        azimuth_beamwidth=look.azimuth_beamwidth,
-        elevation_beamwidth=look.elevation_beamwidth,
+    # Create a new beam from the parameter set
+    az_broadening, el_broadening = beam_broadening_factor(
+        look.azimuth_steering_angle,
+        look.elevation_steering_angle)
+    effective_az_beamwidth = look.azimuth_beamwidth * az_broadening
+    effective_el_beamwidth = look.elevation_beamwidth * el_broadening
+    self.beam = self.beam_shape(
+        azimuth_beamwidth=effective_az_beamwidth,
+        elevation_beamwidth=effective_el_beamwidth,
         azimuth_steering_angle=look.azimuth_steering_angle,
         elevation_steering_angle=look.elevation_steering_angle,
-        has_scan_loss=self.data_generator.has_scan_loss
     )
 
-    # Compute power and gain for the beam
-    tx_power = n_elements_total * self.element_tx_power
-    array_gain = beam.gain
+    # Compute the loop gain (the part of the radar range equation that doesn't depend on the target)
+    self.tx_power = look.tx_power
     pulse_compression_gain = look.bandwidth * look.pulsewidth
+    n_elements_total = np.ceil(look.tx_power / self.element_tx_power)
     noise_power = constants.Boltzmann * self.system_temperature * \
         self.noise_figure * look.bandwidth * n_elements_total
-    loop_gain = look.n_pulses * pulse_compression_gain * tx_power * \
-        array_gain**2 * self.wavelength**2 / ((4*np.pi)**3 * noise_power)
+    self.loop_gain = look.n_pulses * pulse_compression_gain * self.tx_power * \
+        self.beam.gain**2 * self.wavelength**2 / ((4*np.pi)**3 * noise_power)
 
-    # Assign results to data generator
-    self.data_generator.n_pulses = look.n_pulses
-    self.data_generator.max_unambiguous_range = max_unambiguous_range
-    self.data_generator.max_unambiguous_radial_speed = max_unambiguous_radial_speed
-    self.data_generator.range_resolution = range_resolution
-    self.data_generator.velocity_resolution = velocity_resolution
-    self.data_generator.loop_gain = loop_gain
-    self.data_generator.beam = beam
-    # TODO: For now, assuming no AoA estimation is performed so the az/el resolution is just the beamwidth
-    self.data_generator.azimuth_resolution = beam.azimuth_beamwidth
-    self.data_generator.elevation_resolution = beam.elevation_beamwidth
+    self.measurement_model = RangeRangeRateBinningAliasing(
+        range_res=self.range_resolution,
+        range_rate_res=self.velocity_resolution,
+        max_unambiguous_range=self.max_unambiguous_range,
+        max_unambiguous_range_rate=self.max_unambiguous_radial_speed,
+        ndim_state=6,
+        mapping=[0, 2, 4],
+        velocity_mapping=[1, 3, 5],
+        noise_covar=CovarianceMatrix(np.diag([0, 0, 0, 0])))
 
-  def detect(self, targets: List[Platform], time: float) -> DetectionReport:
-      # TODO: For now, assumes only one beam can be formed at a time
-    return self.data_generator.detect(targets, time)
+  def is_detectable(self, state: GroundTruthState) -> bool:
+    measurement_vector = self.measurement_model.function(state, noise=False)
+    # Check if state falls within sensor's FOV
+    fov_min = -self.field_of_view / 2
+    fov_max = +self.field_of_view / 2
+    az_t = measurement_vector[0, 0].degrees - self.beam.azimuth_steering_angle
+    el_t = measurement_vector[1, 0].degrees - \
+        self.beam.elevation_steering_angle
+    true_range = measurement_vector[2, 0]
+    return fov_min <= az_t <= fov_max and fov_min <= el_t <= fov_max and true_range <= self.max_range
 
-  def reset_subarrays(self) -> None:
-      """
-      Reset subarray assignments
-      """
-      self.subarray_indices[:,:] = -1 
+  def measure(self, ground_truths: Set[GroundTruthState], noise: Union[np.ndarray, bool] = True, **kwargs) -> set[TrueDetection]:
+    detections = set()
+    measurement_model = copy.deepcopy(self.measurement_model)
+
+    # Loop through the targets and generate detections
+    for truth in ground_truths:
+      # Skip targets that are not detectable
+      if not self.is_detectable(truth):
+        continue
+
+      # Get the position of the target in the radar coordinate frame
+      relative_pos = truth.state_vector[self.position_mapping,
+                                        :] - self.position
+      relative_pos = self._rotation_matrix @ relative_pos
+
+      # Convert target position to spherical coordinates
+      [target_az, target_el, r] = cart2sph(*relative_pos)
+
+      # Compute target's az/el relative to the beam center
+      relative_az = np.rad2deg(target_az) - self.beam.azimuth_steering_angle
+      relative_el = np.rad2deg(target_el) - self.beam.elevation_steering_angle
+      # Compute loss due to the target being off-centered in the beam
+      beam_shape_loss_db = self.beam.shape_loss(relative_az, relative_el)
+
+      snr_db = 10*np.log10(self.loop_gain) + 10*np.log10(truth.rcs) - \
+          40*np.log10(r) - beam_shape_loss_db
+
+      # Probability of detection
+      if snr_db > 0:
+        N = self.n_pulses
+        pfa = self.false_alarm_rate
+        pd = albersheim_pd(snr_db, pfa, N)
+      else:
+        pd = 0  # Assume targets are not detected with negative SNR
+
+      # Add detections based on the probability of detection
+      if np.random.rand() <= pd:
+
+        # # Use the SNR to compute the measurement accuracies in each dimension. These accuracies are set to the CRLB of each quantity (i.e., we assume we have efficient estimators)
+        snr_lin = 10**(snr_db/10)
+        single_pulse_snr = snr_lin / self.n_pulses
+        # The CRLB uses the RMS bandwidth. Assuming an LFM waveform with a rectangular spectrum, B_rms = B / sqrt(12)
+        rms_bandwidth = self.bandwidth / np.sqrt(12)
+        rms_range_res = constants.c / (2 * rms_bandwidth)
+        range_variance = range_crlb(
+            snr=single_pulse_snr,
+            resolution=rms_range_res,
+            bias_fraction=0.05)
+        velocity_variance = velocity_crlb(
+            snr=snr_lin,
+            resolution=self.velocity_resolution,
+            bias_fraction=0.05)
+        azimuth_variance = angle_crlb(
+            snr=snr_lin,
+            resolution=self.beam.azimuth_beamwidth,
+            bias_fraction=0.01)
+        elevation_variance = angle_crlb(
+            snr=snr_lin,
+            resolution=self.beam.elevation_beamwidth,
+            bias_fraction=0.01)
+        measurement_model.noise_covar = np.diag(
+            [elevation_variance, azimuth_variance, range_variance, velocity_variance])
+
+        measurements = measurement_model.function(truth, noise=noise)
+        detection = TrueDetection(measurements,
+                                  timestamp=truth.timestamp,
+                                  measurement_model=measurement_model,
+                                  groundtruth_path=truth)
+        detections.add(detection)
+      # TODO: Add in some false alarms.
+
+    return detections

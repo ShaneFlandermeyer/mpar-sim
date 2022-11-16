@@ -89,3 +89,54 @@ def azel2rotmat(az: float, el: float) -> np.ndarray:
                 [np.sin(az)*np.cos(el), np.cos(az), np.sin(az)*np.sin(el)],
                 [-np.sin(el), 0, np.cos(el)]])
   return R
+
+
+def rotx(theta: Union[float, np.ndarray]):
+  """
+  Rotation matrix about the x-axis
+
+  Parameters
+  ----------
+  theta : Union[float, np.ndarray]
+      rotation angle (radians)
+  """
+  cos_theta, sin_theta = np.cos(theta), np.sin(theta)
+  zeros = np.zeros_like(theta)
+  ones = np.ones_like(theta)
+  return np.array([[ones, zeros, zeros],
+                   [zeros, cos_theta, -sin_theta],
+                   [zeros, sin_theta, cos_theta]])
+
+
+def roty(theta: Union[float, np.ndarray]):
+  """
+  Rotation matrix about the y-axis
+
+  Parameters
+  ----------
+  theta : Union[float, np.ndarray]
+      rotation angle (radians)
+  """
+  cos_theta, sin_theta = np.cos(theta), np.sin(theta)
+  zeros = np.zeros_like(theta)
+  ones = np.ones_like(theta)
+  return np.array([[cos_theta, zeros, sin_theta],
+                   [zeros, ones, zeros],
+                   [-sin_theta, zeros, cos_theta]])
+
+
+def rotz(theta: Union[float, np.ndarray]):
+  """
+  Rotation matrix about the z-axis
+
+  Parameters
+  ----------
+  theta : Union[float, np.ndarray]
+      rotation angle (radians)
+  """
+  cos_theta, sin_theta = np.cos(theta), np.sin(theta)
+  zeros = np.zeros_like(theta)
+  ones = np.ones_like(theta)
+  return np.array([[cos_theta, -sin_theta, zeros],
+                   [sin_theta, cos_theta, zeros],
+                   [zeros, zeros, ones]])

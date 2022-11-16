@@ -3,7 +3,7 @@ from mpar_sim.radar_detection_generator import RadarDetectionGenerator
 import numpy as np
 from mpar_sim.platforms import Platform
 import time
-from mpar_sim.beam import Beam, RectangularBeam, GaussianBeam
+from mpar_sim.beam.beam import Beam, RectangularBeam, GaussianBeam
 from mpar_sim.common.coordinate_transform import sph2cart
 from mpar_sim.radar import Radar
 from mpar_sim.agents import RasterScanAgent

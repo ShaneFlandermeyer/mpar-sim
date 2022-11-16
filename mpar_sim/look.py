@@ -14,10 +14,11 @@ class RadarLook(Look):
                bandwidth: float,
                pulsewidth: float,
                prf: float,
-               n_pulses: int
+               n_pulses: int,
+               tx_power: float = None,
                ) -> None:
     self.start_time = start_time
-    
+
     # Beam parameters
     self.azimuth_steering_angle = azimuth_steering_angle
     self.elevation_steering_angle = elevation_steering_angle
@@ -30,3 +31,5 @@ class RadarLook(Look):
     self.prf = prf
     self.n_pulses = n_pulses
     self.dwell_time = n_pulses / prf
+    
+    self.tx_power = tx_power
