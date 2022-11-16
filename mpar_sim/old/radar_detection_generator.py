@@ -7,8 +7,8 @@ from scipy import special
 from mpar_sim.beam.beam import beam_scan_loss
 from mpar_sim.common.coordinate_transform import azel2rotmat, cart2sph
 from mpar_sim.common.wrap_to_interval import wrap_to_interval
-from mpar_sim.platforms import Platform
-from mpar_sim.reports import DetectionReport
+from mpar_sim.old.platforms import Platform
+from mpar_sim.old.reports import DetectionReport
 from mpar_sim.common.albersheim import albersheim_pd
 
 

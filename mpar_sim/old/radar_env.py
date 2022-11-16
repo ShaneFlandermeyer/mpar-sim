@@ -4,12 +4,12 @@ import numpy as np
 from mpar_sim.common.coordinate_transform import azel2rotmat
 from mpar_sim.look import RadarLook
 
-from mpar_sim.platforms import Platform
+from mpar_sim.old.platforms import Platform
 from mpar_sim.radar import Radar
 from scipy import constants
 import matplotlib.pyplot as plt
 
-from mpar_sim.reports import DetectionReport
+from mpar_sim.old.reports import DetectionReport
 
 
 class RadarEnvironment():
