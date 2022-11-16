@@ -1,8 +1,8 @@
+import datetime
 import numpy as np
 from mpar_sim.look import RadarLook
 
 from mpar_sim.agents.agent import Agent
-
 
 class RasterScanAgent(Agent):
   """
@@ -54,6 +54,7 @@ class RasterScanAgent(Agent):
     self.pulsewidth = pulsewidth
     self.prf = prf
     self.n_pulses = n_pulses
+    self.dwell_time = n_pulses / prf
 
     # Compute the beam search grid
     d_az = azimuth_beam_spacing*azimuth_beamwidth
@@ -68,27 +69,34 @@ class RasterScanAgent(Agent):
     self.beam_positions = np.stack((
         az_grid.flatten(), el_grid.flatten()), axis=0)
     self.n_positions = self.beam_positions.shape[1]
+    
+    # Counters
     self.current_position = 0
+    self.time = None
 
-  def act(self, current_time: float) -> RadarLook:
+  def act(self, current_time: datetime.datetime) -> RadarLook:
     """
     Select a new set of task parameters
 
     Parameters
     ----------
-    current_time: float
-      Current time in seconds
+    current_time: datetime.datetime
+      Current simulation time
 
     Returns
     -------
     RadarLook
         A new look at the next beam position in the raster scan
     """
+    if self.time is None:
+        self.time = current_time
 
-    # Select a new beam position
+    # Only switch to a new dwell position when the previous dwell is complete
+    if current_time - self.time >= datetime.timedelta(seconds=self.dwell_time):
+        self.current_position = (self.current_position + 1) % self.n_positions
+        
     beam_position = self.beam_positions[:, self.current_position]
-    self.current_position = (self.current_position +
-                             1) % self.n_positions
+    
     # Create a new look
     look = RadarLook(
         start_time=current_time,
