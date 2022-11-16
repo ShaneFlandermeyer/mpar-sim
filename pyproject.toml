@@ -19,6 +19,7 @@ autopep8 = "^2.0.0"
 
 [tool.poetry.dev-dependencies]
 ipykernel = "^6.17.1"
+pandas = "^1.5.1"
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
