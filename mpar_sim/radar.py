@@ -1,33 +1,25 @@
 import copy
-import datetime
-from mpar_sim.beam.common import beam_broadening_factor
-from mpar_sim.beam.beam import RectangularBeam
-from mpar_sim.common.albersheim import albersheim_pd
-from mpar_sim.common.coordinate_transform import cart2sph, sph2cart, rotx, roty, rotz
-from mpar_sim.beam.common import aperture2beamwidth
-from stonesoup.sensor.sensor import Sensor
-from typing import Set
-from stonesoup.types.groundtruth import GroundTruthState
-from stonesoup.types.detection import TrueDetection
-from stonesoup.models.measurement import MeasurementModel
-from stonesoup.types.state import StateVector, State
-from stonesoup.base import Property
-from stonesoup.sensor.actionable import ActionableProperty
-from scipy import constants
-from stonesoup.models.measurement.nonlinear import RangeRangeRateBinning
-from stonesoup.sensor.radar.radar import RadarElevationBearingRangeRate
-from mpar_sim.look import Look, RadarLook
-from typing import Callable, List, Optional, Tuple, Union
-from scipy import constants
-from stonesoup.platform.base import FixedPlatform
+from typing import Callable, Set, Tuple, Union
+
 import numpy as np
-from stonesoup.types.array import StateVector, CovarianceMatrix
-from mpar_sim.models.measurement.estimation import angle_crlb, range_crlb, velocity_crlb
-
-from mpar_sim.models.measurement.nonlinear import RangeRangeRateBinningAliasing
-
-from stonesoup.models.measurement.nonlinear import CartesianToElevationBearingRangeRate, RangeRangeRateBinning
+from scipy import constants
+from stonesoup.base import Property
+from stonesoup.models.measurement import MeasurementModel
 from stonesoup.sensor.radar.radar import RadarElevationBearingRangeRate
+from stonesoup.sensor.sensor import Sensor
+from stonesoup.types.array import CovarianceMatrix, StateVector
+from stonesoup.types.detection import TrueDetection
+from stonesoup.types.groundtruth import GroundTruthState
+from stonesoup.types.state import StateVector
+
+from mpar_sim.beam.beam import RectangularBeam
+from mpar_sim.beam.common import beam_broadening_factor
+from mpar_sim.common.albersheim import albersheim_pd
+from mpar_sim.common.coordinate_transform import (cart2sph, rotx, roty, rotz)
+from mpar_sim.look import Look
+from mpar_sim.models.measurement.estimation import (angle_crlb, range_crlb,
+                                                    velocity_crlb)
+from mpar_sim.models.measurement.nonlinear import RangeRangeRateBinningAliasing
 
 
 class PhasedArrayRadar(Sensor):
@@ -175,15 +167,15 @@ class PhasedArrayRadar(Sensor):
     self.loop_gain = look.n_pulses * pulse_compression_gain * self.tx_power * \
         self.beam.gain**2 * self.wavelength**2 / ((4*np.pi)**3 * noise_power)
 
-    self.measurement_model = RangeRangeRateBinning(
+    self.measurement_model = RangeRangeRateBinningAliasing(
         range_res=self.range_resolution,
         range_rate_res=self.velocity_resolution,
-        # max_unambiguous_range=self.max_unambiguous_range,
-        # max_unambiguous_range_rate=self.max_unambiguous_radial_speed,
+        max_unambiguous_range=self.max_unambiguous_range,
+        max_unambiguous_range_rate=self.max_unambiguous_radial_speed,
         ndim_state=6,
         mapping=[0, 2, 4],
         velocity_mapping=[1, 3, 5],
-        noise_covar=CovarianceMatrix(np.diag([0,0,0,0])))
+        noise_covar=CovarianceMatrix(np.diag([0, 0, 0, 0])))
 
   def is_detectable(self, state: GroundTruthState) -> bool:
     measurement_vector = self.measurement_model.function(state, noise=False)
@@ -191,7 +183,8 @@ class PhasedArrayRadar(Sensor):
     fov_min = -self.field_of_view / 2
     fov_max = +self.field_of_view / 2
     az_t = measurement_vector[0, 0].degrees - self.beam.azimuth_steering_angle
-    el_t = measurement_vector[1, 0].degrees - self.beam.elevation_steering_angle
+    el_t = measurement_vector[1, 0].degrees - \
+        self.beam.elevation_steering_angle
     true_range = measurement_vector[2, 0]
     return fov_min <= az_t <= fov_max and fov_min <= el_t <= fov_max and true_range <= self.max_range
 
@@ -233,20 +226,20 @@ class PhasedArrayRadar(Sensor):
       # Add detections based on the probability of detection
       if np.random.rand() <= pd:
 
-        # Use the SNR to compute the measurement accuracies in each dimension. These accuracies are set to the CRLB of each quantity (i.e., we assume we have efficient estimators)
+        # # Use the SNR to compute the measurement accuracies in each dimension. These accuracies are set to the CRLB of each quantity (i.e., we assume we have efficient estimators)
         snr_lin = 10**(snr_db/10)
         single_pulse_snr = snr_lin / self.n_pulses
         # The CRLB uses the RMS bandwidth. Assuming an LFM waveform with a rectangular spectrum, B_rms = B / sqrt(12)
         rms_bandwidth = self.bandwidth / np.sqrt(12)
         rms_range_res = constants.c / (2 * rms_bandwidth)
         range_variance = range_crlb(
-            snr=single_pulse_snr, 
+            snr=single_pulse_snr,
             resolution=rms_range_res,
-            bias_fraction=0.01)
+            bias_fraction=0.05)
         velocity_variance = velocity_crlb(
-            snr=snr_lin, 
+            snr=snr_lin,
             resolution=self.velocity_resolution,
-            bias_fraction=0.01)
+            bias_fraction=0.05)
         azimuth_variance = angle_crlb(
             snr=snr_lin,
             resolution=self.beam.azimuth_beamwidth,
