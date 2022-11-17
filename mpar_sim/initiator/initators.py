@@ -48,7 +48,7 @@ class MofNInitiator(GaussianInitiator):
 
   def __init__(self, *args, **kwargs):
     super().__init__(*args, **kwargs)
-    self.tentative_tracks = set()
+    self.holding_tracks = set()
     if self.initiator is None:
       self.initiator = SimpleMeasurementInitiator(
           self.prior_state, self.measurement_model)
@@ -58,35 +58,35 @@ class MofNInitiator(GaussianInitiator):
 
     associated_detections = set()
 
-    if self.tentative_tracks:
+    if self.holding_tracks:
       # Try to associate new detections to tentative tracks
       associations = self.data_associator.associate(
-          self.tentative_tracks, detections, timestamp)
+          self.holding_tracks, detections, timestamp)
 
       for track, hypothesis in associations.items():
-        track.history = np.roll(track.history, 1)
+        track._history = np.roll(track._history, 1)
         if hypothesis:
           state_post = self.updater.update(hypothesis)
           track.append(state_post)
           associated_detections.add(hypothesis.measurement)
-          track.history[0] = 1
+          track._history[0] = 1
         else:
           track.append(hypothesis.prediction)
-          track.history[0] = 0
+          track._history[0] = 0
           
         # TODO: Check for M-of-N threshold
-        if np.sum(track.history) >= self.confirmation_threshold[0]:
+        if np.sum(track._history) >= self.confirmation_threshold[0]:
           sure_tracks.add(track)
-          self.tentative_tracks.remove(track)
+          self.holding_tracks.remove(track)
         
-      self.tentative_tracks -= self.deleter.delete_tracks(self.tentative_tracks)
+      self.holding_tracks -= self.deleter.delete_tracks(self.holding_tracks)
       
     # Initialize new tracks to add to the tentative track list. Each of these tracks need an extra history parameter to handle M-of-N confirmation logic.
     new_tracks = self.initiator.initiate(
       detections - associated_detections, timestamp)
     for track in new_tracks:
-      track.history = np.zeros(self.confirmation_threshold[1])
-    self.tentative_tracks |= new_tracks
+      track._history = np.zeros(self.confirmation_threshold[1])
+    self.holding_tracks |= new_tracks
       
     
     return sure_tracks
