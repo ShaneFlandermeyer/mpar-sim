@@ -88,7 +88,7 @@ class PhasedArrayRadar(Sensor):
     self.wavelength = constants.c / self.center_frequency
     # TODO: Handle subarray resource allocation in a separate object.
 
-  @ measurement_model.getter
+  @measurement_model.getter
   def measurement_model(self):
     measurement_model = copy.deepcopy(self._property_measurement_model)
     measurement_model.translation_offset = self.position.copy()
