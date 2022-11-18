@@ -1,5 +1,5 @@
 import copy
-from typing import Callable, Set, Tuple, Union
+from typing import Callable, List, Set, Tuple, Union
 
 import numpy as np
 from scipy import constants
@@ -76,17 +76,17 @@ class PhasedArrayRadar(Sensor):
       doc="Probability of false alarm")
   max_range: float = Property(
       default=np.inf,
-      doc="Maximum detection range of the radar (m)"
-  )
-  field_of_view: float = Property(
-      default=90,
-      doc="The width in each dimension for which targets can be detected (deg)."
-  )
+      doc="Maximum detection range of the radar (m). If a target is beyond this range, it will never be detected.")
+  az_fov: Union[List, np.ndarray] = Property(
+      default=np.array([-90, 90]),
+      doc="Azimuth slice within which the radar can detect targets (deg). The first element in the array is the lower bound, the second is the upper bound.")
+  el_fov: Union[List, np.ndarray] = Property(
+      default=np.array([-90, 90]),
+      doc="Elevation slice within which the radar can detect targets (deg). The first element in the array is the lower bound, the second is the upper bound.")
 
   def __init__(self, *args, **kwargs):
     super().__init__(*args, **kwargs)
     self.wavelength = constants.c / self.center_frequency
-    # TODO: Handle subarray resource allocation in a separate object.
 
   @measurement_model.getter
   def measurement_model(self):
@@ -180,13 +180,11 @@ class PhasedArrayRadar(Sensor):
   def is_detectable(self, state: GroundTruthState) -> bool:
     measurement_vector = self.measurement_model.function(state, noise=False)
     # Check if state falls within sensor's FOV
-    fov_min = -self.field_of_view / 2
-    fov_max = +self.field_of_view / 2
     az_t = measurement_vector[0, 0].degrees - self.beam.azimuth_steering_angle
     el_t = measurement_vector[1, 0].degrees - \
         self.beam.elevation_steering_angle
     true_range = measurement_vector[2, 0]
-    return fov_min <= az_t <= fov_max and fov_min <= el_t <= fov_max and true_range <= self.max_range
+    return (self.az_fov[0] <= az_t <= self.az_fov[1]) and (self.el_fov[0] <= el_t <= self.el_fov[1]) and (true_range <= self.max_range)
 
   def measure(self, ground_truths: Set[GroundTruthState], noise: Union[np.ndarray, bool] = True, **kwargs) -> set[TrueDetection]:
     detections = set()
