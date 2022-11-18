@@ -94,15 +94,16 @@ class AdaptiveTrackAgent(Agent):
       # Choose the desired time of the look to be scheduled for this track
       # TODO: Confirmation and revisit dwells may require different beam layouts or look types
       if track in confirmed_tracks:
-        revisit_interval = self.compute_revisit_interval(track, current_time)
-        next_update_time = current_time + timedelta(revisit_interval)
+        revisit_interval = self.compute_revisit_interval(
+            track, current_time, predictor)
+        dt = timedelta(seconds=revisit_interval)
       else:
-        next_update_time = current_time + timedelta(1/self.confirm_rate)
+        dt = timedelta(seconds=1 / self.confirm_rate)
+      next_update_time = current_time + dt
 
       # Use the predicted az/el of the target at the next update time as the beam center
       predicted_state = predictor.predict(track, timestamp=next_update_time)
       position_xyz = predicted_state.state_vector[self.position_mapping, :]
-      # TODO: This may not be in the correct coordinate frame
       predicted_az, predicted_el, _ = cart2sph(*position_xyz)
 
       # Create the look
@@ -118,7 +119,7 @@ class AdaptiveTrackAgent(Agent):
           n_pulses=self.n_pulses,
       )
       looks.append(look)
-      
+
     return looks
 
   def compute_revisit_interval(self,
@@ -162,12 +163,3 @@ class AdaptiveTrackAgent(Agent):
 
     # If the track error is never within the limits, return the minimum revisit interval
     return revisit_time
-
-
-if __name__ == '__main__':
-  agent = AdaptiveTrackAgent(
-      track_sharpness=0.05,
-      min_revisit_rate=0.5,
-      max_revisit_rate=5,
-      confirm_rate=20)
-  print(agent.revisit_times)
