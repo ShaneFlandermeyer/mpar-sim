@@ -3,6 +3,7 @@ import numpy as np
 
 from mpar_sim.common.wrap_to_interval import wrap_to_interval
 
+
 def beam_broadening_factor(az_steering_angle: float, el_steering_angle: float) -> Tuple[float, float]:
   """
   Computes the beam broadening factor in azimuth and elevation
@@ -77,6 +78,7 @@ def beamwidth2aperture(
   Parameters
   ----------
   beamwidth : Union[np.ndarray, float]
+      Beamwidth in each dimension (in degrees)
   wavelength: float
       Transmit wavelength (in meters)
   Returns
@@ -84,8 +86,9 @@ def beamwidth2aperture(
   float
       Antenna aperture (in m^2)
   """
-  aperture_xy = wavelength / np.deg2rad(beamwidth)
-  return aperture_xy
+  d = 0.886*wavelength / np.deg2rad(beamwidth)
+  return d
+
 
 def beam_scan_loss(az_steering_angle: float, el_steering_angle: float, az_cosine_power: float = 2, el_cosine_power: float = 2) -> float:
   """

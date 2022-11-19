@@ -178,6 +178,17 @@ class PhasedArrayRadar(Sensor):
         noise_covar=CovarianceMatrix(np.diag([0, 0, 0, 0])))
 
   def is_detectable(self, state: GroundTruthState) -> bool:
+    """
+    Returns true if the target is within the radar's field of view (in range, azimuth, and elevation) and false otherwise
+    Parameters
+    ----------
+    state : GroundTruthState
+        Target state
+    Returns
+    -------
+    bool
+        Whether the target can be detected by the radar
+    """
     measurement_vector = self.measurement_model.function(state, noise=False)
     # Check if state falls within sensor's FOV
     az_t = measurement_vector[0, 0].degrees - self.beam.azimuth_steering_angle
@@ -187,6 +198,19 @@ class PhasedArrayRadar(Sensor):
     return (self.az_fov[0] <= az_t <= self.az_fov[1]) and (self.el_fov[0] <= el_t <= self.el_fov[1]) and (true_range <= self.max_range)
 
   def measure(self, ground_truths: Set[GroundTruthState], noise: Union[np.ndarray, bool] = True, **kwargs) -> set[TrueDetection]:
+    """
+    Generates stochastic detections from a set of target ground truths
+    Parameters
+    ----------
+    ground_truths : Set[GroundTruthState]
+        True information of targets to be measured
+    noise : Union[np.ndarray, bool], optional
+        If true, noise is added to each detection. This noise includes aliasing, discretization into bins, and measurement accuracy limits dictated by the CRLB of the measurement error for each quantity, by default True
+    Returns
+    -------
+    set[TrueDetection]
+        Detections made by the radar
+    """
     detections = set()
     measurement_model = copy.deepcopy(self.measurement_model)
 
