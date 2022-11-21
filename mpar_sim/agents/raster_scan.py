@@ -1,6 +1,6 @@
 import datetime
 import numpy as np
-from mpar_sim.looks.look import Look
+from mpar_sim.looks.volume_search import VolumeSearchLook
 
 from mpar_sim.agents.agent import Agent
 
@@ -74,7 +74,7 @@ class RasterScanAgent(Agent):
     self.current_position = 0
     self.time = None
 
-  def act(self, current_time: datetime.datetime) -> Look:
+  def act(self, current_time: datetime.datetime) -> VolumeSearchLook:
     """
     Select a new set of task parameters
 
@@ -100,7 +100,7 @@ class RasterScanAgent(Agent):
     beam_position = self.beam_positions[:, self.current_position]
     
     # Create a new look
-    look = Look(
+    look = VolumeSearchLook(
         start_time=current_time,
         azimuth_steering_angle=beam_position[0],
         elevation_steering_angle=beam_position[1],

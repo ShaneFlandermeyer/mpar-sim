@@ -24,8 +24,8 @@ radar = PhasedArrayRadar(
     position_mapping=(0, 2, 4),
     rotation_offset=np.array([[0], [0], [0]]),
     # Array parameters
-    n_elements_x=16,
-    n_elements_y=16,
+    n_elements_x=32,
+    n_elements_y=32,
     element_spacing=0.5,  # Wavelengths
     element_tx_power=10,
     # System parameters
@@ -45,8 +45,10 @@ manager = PAPResourceManager(radar,
                              max_duty_cycle=0.1,
                              max_bandwidth=100e6)
 scheduler = BestFirstScheduler(manager,
-                               sort_key="start_time",
-                               reverse_sort=False,)
+                               sort_key="priority",
+                               reverse_sort=True,
+                               max_queue_size=10,
+                               max_time_delta=timedelta(seconds=0.5))
 
 
 # %% [markdown]
@@ -61,8 +63,8 @@ search_agent = RasterScanAgent(
     elevation_scan_limits=np.array([-5, 5]),
     azimuth_beam_spacing=0.8,
     elevation_beam_spacing=0.8,
-    azimuth_beamwidth=7.5,
-    elevation_beamwidth=7.5,
+    azimuth_beamwidth=15,
+    elevation_beamwidth=15,
     bandwidth=100e6,
     pulsewidth=1e-6,
     prf=5e3,
@@ -111,7 +113,7 @@ data_associator = GNNWith2DAssignment(gater)
 # %%
 from stonesoup.deleter.time import UpdateTimeStepsDeleter, UpdateTimeDeleter
 deleter = UpdateTimeDeleter(timedelta(seconds=2))
-# deleter = UpdateTimeStepsDeleter(10)
+
 
 # %% [markdown]
 # Create the initiator
@@ -129,7 +131,7 @@ initiator = MofNInitiator(
     deleter=deleter,
     data_associator=data_associator,
     updater=updater,
-    confirmation_threshold=[3,5],
+    confirmation_threshold=[4,5],
 )
 
 # %% [markdown]
@@ -138,6 +140,7 @@ initiator = MofNInitiator(
 # %%
 from mpar_sim.agents.track_while_scan import TWSAgent
 from mpar_sim.agents.adaptive_track import AdaptiveTrackAgent
+from mpar_sim.beam.common import aperture2beamwidth
 
 track_agent = AdaptiveTrackAgent(
     initiator,
@@ -145,14 +148,14 @@ track_agent = AdaptiveTrackAgent(
     predictor,
     updater,
     deleter,
-    # Adaptive track parameters 
-    track_sharpness=0.15,
+    # Adaptive track parameters
+    track_sharpness=0.25,
     min_revisit_rate=0.5,
     max_revisit_rate=5,
     confirm_rate=20,
     # Task parameters
-    azimuth_beamwidth=1.5,
-    elevation_beamwidth=1.5,
+    azimuth_beamwidth=5,
+    elevation_beamwidth=5,
     bandwidth=100e6,
     pulsewidth=1e-6,
     prf=5e3,
@@ -160,6 +163,7 @@ track_agent = AdaptiveTrackAgent(
 )
 
 # track_agent = TWSAgent(initiator, data_associator, updater, deleter)
+
 
 # %% [markdown]
 # ## Run the simulation
@@ -180,9 +184,9 @@ n_steps = 500
 include_noise = True
 
 # Target generation parameters
-n_targets_max = 20
+n_targets_max = 5
 initial_state_mean = StateVector([100, 10, 0, 0, 0, 0])
-initial_state_covariance = CovarianceMatrix(np.diag([100, 5, 100, 5, 0, 0]))
+initial_state_covariance = CovarianceMatrix(np.diag([100, 5, 20, 5, 0, 0]))
 initial_state = GaussianState(initial_state_mean, initial_state_covariance)
 death_probability = 0.0
 birth_probability = 0.1
@@ -224,10 +228,15 @@ for istep in range(n_steps):
     # Sample an initial state from the mean and covariance defined above
     state_vector = initial_state.state_vector + \
         initial_state.covar @ np.random.randn(initial_state.ndim, 1)
+    if state_vector[0] < 0:
+      state_vector[0] = -state_vector[0]
+    if state_vector[1] < 0:
+      state_vector[1] = -state_vector[1]
     state = GroundTruthState(
         state_vector=state_vector,
         timestamp=time,
     )
+    
     # Give the target an RCS
     # TODO: Create a GroundTruthTarget class with an RCS attribute
     state.rcs = target_rcs
@@ -239,7 +248,7 @@ for istep in range(n_steps):
   ########################################
   # Allocate resources and simulate
   ########################################
-  # Generate looks from each agent
+  # Generate looks from each 
   search_look = search_agent.act(current_time=scheduler_time)
   track_looks = track_agent.act(current_time=scheduler_time)
   looks = [search_look] + track_looks
@@ -291,5 +300,15 @@ plotter.plot_measurements(all_measurements, [0, 2])
 plotter.plot_tracks(all_tracks, [0,2])
 
 plotter.fig
+
+# %%
+from stonesoup.metricgenerator.basicmetrics import BasicMetrics
+
+basic_generator = BasicMetrics()
+
+from stonesoup.metricgenerator.manager import SimpleManager
+
+metric_manager = SimpleManager([basic_generator],
+                               associator=data_associator)
 
 

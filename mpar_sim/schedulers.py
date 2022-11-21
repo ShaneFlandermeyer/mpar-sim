@@ -17,11 +17,13 @@ class BestFirstScheduler():
                sort_key: str = "priority",
                reverse_sort: bool = False,
                max_queue_size: int = None,
+               max_time_delta: datetime.timedelta = None,
                ) -> None:
     self.manager = resource_manager
     self.sort_key = sort_key
     self.max_queue_size = max_queue_size
     self.reverse_sort = reverse_sort
+    self.max_time_delta = max_time_delta
     self.task_list = []
 
   def append(self, look_requests: List[Look]):
@@ -42,10 +44,10 @@ class BestFirstScheduler():
     # Sort the task queue in ascending order by the desired attribute
     self.task_list.sort(key=operator.attrgetter(
         self.sort_key), reverse=self.reverse_sort)
-    
-    # Limit the maximum size of the queue. If the operation above exceeds the queue
-    if self.max_queue_size is not None and len(self.task_list) > self.max_queue_size:
-      self.task_list = self.task_list[:self.max_queue_size]
+
+    # Limit the maximum size of the queue. If the operation above exceeds the queue, remove the tasks that are least important with respect to the parameters we are sorting by
+    # if self.max_queue_size is not None and len(self.task_list) > self.max_queue_size:
+    #   self.task_list = self.task_list[:self.max_queue_size]
 
   def schedule(self, look_requests: List[Look], current_time: datetime.datetime) -> List[Look]:
     # Add look requests to the scheduler queue
@@ -53,6 +55,12 @@ class BestFirstScheduler():
 
     # Allocate resources greedily until there are no more resources available
     for task in self.task_list.copy():
+      if task.start_time < current_time - self.max_time_delta:
+        self.task_list.remove(task)
+        continue
+      elif task.start_time > current_time + self.max_time_delta:
+        continue
+
       # Try to allocate resources for the current task
       allocation_success = self.manager.allocate(task, current_time)
 
