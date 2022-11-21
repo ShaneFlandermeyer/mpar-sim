@@ -1,4 +1,4 @@
-from typing import List, Tuple
+from typing import List, Tuple, Set
 from mpar_sim.agents.agent import Agent
 from mpar_sim.look import RadarLook
 import datetime
@@ -6,8 +6,10 @@ from datetime import timedelta
 from mpar_sim.common.coordinate_transform import cart2sph, cart2sph_covar
 import numpy as np
 from stonesoup.types.track import Track
+from stonesoup.types.detection import Detection
 from stonesoup.types.update import Update
 from stonesoup.predictor.base import Predictor
+from collections import deque
 
 
 class AdaptiveTrackAgent(Agent):
@@ -18,6 +20,11 @@ class AdaptiveTrackAgent(Agent):
   """
 
   def __init__(self,
+               # Tracker components
+               initiator,
+               associator,
+               predictor,
+               updater,
                # Adaptive tracking parameters
                track_sharpness: float,
                min_revisit_rate: float,
@@ -33,6 +40,12 @@ class AdaptiveTrackAgent(Agent):
                #
                position_mapping: Tuple = (0, 2, 4),
                ):
+    # Tracker components
+    self.initiator = initiator
+    self.associator = associator
+    self.predictor = predictor
+    self.updater = updater
+
     # Adaptive tracking parameters
     self.confirm_rate = confirm_rate
     self.min_revisit_rate = min_revisit_rate
@@ -49,7 +62,7 @@ class AdaptiveTrackAgent(Agent):
     self.prf = prf
     self.n_pulses = n_pulses
     # TODO: Don't hard-code this
-    self.tx_power = 100e3
+    # self.tx_power = 100e3
 
     # Compute intermediate revisit times
     tmin = 1 / max_revisit_rate
@@ -58,9 +71,14 @@ class AdaptiveTrackAgent(Agent):
     self.revisit_times = tmin * np.power(2, np.arange(n-1))
     self.revisit_times = np.append(self.revisit_times, tmax)
 
-  def act(self, current_time: datetime.datetime) -> RadarLook:
+    # A queue of (time, track) tuples that indicates the next desired update time for each track that has received a new detection
+    self.update_queue = deque()
+
+    self.confirmed_tracks = set()
+
+  def act(self, current_time: datetime.datetime) -> List[RadarLook]:
     """
-    Select a look to observe
+    Return a list of looks to be scheduled.
 
     Parameters
     ----------
@@ -69,46 +87,27 @@ class AdaptiveTrackAgent(Agent):
 
     Returns
     -------
-    RadarLook
-        _description_
-    """
-    pass
-
-  def request_looks(self,
-                    confirmed_tracks,
-                    tentative_tracks,
-                    current_time,
-                    predictor) -> List[RadarLook]:
-    """
-    Loop through all tracks that have been assigned a measurement on this time step. If the track has been confirmed, schedule its next update according to the adaptive revisit interval algorithm defined below. Otherwise, schedule a confirmation look in the very near future.
-
-    Parameters
-    ----------
-    detections : _type_
-        _description_
-    time : _type_
+    List[RadarLook]
         _description_
     """
     looks = []
-    for track in confirmed_tracks | tentative_tracks:
-      # Choose the desired time of the look to be scheduled for this track
-      # TODO: Confirmation and revisit dwells may require different beam layouts or look types
-      if track in confirmed_tracks:
-        revisit_interval = self.compute_revisit_interval(
-            track, current_time, predictor)
-        dt = timedelta(seconds=revisit_interval)
+    n_looks = len(self.update_queue)
+    for _ in range(n_looks):
+      next_update_time, track = self.update_queue.pop()
+      if next_update_time > current_time:
+        start_time = next_update_time
       else:
-        dt = timedelta(seconds=1 / self.confirm_rate)
-      next_update_time = current_time + dt
+        start_time = current_time
 
-      # Use the predicted az/el of the target at the next update time as the beam center
-      predicted_state = predictor.predict(track, timestamp=next_update_time)
+      # Use the predicted position of the target at the start time to steer the beam
+      predicted_state = self.predictor.predict(
+          track, timestamp=start_time)
       position_xyz = predicted_state.state_vector[self.position_mapping, :]
       predicted_az, predicted_el, _ = cart2sph(*position_xyz)
-
       # Create the look
+      # TODO: Confirm/update should be different types of looks
       look = RadarLook(
-          start_time=next_update_time,
+          start_time=start_time,
           azimuth_steering_angle=np.rad2deg(predicted_az),
           elevation_steering_angle=np.rad2deg(predicted_el),
           azimuth_beamwidth=self.azimuth_beamwidth,
@@ -117,10 +116,71 @@ class AdaptiveTrackAgent(Agent):
           pulsewidth=self.pulsewidth,
           prf=self.prf,
           n_pulses=self.n_pulses,
+          priority=1,
       )
       looks.append(look)
 
     return looks
+
+  def update_tracks(self,
+                    detections: Set[Detection],
+                    current_time: datetime.datetime) -> Set[Track]:
+    """
+    Updates the state of any tracks (tentative or confirmed) that have had a detection assigned to them on this time step. 
+
+    For each updated track, the next update is also scheduled (a confirmation dwell for tentative tracks and an adaptive revisit dwell for confirmed tracks).
+
+    Parameters
+    ----------
+    detections : Set[Detection]
+        New detections made on this time step
+    current_time : datetime.datetime
+        Start time of the dwell that produced the detections
+
+    Returns
+    -------
+    Set[Track]
+        Confirmed tracks after accounting for the new detections.
+    """
+    # Associate detections with tracks
+    all_tracks = self.confirmed_tracks | self.initiator.holding_tracks
+    hypotheses = self.associator.associate(
+        all_tracks, detections, timestamp=current_time)
+
+    # Update tracks and schedule new dwells
+    associated_detections = set()
+    for track in all_tracks:
+      hypothesis = hypotheses[track]
+      if hypothesis.measurement:
+        # Update the track
+        posterior = self.updater.update(hypothesis)
+        track.append(posterior)
+
+        # Determine the revisit interval
+        if track in self.confirmed_tracks:
+          # Detection already associated with a confirmed track
+          associated_detections.add(hypothesis.measurement)
+          # Schedule a new dwell at the adaptive revisit interval
+          revisit_interval = self.compute_revisit_interval(
+              track, current_time, self.predictor)
+          dt = timedelta(seconds=revisit_interval)
+        else:
+          # Schedule a rapid confirmation dwell
+          dt = timedelta(seconds=1 / self.confirm_rate)
+        next_update_time = current_time + dt
+        # Add the track to the update queue
+        self.update_queue.append((next_update_time, track))
+      else:
+        track.append(hypothesis.prediction)
+
+      # TODO: Handle the case where no measurement was associated with the track (for deletion/maintenance)
+
+    # Try to initiate new tracks from detections that were not associated with any existing tracks
+    self.confirmed_tracks |= self.initiator.initiate(
+        detections=detections - associated_detections,
+        timestamp=current_time)
+
+    return self.confirmed_tracks
 
   def compute_revisit_interval(self,
                                track: Update,
