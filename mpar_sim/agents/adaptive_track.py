@@ -170,7 +170,7 @@ class AdaptiveTrackAgent(Agent):
         next_update_time = current_time + dt
         # Add the track to the update queue
         self.update_queue.append((next_update_time, track))
-      else:
+      elif track in self.confirmed_tracks:
         track.append(hypothesis.prediction)
 
       # TODO: Handle the case where no measurement was associated with the track (for deletion/maintenance)
