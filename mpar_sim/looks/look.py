@@ -2,11 +2,8 @@ import datetime
 from typing import Union
 
 
-class Look():
-  pass
-
 # TODO: Add default parameters
-class RadarLook(Look):
+class Look():
   def __init__(self,
                # Beam parameters
                azimuth_steering_angle: float = 0,

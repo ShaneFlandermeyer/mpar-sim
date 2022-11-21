@@ -1,7 +1,7 @@
 from collections import deque
 from mpar_sim.beam.beam import GaussianBeam
 from mpar_sim.radar import PhasedArrayRadar
-from mpar_sim.look import Look, RadarLook
+from mpar_sim.looks.look import Look, Look
 from mpar_sim.beam.common import beamwidth2aperture
 import numpy as np
 import datetime

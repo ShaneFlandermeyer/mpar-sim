@@ -16,7 +16,7 @@ from mpar_sim.beam.beam import RectangularBeam
 from mpar_sim.beam.common import beam_broadening_factor
 from mpar_sim.common.albersheim import albersheim_pd
 from mpar_sim.common.coordinate_transform import (cart2sph, rotx, roty, rotz)
-from mpar_sim.look import Look
+from mpar_sim.looks.look import Look
 from mpar_sim.models.measurement.estimation import (angle_crlb, range_crlb,
                                                     velocity_crlb)
 from mpar_sim.models.measurement.nonlinear import RangeRangeRateBinningAliasing

@@ -1,5 +1,5 @@
 from typing import List, Union
-from mpar_sim.look import Look
+from mpar_sim.looks.look import Look
 from mpar_sim.resource_management import ResourceManager
 from collections import deque
 import operator

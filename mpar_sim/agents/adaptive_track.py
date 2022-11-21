@@ -15,7 +15,7 @@ from stonesoup.updater.base import Updater
 
 from mpar_sim.agents.agent import Agent
 from mpar_sim.common.coordinate_transform import cart2sph, cart2sph_covar
-from mpar_sim.look import RadarLook
+from mpar_sim.looks.look import Look
 
 
 class AdaptiveTrackAgent(Agent):
@@ -82,7 +82,7 @@ class AdaptiveTrackAgent(Agent):
 
     self.confirmed_tracks = set()
 
-  def act(self, current_time: datetime.datetime) -> List[RadarLook]:
+  def act(self, current_time: datetime.datetime) -> List[Look]:
     """
     Return a list of looks to be scheduled.
 
@@ -93,7 +93,7 @@ class AdaptiveTrackAgent(Agent):
 
     Returns
     -------
-    List[RadarLook]
+    List[Look]
         _description_
     """
     looks = []
@@ -112,7 +112,7 @@ class AdaptiveTrackAgent(Agent):
       predicted_az, predicted_el, _ = cart2sph(*position_xyz)
       # Create the look
       # TODO: Confirm/update should be different types of looks
-      look = RadarLook(
+      look = Look(
           start_time=start_time,
           azimuth_steering_angle=np.rad2deg(predicted_az),
           elevation_steering_angle=np.rad2deg(predicted_el),

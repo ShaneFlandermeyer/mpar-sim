@@ -8,7 +8,7 @@ from stonesoup.types.detection import Detection
 from stonesoup.types.track import Track
 from stonesoup.updater.base import Updater
 
-from mpar_sim.look import RadarLook
+from mpar_sim.looks.look import Look
 
 
 class TWSAgent:
@@ -29,7 +29,7 @@ class TWSAgent:
     # Active tracks
     self.confirmed_tracks = set()
 
-  def act(self, current_time: datetime.datetime) -> List[RadarLook]:
+  def act(self, current_time: datetime.datetime) -> List[Look]:
     """
     Generate an empty list of looks (since all looks for the track-while-scan agent are generated from the search function)
 
@@ -40,7 +40,7 @@ class TWSAgent:
 
     Returns
     -------
-    List[RadarLook]
+    List[Look]
         Empty list of look requests
     """
     return []

@@ -143,7 +143,7 @@ data_associator = GNNWith2DAssignment(hypothesiser)
 # %%
 # Generate list of timesteps from ground truth timestamps
 from mpar_sim.beam.common import aperture2beamwidth
-from mpar_sim.look import RadarLook
+from mpar_sim.looks.look import Look
 
 
 timesteps = []
@@ -152,7 +152,7 @@ for state in truths[0]:
 
 for timestep in timesteps[1:]:
   # TODO: Choose actions
-  look = RadarLook(
+  look = Look(
       start_time=start_time,
       tx_power=2560,
       azimuth_steering_angle=0,
