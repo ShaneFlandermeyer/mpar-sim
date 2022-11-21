@@ -1,15 +1,21 @@
-from typing import List, Tuple, Set
-from mpar_sim.agents.agent import Agent
-from mpar_sim.look import RadarLook
 import datetime
-from datetime import timedelta
-from mpar_sim.common.coordinate_transform import cart2sph, cart2sph_covar
-import numpy as np
-from stonesoup.types.track import Track
-from stonesoup.types.detection import Detection
-from stonesoup.types.update import Update
-from stonesoup.predictor.base import Predictor
 from collections import deque
+from datetime import timedelta
+from typing import List, Set, Tuple
+
+import numpy as np
+from stonesoup.dataassociator.base import Associator
+from stonesoup.deleter.base import Deleter
+from stonesoup.initiator.base import Initiator
+from stonesoup.predictor.base import Predictor
+from stonesoup.types.detection import Detection
+from stonesoup.types.track import Track
+from stonesoup.types.update import Update
+from stonesoup.updater.base import Updater
+
+from mpar_sim.agents.agent import Agent
+from mpar_sim.common.coordinate_transform import cart2sph, cart2sph_covar
+from mpar_sim.look import RadarLook
 
 
 class AdaptiveTrackAgent(Agent):
@@ -21,10 +27,11 @@ class AdaptiveTrackAgent(Agent):
 
   def __init__(self,
                # Tracker components
-               initiator,
-               associator,
-               predictor,
-               updater,
+               initiator: Initiator,
+               associator: Associator,
+               predictor: Predictor,
+               updater: Updater,
+               deleter: Deleter,
                # Adaptive tracking parameters
                track_sharpness: float,
                min_revisit_rate: float,
@@ -45,6 +52,7 @@ class AdaptiveTrackAgent(Agent):
     self.associator = associator
     self.predictor = predictor
     self.updater = updater
+    self.deleter = deleter
 
     # Adaptive tracking parameters
     self.confirm_rate = confirm_rate
@@ -61,8 +69,6 @@ class AdaptiveTrackAgent(Agent):
     self.pulsewidth = pulsewidth
     self.prf = prf
     self.n_pulses = n_pulses
-    # TODO: Don't hard-code this
-    # self.tx_power = 100e3
 
     # Compute intermediate revisit times
     tmin = 1 / max_revisit_rate
@@ -170,12 +176,12 @@ class AdaptiveTrackAgent(Agent):
         next_update_time = current_time + dt
         # Add the track to the update queue
         self.update_queue.append((next_update_time, track))
+
       elif track in self.confirmed_tracks:
         track.append(hypothesis.prediction)
 
-      # TODO: Handle the case where no measurement was associated with the track (for deletion/maintenance)
-
     # Try to initiate new tracks from detections that were not associated with any existing tracks
+    self.confirmed_tracks -= self.deleter.delete_tracks(self.confirmed_tracks)
     self.confirmed_tracks |= self.initiator.initiate(
         detections=detections - associated_detections,
         timestamp=current_time)
