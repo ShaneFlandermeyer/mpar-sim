@@ -7,7 +7,7 @@ import bisect
 import datetime
 
 
-class MaxGreedyScheduler():
+class BestFirstScheduler():
   """
   Scheduler that sorts the task list based on one of the task attributes (in decreasing order) then greedily schedules the tasks in that order.
   """
@@ -15,11 +15,13 @@ class MaxGreedyScheduler():
   def __init__(self,
                resource_manager: ResourceManager,
                sort_key: str = "priority",
+               reverse_sort: bool = False,
                max_queue_size: int = None,
                ) -> None:
     self.manager = resource_manager
     self.sort_key = sort_key
     self.max_queue_size = max_queue_size
+    self.reverse_sort = reverse_sort
     self.task_list = []
 
   def append(self, look_requests: List[Look]):
@@ -37,19 +39,17 @@ class MaxGreedyScheduler():
     # Add to the list of tasks
     self.task_list.extend(look_requests)
 
+    # Sort the task queue in ascending order by the desired attribute
+    self.task_list.sort(key=operator.attrgetter(
+        self.sort_key), reverse=self.reverse_sort)
+    
     # Limit the maximum size of the queue. If the operation above exceeds the queue
     if self.max_queue_size is not None and len(self.task_list) > self.max_queue_size:
-      # TODO: This should remove the oldest tasks
-      self.task_list = self.task_list[-self.max_queue_size:]
-
-    # Sort the task queue in ascending order by the desired attribute
-    self.task_list.sort(key=operator.attrgetter(self.sort_key), reverse=False)
+      self.task_list = self.task_list[:self.max_queue_size]
 
   def schedule(self, look_requests: List[Look], current_time: datetime.datetime) -> List[Look]:
     # Add look requests to the scheduler queue
     self.append(look_requests)
-    
-    # TODO: Check for stale tasks that have been delayed for too long to be useful
 
     # Allocate resources greedily until there are no more resources available
     for task in self.task_list.copy():

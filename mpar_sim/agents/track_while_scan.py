@@ -72,12 +72,12 @@ class TWSAgent:
     for track in self.confirmed_tracks:
       hypothesis = hypotheses[track]
       if hypothesis.measurement:
-        post = self.updater.update(hypothesis)
+        post = self.updater.update(hypothesis, timestamp=timestamp)
         track.append(post)
         associated_detections.add(hypothesis.measurement)
-      elif track in self.confirmed_tracks:
-        # When data associator says no detections are good enough, we'll keep the prediction
-        track.append(hypothesis.prediction)
+      # elif track in self.confirmed_tracks:
+      #   # When data associator says no detections are good enough, we'll keep the prediction
+      #   track.append(hypothesis.prediction)
         
     self.confirmed_tracks -= self.deleter.delete_tracks(self.confirmed_tracks)
     self.confirmed_tracks |= self.initiator.initiate(
