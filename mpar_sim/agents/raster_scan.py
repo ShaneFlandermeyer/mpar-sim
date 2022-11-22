@@ -90,12 +90,6 @@ class RasterScanAgent(Agent):
     """
     if self.time is None:
         self.time = current_time
-
-    # Only switch to a new dwell position when the previous dwell is complete
-    # TODO: This is not necessary in the multi-beam case
-    if current_time - self.time >= datetime.timedelta(seconds=self.dwell_time):
-        self.current_position = (self.current_position + 1) % self.n_positions
-        self.time = current_time
         
     beam_position = self.beam_positions[:, self.current_position]
     

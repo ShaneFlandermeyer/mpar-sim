@@ -28,7 +28,7 @@ class MofNInitiator(GaussianInitiator):
   """
   prior_state: GaussianState = Property(doc="Prior state information")
   deleter: Deleter = Property(doc="Deleter used to delete the track.")
-  data_associator: DataAssociator = Property(
+  associator: DataAssociator = Property(
       doc="Association algorithm to pair predictions to detections.")
   updater: Updater = Property(
       doc="Updater used to update the track object to the new state.")
@@ -60,7 +60,7 @@ class MofNInitiator(GaussianInitiator):
 
     if self.holding_tracks:
       # Try to associate new detections to tentative tracks
-      associations = self.data_associator.associate(
+      associations = self.associator.associate(
           self.holding_tracks, detections, timestamp)
 
       for track, hypothesis in associations.items():
