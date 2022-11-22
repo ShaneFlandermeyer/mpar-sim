@@ -176,6 +176,9 @@ class AdaptiveTrackAgent(Agent):
         next_update_time = current_time + dt
         # Add the track to the update queue
         self.update_queue.append((next_update_time, track))
+        
+      elif track in self.confirmed_tracks:
+        track.append(hypothesis.prediction)
 
     # Try to initiate new tracks from detections that were not associated with any existing tracks
     self.confirmed_tracks -= self.deleter.delete_tracks(self.confirmed_tracks)

@@ -6,6 +6,7 @@ from mpar_sim.beam.common import beamwidth2aperture
 import numpy as np
 import datetime
 from datetime import timedelta
+import warnings
 
 class ResourceManager():
   """
@@ -87,6 +88,10 @@ class PAPResourceManager():
 
     # Schedule the look if resource constraints are met
     look_pap = average_tx_power * required_aperture
+    
+    if look_pap > self.total_pap:
+      # Warn the user
+      warnings.warn("Look PAP exceeds maximum PAP of the radar. Look cannot be scheduled.")
 
     if look_pap <= self.available_pap and look.bandwidth <= self.max_bandwidth:
       look.power_aperture_product = look_pap
