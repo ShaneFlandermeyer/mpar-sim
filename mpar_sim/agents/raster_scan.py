@@ -92,6 +92,7 @@ class RasterScanAgent(Agent):
         self.time = current_time
         
     beam_position = self.beam_positions[:, self.current_position]
+    self.current_position = (self.current_position + 1) % self.n_positions
     
     # Create a new look
     look = VolumeSearchLook(
