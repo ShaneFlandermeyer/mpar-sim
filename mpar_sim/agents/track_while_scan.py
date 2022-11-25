@@ -47,7 +47,7 @@ class TWSAgent:
 
   def update_tracks(self,
                     detections: Set[Detection],
-                    timestamp: datetime.datetime) -> Set[Track]:
+                    current_time: datetime.datetime) -> Set[Track]:
     """
     Use all detections to update the list of tracks
 
@@ -66,21 +66,23 @@ class TWSAgent:
     # Calculate all hypothesis pairs and associate the elements in the best subset to the tracks.
     hypotheses = self.associator.associate(self.confirmed_tracks,
                                            detections,
-                                           timestamp=timestamp)
+                                           timestamp=current_time)
     associated_detections = set()
     # Update confirmed tracks with new measurements
     for track in self.confirmed_tracks:
       hypothesis = hypotheses[track]
       if hypothesis.measurement:
-        post = self.updater.update(hypothesis, timestamp=timestamp)
+        post = self.updater.update(hypothesis, timestamp=current_time)
         track.append(post)
         associated_detections.add(hypothesis.measurement)
       # elif track in self.confirmed_tracks:
       #   # When data associator says no detections are good enough, we'll keep the prediction
-      #   track.append(hypothesis.prediction)
+      #   if current_time > track.states[-1].timestamp:
+      #     track.append(hypothesis.prediction)
+
         
     self.confirmed_tracks -= self.deleter.delete_tracks(self.confirmed_tracks)
     self.confirmed_tracks |= self.initiator.initiate(
         detections=detections - associated_detections,
-        timestamp=timestamp)
+        timestamp=current_time)
     return self.confirmed_tracks

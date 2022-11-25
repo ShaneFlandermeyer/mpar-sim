@@ -26,23 +26,30 @@ class PhasedArrayRadar(Sensor):
   """An active electronically scanned array (AESA) radar sensor"""
 
   # Motion and orientation parameters
+  ndim_state: int = Property(
+      default=6,
+      doc="Number of state dimensions for the target.")
+  position_mapping: Tuple[int, int, int] = Property(
+      default=(0, 2, 4),
+      doc="Mapping between or positions and state "
+          "dimensions. [x,y,z]")
+  velocity_mapping: Tuple[int, int, int] = Property(
+      default=(1, 3, 5),
+      doc="Mapping between velocity components and state "
+      "dimensions. [vx,vy,vz]")
+  measurement_model: MeasurementModel = Property(
+      default=RadarElevationBearingRangeRate(
+          ndim_state=6,
+          position_mapping=(0, 2, 4),
+          velocity_mapping=(1, 4, 5),
+          noise_covar=np.array([0, 0, 0, 0])),
+      doc="The measurement model used to generate "
+      "measurements. By default, this object measures range, range rate, azimuth, and elevation with no noise.")
   rotation_offset: StateVector = Property(
       default=StateVector([0, 0, 0]),
       doc="A 3x1 array of angles (rad), specifying the radar orientation in terms of the "
       "counter-clockwise rotation around the :math:`x,y,z` axis. i.e Roll, Pitch and Yaw. "
       "Default is ``StateVector([0, 0, 0])``")
-  position_mapping: Tuple[int, int, int] = Property(
-      default=(0, 1, 2),
-      doc="Mapping between or positions and state "
-          "dimensions. [x,y,z]")
-  measurement_model: MeasurementModel = Property(
-      default=RadarElevationBearingRangeRate(
-          position_mapping=(0, 2, 4),
-          velocity_mapping=(1, 4, 5),
-          noise_covar=np.array([0, 0, 0, 0])),
-      doc="The measurement model used to generate "
-      "measurements. By default, this object measures range, range rate, azimuth, and elevation with no noise."
-  )
   # Array parameters
   n_elements_x: int = Property(
       default=16,
@@ -172,9 +179,9 @@ class PhasedArrayRadar(Sensor):
         range_rate_res=self.velocity_resolution,
         max_unambiguous_range=self.max_unambiguous_range,
         max_unambiguous_range_rate=self.max_unambiguous_radial_speed,
-        ndim_state=6,
-        mapping=[0, 2, 4],
-        velocity_mapping=[1, 3, 5],
+        ndim_state=self.ndim_state,
+        mapping=self.position_mapping,
+        velocity_mapping=self.velocity_mapping,
         noise_covar=CovarianceMatrix(np.diag([0, 0, 0, 0])))
 
   def is_detectable(self, state: GroundTruthState) -> bool:

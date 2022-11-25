@@ -73,20 +73,18 @@ class MofNInitiator(GaussianInitiator):
         else:
           track.append(hypothesis.prediction)
           track._history[0] = 0
-          
-        # TODO: Check for M-of-N threshold
+
         if np.sum(track._history) >= self.confirmation_threshold[0]:
           sure_tracks.add(track)
           self.holding_tracks.remove(track)
-        
+
       self.holding_tracks -= self.deleter.delete_tracks(self.holding_tracks)
-      
+
     # Initialize new tracks to add to the tentative track list. Each of these tracks need an extra history parameter to handle M-of-N confirmation logic.
     new_tracks = self.initiator.initiate(
-      detections - associated_detections, timestamp)
+        detections - associated_detections, timestamp)
     for track in new_tracks:
       track._history = np.zeros(self.confirmation_threshold[1])
     self.holding_tracks |= new_tracks
-      
-    
+
     return sure_tracks
