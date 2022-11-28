@@ -1,8 +1,10 @@
 import datetime
+from typing import List
 import numpy as np
 from mpar_sim.looks.volume_search import VolumeSearchLook
 
 from mpar_sim.agents.agent import Agent
+
 
 class RasterScanAgent(Agent):
   """
@@ -43,6 +45,7 @@ class RasterScanAgent(Agent):
                pulsewidth: float = 10e-6,
                prf: float = 1500,
                n_pulses: int = 1,
+               priority: float = 1.0,
                ):
     self.azimuth_scan_limits = azimuth_scan_limits
     self.elevation_scan_limits = elevation_scan_limits
@@ -55,6 +58,7 @@ class RasterScanAgent(Agent):
     self.prf = prf
     self.n_pulses = n_pulses
     self.dwell_time = n_pulses / prf
+    self.priority = priority
 
     # Compute the beam search grid
     d_az = azimuth_beam_spacing*azimuth_beamwidth
@@ -69,12 +73,12 @@ class RasterScanAgent(Agent):
     self.beam_positions = np.stack((
         az_grid.flatten(), el_grid.flatten()), axis=0)
     self.n_positions = self.beam_positions.shape[1]
-    
+
     # Counters
     self.current_position = 0
     self.time = None
 
-  def act(self, current_time: datetime.datetime) -> VolumeSearchLook:
+  def act(self, current_time: datetime.datetime, n_looks: int) -> List[VolumeSearchLook]:
     """
     Select a new set of task parameters
 
@@ -89,22 +93,27 @@ class RasterScanAgent(Agent):
         A new look at the next beam position in the raster scan
     """
     if self.time is None:
-        self.time = current_time
-        
-    beam_position = self.beam_positions[:, self.current_position]
-    self.current_position = (self.current_position + 1) % self.n_positions
+      self.time = current_time
+      
     
-    # Create a new look
-    look = VolumeSearchLook(
-        start_time=current_time,
-        azimuth_steering_angle=beam_position[0],
-        elevation_steering_angle=beam_position[1],
-        azimuth_beamwidth=self.azimuth_beamwidth,
-        elevation_beamwidth=self.elevation_beamwidth,
-        bandwidth=self.bandwidth,
-        pulsewidth=self.pulsewidth,
-        prf=self.prf,
-        n_pulses=self.n_pulses,
-    )
+    looks = []
+    for _ in range(n_looks):
+        beam_position = self.beam_positions[:, self.current_position]
+        self.current_position = (self.current_position + 1) % self.n_positions
 
-    return look
+        # Create a new look
+        look = VolumeSearchLook(
+            start_time=current_time,
+            azimuth_steering_angle=beam_position[0],
+            elevation_steering_angle=beam_position[1],
+            azimuth_beamwidth=self.azimuth_beamwidth,
+            elevation_beamwidth=self.elevation_beamwidth,
+            bandwidth=self.bandwidth,
+            pulsewidth=self.pulsewidth,
+            prf=self.prf,
+            n_pulses=self.n_pulses,
+            priority=self.priority,
+        )
+        looks.append(look)
+
+    return looks
