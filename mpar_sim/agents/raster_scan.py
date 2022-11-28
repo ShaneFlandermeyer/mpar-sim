@@ -78,7 +78,7 @@ class RasterScanAgent(Agent):
     self.current_position = 0
     self.time = None
 
-  def act(self, current_time: datetime.datetime, n_looks: int) -> List[VolumeSearchLook]:
+  def act(self, current_time: datetime.datetime, n_looks: int = 1) -> List[VolumeSearchLook]:
     """
     Select a new set of task parameters
 
