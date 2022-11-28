@@ -1,6 +1,6 @@
 import datetime
 import numpy as np
-from mpar_sim.look import RadarLook
+from mpar_sim.looks.volume_search import VolumeSearchLook
 
 from mpar_sim.agents.agent import Agent
 
@@ -74,7 +74,7 @@ class RasterScanAgent(Agent):
     self.current_position = 0
     self.time = None
 
-  def act(self, current_time: datetime.datetime) -> RadarLook:
+  def act(self, current_time: datetime.datetime) -> VolumeSearchLook:
     """
     Select a new set of task parameters
 
@@ -85,20 +85,17 @@ class RasterScanAgent(Agent):
 
     Returns
     -------
-    RadarLook
+    Look
         A new look at the next beam position in the raster scan
     """
     if self.time is None:
         self.time = current_time
-
-    # Only switch to a new dwell position when the previous dwell is complete
-    if current_time - self.time >= datetime.timedelta(seconds=self.dwell_time):
-        self.current_position = (self.current_position + 1) % self.n_positions
         
     beam_position = self.beam_positions[:, self.current_position]
+    self.current_position = (self.current_position + 1) % self.n_positions
     
     # Create a new look
-    look = RadarLook(
+    look = VolumeSearchLook(
         start_time=current_time,
         azimuth_steering_angle=beam_position[0],
         elevation_steering_angle=beam_position[1],

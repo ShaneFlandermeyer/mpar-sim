@@ -50,10 +50,10 @@ Target and platform maneuvering behavior is handled by the [Stone Soup](https://
 
 ## Resource Management
 
-At each time step of the simulation, one or more radar beams can be transmitted. Relevant parameters are stored in the ```RadarLook``` object, an example of which is shown below.
+At each time step of the simulation, one or more radar beams can be transmitted. Relevant parameters are stored in the ```Look``` object, an example of which is shown below.
 
 ```python
-look = RadarLook(
+look = Look(
         start_time=0.1,
         azimuth_steering_angle=10,
         elevation_steering_angle=0,

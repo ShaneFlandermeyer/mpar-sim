@@ -1,7 +1,7 @@
-from mpar_sim.radar_env import RadarEnvironment
-from mpar_sim.radar_detection_generator import RadarDetectionGenerator
+from mpar_sim.old.radar_env import RadarEnvironment
+from mpar_sim.old.radar_detection_generator import RadarDetectionGenerator
 import numpy as np
-from mpar_sim.platforms import Platform
+from mpar_sim.old.platforms import Platform
 import time
 from mpar_sim.beam.beam import Beam, RectangularBeam, GaussianBeam
 from mpar_sim.common.coordinate_transform import sph2cart
