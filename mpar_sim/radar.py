@@ -3,23 +3,28 @@ from typing import Callable, List, Set, Tuple, Union
 
 import numpy as np
 from scipy import constants
+from scipy.stats import poisson, uniform
 from stonesoup.base import Property
 from stonesoup.models.measurement import MeasurementModel
+from stonesoup.models.measurement.nonlinear import RangeRangeRateBinning
 from stonesoup.sensor.radar.radar import RadarElevationBearingRangeRate
 from stonesoup.sensor.sensor import Sensor
 from stonesoup.types.array import CovarianceMatrix, StateVector
 from stonesoup.types.detection import TrueDetection
 from stonesoup.types.groundtruth import GroundTruthState
 from stonesoup.types.state import StateVector
+from stonesoup.types.detection import Clutter
 
 from mpar_sim.beam.beam import RectangularBeam
 from mpar_sim.beam.common import beam_broadening_factor
 from mpar_sim.common.albersheim import albersheim_pd
-from mpar_sim.common.coordinate_transform import (cart2sph, rotx, roty, rotz)
+from mpar_sim.common.coordinate_transform import (
+    cart2sph, rotx, roty, rotz, sph2cart)
 from mpar_sim.looks.look import Look
 from mpar_sim.models.measurement.estimation import (angle_crlb, range_crlb,
                                                     velocity_crlb)
 from mpar_sim.models.measurement.nonlinear import RangeRangeRateBinningAliasing
+from stonesoup.models.clutter import ClutterModel
 
 
 class PhasedArrayRadar(Sensor):
@@ -81,6 +86,9 @@ class PhasedArrayRadar(Sensor):
   false_alarm_rate: float = Property(
       default=1e-6,
       doc="Probability of false alarm")
+  include_false_alarms: bool = Property(
+      default=True,
+      doc="Whether to include false alarms in the detections")
   max_range: float = Property(
       default=np.inf,
       doc="Maximum detection range of the radar (m). If a target is beyond this range, it will never be detected.")
@@ -182,7 +190,7 @@ class PhasedArrayRadar(Sensor):
         ndim_state=self.ndim_state,
         mapping=self.position_mapping,
         velocity_mapping=self.velocity_mapping,
-        noise_covar=CovarianceMatrix(np.diag([0, 0, 0, 0])))
+        noise_covar=CovarianceMatrix(np.diag([0.1, 0.1, 0.1, 0.1])))
 
   def is_detectable(self, state: GroundTruthState) -> bool:
     """
@@ -204,7 +212,10 @@ class PhasedArrayRadar(Sensor):
     true_range = measurement_vector[2, 0]
     return (self.az_fov[0] <= az_t <= self.az_fov[1]) and (self.el_fov[0] <= el_t <= self.el_fov[1]) and (true_range <= self.max_range)
 
-  def measure(self, ground_truths: Set[GroundTruthState], noise: Union[np.ndarray, bool] = True, **kwargs) -> set[TrueDetection]:
+  def measure(self,
+              ground_truths: Set[GroundTruthState],
+              noise: Union[np.ndarray, bool] = True,
+              **kwargs) -> set[TrueDetection, Clutter]:
     """
     Generates stochastic detections from a set of target ground truths
     Parameters
@@ -279,7 +290,10 @@ class PhasedArrayRadar(Sensor):
             resolution=self.beam.elevation_beamwidth,
             bias_fraction=0.01)
         measurement_model.noise_covar = np.diag(
-            [elevation_variance, azimuth_variance, range_variance, velocity_variance])
+            [elevation_variance,
+             azimuth_variance,
+             range_variance,
+             velocity_variance])
 
         measurements = measurement_model.function(truth, noise=noise)
         detection = TrueDetection(measurements,
@@ -287,6 +301,38 @@ class PhasedArrayRadar(Sensor):
                                   measurement_model=measurement_model,
                                   groundtruth_path=truth)
         detections.add(detection)
-      # TODO: Add in some false alarms.
+
+    if self.include_false_alarms:
+      # Generate uniformly distributed false alarms in the radar beam
+      # Compute the number of false alarms
+      n_range_bins = int(self.max_unambiguous_range / self.range_resolution)
+      n_vel_bins = int(2*self.max_unambiguous_radial_speed /
+                       self.velocity_resolution)
+      n_expected_false_alarms = self.false_alarm_rate * n_range_bins * n_vel_bins
+      n_false_alarms = int(np.random.poisson(n_expected_false_alarms))
+
+      # Generate random false alarm positions
+      # TODO: Bin these quantities
+      el = np.random.uniform(low=-self.beam.elevation_beamwidth/2,
+                             high=self.beam.elevation_beamwidth/2,
+                             size=n_false_alarms) + self.beam.elevation_steering_angle
+      az = np.random.uniform(low=-self.beam.azimuth_beamwidth/2,
+                             high=self.beam.azimuth_beamwidth/2,
+                             size=n_false_alarms) + self.beam.azimuth_steering_angle
+      r = np.random.uniform(low=0,
+                            high=self.max_unambiguous_range,
+                            size=n_false_alarms)
+      v = np.random.uniform(low=-self.max_unambiguous_radial_speed,
+                            high=self.max_unambiguous_radial_speed,
+                            size=n_false_alarms)
+      
+      # Add false alarms to the detection report
+      for i in range(n_false_alarms):
+        detections.add(Clutter(np.array([[np.deg2rad(el[i])],
+                                         [np.deg2rad(az[i])],
+                                         [r[i]],
+                                         [v[i]]]),
+                               timestamp=truth.timestamp,
+                               measurement_model=measurement_model))
 
     return detections
