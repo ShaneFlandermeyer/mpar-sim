@@ -243,12 +243,14 @@ class PhasedArrayRadar(Sensor):
 
       snr_db = 10*np.log10(self.loop_gain) + 10*np.log10(truth.rcs) - \
           40*np.log10(r) - beam_shape_loss_db
+      snr_lin = 10**(snr_db/10)
 
       # Probability of detection
       if snr_db > 0:
         N = self.n_pulses
         pfa = self.false_alarm_rate
-        pd = albersheim_pd(snr_db, pfa, N)
+        # pd = albersheim_pd(snr_db, pfa, N)
+        pd = pfa**(1/(1+snr_lin))
       else:
         pd = 0  # Assume targets are not detected with negative SNR
 
@@ -256,7 +258,6 @@ class PhasedArrayRadar(Sensor):
       if np.random.rand() <= pd:
 
         # # Use the SNR to compute the measurement accuracies in each dimension. These accuracies are set to the CRLB of each quantity (i.e., we assume we have efficient estimators)
-        snr_lin = 10**(snr_db/10)
         single_pulse_snr = snr_lin / self.n_pulses
         # The CRLB uses the RMS bandwidth. Assuming an LFM waveform with a rectangular spectrum, B_rms = B / sqrt(12)
         rms_bandwidth = self.bandwidth / np.sqrt(12)
