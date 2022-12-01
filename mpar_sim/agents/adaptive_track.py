@@ -1,6 +1,7 @@
 import datetime
 from collections import deque
 from datetime import timedelta
+from functools import lru_cache
 from typing import List, Set, Tuple
 
 import numpy as np
@@ -189,6 +190,7 @@ class AdaptiveTrackAgent(Agent):
 
     return self.confirmed_tracks
 
+  @lru_cache
   def compute_revisit_interval(self,
                                track: Update,
                                current_time: datetime.datetime,

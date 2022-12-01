@@ -1,4 +1,5 @@
 import copy
+from functools import lru_cache
 from typing import Callable, List, Set, Tuple, Union
 
 import numpy as np
@@ -25,6 +26,8 @@ from mpar_sim.models.measurement.estimation import (angle_crlb, range_crlb,
                                                     velocity_crlb)
 from mpar_sim.models.measurement.nonlinear import RangeRangeRateBinningAliasing
 from stonesoup.models.clutter import ClutterModel
+
+
 
 
 class PhasedArrayRadar(Sensor):
@@ -126,6 +129,7 @@ class PhasedArrayRadar(Sensor):
 
     return rotz(theta_z) @ roty(theta_y) @ rotx(theta_x)
 
+  @lru_cache
   def load_look(self, look: Look):
     """
     Allocate resources for the given radar job
@@ -192,6 +196,7 @@ class PhasedArrayRadar(Sensor):
         velocity_mapping=self.velocity_mapping,
         noise_covar=CovarianceMatrix(np.diag([0.1, 0.1, 0.1, 0.1])))
 
+  @lru_cache
   def is_detectable(self, state: GroundTruthState) -> bool:
     """
     Returns true if the target is within the radar's field of view (in range, azimuth, and elevation) and false otherwise
