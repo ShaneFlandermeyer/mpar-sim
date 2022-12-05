@@ -1,4 +1,5 @@
 import datetime
+from functools import lru_cache
 from typing import List, Set
 
 from stonesoup.dataassociator.base import Associator
@@ -75,10 +76,10 @@ class TWSAgent:
         post = self.updater.update(hypothesis, timestamp=current_time)
         track.append(post)
         associated_detections.add(hypothesis.measurement)
-      # elif track in self.confirmed_tracks:
-      #   # When data associator says no detections are good enough, we'll keep the prediction
-      #   if current_time > track.states[-1].timestamp:
-      #     track.append(hypothesis.prediction)
+      elif track in self.confirmed_tracks:
+        # When data associator says no detections are good enough, we'll keep the prediction
+        if current_time > track.states[-1].timestamp:
+          track.append(hypothesis.prediction)
 
         
     self.confirmed_tracks -= self.deleter.delete_tracks(self.confirmed_tracks)
