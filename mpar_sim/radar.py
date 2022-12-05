@@ -26,6 +26,7 @@ from mpar_sim.models.measurement.estimation import (angle_crlb, range_crlb,
                                                     velocity_crlb)
 from mpar_sim.models.measurement.nonlinear import RangeRangeRateBinningAliasing
 from stonesoup.models.clutter import ClutterModel
+from stonesoup.types.angle import Elevation, Bearing
 
 
 
@@ -333,8 +334,8 @@ class PhasedArrayRadar(Sensor):
       
       # Add false alarms to the detection report
       for i in range(n_false_alarms):
-        detections.add(Clutter(np.array([[np.deg2rad(el[i])],
-                                         [np.deg2rad(az[i])],
+        detections.add(Clutter(np.array([[Elevation(np.deg2rad(el[i]))],
+                                         [Bearing(np.deg2rad(az[i]))],
                                          [r[i]],
                                          [v[i]]]),
                                timestamp=truth.timestamp,
