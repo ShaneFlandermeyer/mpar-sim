@@ -212,9 +212,9 @@ class PhasedArrayRadar(Sensor):
     """
     measurement_vector = self.measurement_model.function(state, noise=False)
     # Check if state falls within sensor's FOV
-    az_t = measurement_vector[0, 0].degrees - self.beam.azimuth_steering_angle
+    az_t = measurement_vector[0, 0].degrees - self.rotation_offset[2]
     el_t = measurement_vector[1, 0].degrees - \
-        self.beam.elevation_steering_angle
+        self.rotation_offset[2]
     true_range = measurement_vector[2, 0]
     return (self.az_fov[0] <= az_t <= self.az_fov[1]) and (self.el_fov[0] <= el_t <= self.el_fov[1]) and (true_range <= self.max_range)
 
