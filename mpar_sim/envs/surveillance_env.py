@@ -52,7 +52,7 @@ class ParticleSurveillance(gym.Env):
     self.observation_shape = (256, 256, 1)
     self.observation_space = spaces.Box(
         low=np.zeros(self.observation_shape, dtype=np.uint8),
-        high=np.ones(self.observation_shape, dtype=np.uint8),
+        high=255*np.ones(self.observation_shape, dtype=np.uint8),
         dtype=np.uint8)
 
     # Currently, actions are limited to beam steering angles in azimuth and elevation
@@ -216,7 +216,7 @@ class ParticleSurveillance(gym.Env):
     el_indices = np.digitize(
         self.swarm_optim.swarm.position[:, 1], self.el_axis) - 1
     obs = np.zeros(self.observation_shape, dtype=np.uint8)
-    obs[az_indices, el_indices] = 1
+    obs[az_indices, el_indices] = 255
     return obs
 
   def _get_info(self):
@@ -233,8 +233,7 @@ class ParticleSurveillance(gym.Env):
       self.clock = pygame.time.Clock()
 
     # Draw canvas from pixels
-    pixels = ~self._get_obs().astype(bool)
-    pixels = pixels.astype(np.uint8)*255
+    pixels = ~self._get_obs()
     canvas = pygame.surfarray.make_surface(pixels.squeeze())
 
     if self.render_mode == "human":
@@ -313,7 +312,24 @@ class ParticleSurveillance(gym.Env):
   ############################################################################
   # Particle swarm methods
   ############################################################################
-  def _distance_objective(self, swarm_pos, detection_pos):
+  def _distance_objective(self, 
+                          swarm_pos: np.ndarray, 
+                          detection_pos: np.ndarray) -> np.ndarray:
+    """
+    Compute the distance between each particle and the detection
+
+    Parameters
+    ----------
+    swarm_pos : np.ndarray
+        N x D array of positions for each of the N particles in a D-dimensional search space
+    detection_pos : np.ndarray
+        1 x D array of the D-dimensional position of the detection
+
+    Returns
+    -------
+    np.ndarray
+        The distance of each particle from the detection
+    """
     return np.linalg.norm(swarm_pos - detection_pos, axis=1)
 
   def _swarm_optim_default(self):
@@ -322,7 +338,7 @@ class ParticleSurveillance(gym.Env):
                                     dimensions=2,
                                     options=options,
                                     bounds=([-45, -45], [45, 45]),
-                                    pbest_reset_interval=300,
+                                    pbest_reset_interval=250,
                                     )
 
 
@@ -369,9 +385,9 @@ if __name__ == '__main__':
       radar=radar,
       transition_model=transition_model,
       initial_state=initial_state,
-      birth_rate=0,
-      death_probability=0,
-      initial_number_targets=10,
+      birth_rate=0.1,
+      death_probability=0.01,
+      initial_number_targets=20,
       render_mode='human',
   )
 
@@ -382,10 +398,10 @@ if __name__ == '__main__':
   search_agent = RasterScanAgent(
       azimuth_scan_limits=np.array([-45, 45]),
       elevation_scan_limits=np.array([-45, 45]),
-      azimuth_beam_spacing=1,
-      elevation_beam_spacing=1,
-      azimuth_beamwidth=10,
-      elevation_beamwidth=10,
+      azimuth_beam_spacing=0.8,
+      elevation_beam_spacing=0.8,
+      azimuth_beamwidth=5,
+      elevation_beamwidth=5,
       bandwidth=100e6,
       pulsewidth=10e-6,
       prf=5e3,
@@ -404,26 +420,27 @@ if __name__ == '__main__':
   # PLOTS
 
   # # Plot the particle swarm history
-  # from pyswarms.utils.functions import single_obj as fx
-  # from pyswarms.utils.plotters import (
-  #     plot_cost_history, plot_contour, plot_surface)
-  # from pyswarms.utils.plotters.formatters import Mesher
-  # from pyswarms.utils.plotters.formatters import Designer
-  # d = Designer(limits=[(-45, 45), (-45, 45)],
-  #              label=['azimuth (deg.)', 'elevation (deg.)'])
+  from pyswarms.utils.functions import single_obj as fx
+  from pyswarms.utils.plotters import (
+      plot_cost_history, plot_contour, plot_surface)
+  from pyswarms.utils.plotters.formatters import Mesher
+  from pyswarms.utils.plotters.formatters import Designer
+  d = Designer(limits=[(-45, 45), (-45, 45)],
+               label=['azimuth (deg.)', 'elevation (deg.)'])
 
-  # animation = plot_contour(pos_history=env.swarm_optim.pos_history,
-  #                          designer=d,)
+  animation = plot_contour(pos_history=env.swarm_optim.pos_history,
+                           designer=d,
+                           title='Search space')
   # # animation.save('particles.gif', writer='ffmpeg', fps=10)
-  # # Plot the scenario
-  # from stonesoup.plotter import Plotter, Dimension
+  # Plot the scenario
+  from stonesoup.plotter import Plotter, Dimension
 
-  # plotter = Plotter(Dimension.THREE)
-  # plotter.plot_sensors(radar, "Radar")
-  # plotter.plot_ground_truths(env.target_history, radar.position_mapping)
-  # plotter.plot_measurements(env.detection_history, radar.position_mapping)
+  plotter = Plotter(Dimension.THREE)
+  plotter.plot_sensors(radar, "Radar")
+  plotter.plot_ground_truths(env.target_history, radar.position_mapping)
+  plotter.plot_measurements(env.detection_history, radar.position_mapping)
 
   # plt.figure()
   # plt.imshow(obs, cmap='gray')
 
-  # plt.show()
+  plt.show()
