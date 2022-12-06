@@ -164,11 +164,11 @@ class ParticleSurveillance(gym.Env):
         azimuth_beamwidth=10,
         elevation_beamwidth=10,
         # Waveform parameters
-        bandwidth=50e6,
+        bandwidth=100e6,
         pulsewidth=10e-6,
         prf=5000,
         n_pulses=100,
-        tx_power=100e5,
+        tx_power=10e3,
         # Scheduler parameters
         start_time=self.time,
         priority=0,
@@ -202,7 +202,15 @@ class ParticleSurveillance(gym.Env):
   ############################################################################
   # Internal gym-specific methods
   ############################################################################
-  def _get_obs(self):
+  def _get_obs(self) -> np.ndarray:
+    """
+    Convert swarm positions to an observation image
+
+    Returns
+    -------
+    np.ndarray
+        Output image where each pixel is 1 if a particle is in that pixel and 0 otherwise.
+    """
     az_indices = np.digitize(
         self.swarm_optim.swarm.position[:, 0], self.az_axis) - 1
     el_indices = np.digitize(
@@ -215,31 +223,31 @@ class ParticleSurveillance(gym.Env):
     return {}
 
   def _render_frame(self):
-      if self.window is None and self.render_mode == "human":
-        pygame.init()
-        pygame.display.init()
-        self.window = pygame.display.set_mode(
-            self.observation_shape[:2])
+    if self.window is None and self.render_mode == "human":
+      pygame.init()
+      pygame.display.init()
+      self.window = pygame.display.set_mode(
+          self.observation_shape[:2])
 
-      if self.clock is None and self.render_mode == "human":
-        self.clock = pygame.time.Clock()
+    if self.clock is None and self.render_mode == "human":
+      self.clock = pygame.time.Clock()
 
-      # Draw canvas from pixels
-      pixels = ~self._get_obs().astype(bool)
-      pixels = pixels.astype(np.uint8)*255
-      canvas = pygame.surfarray.make_surface(pixels.squeeze())
+    # Draw canvas from pixels
+    pixels = ~self._get_obs().astype(bool)
+    pixels = pixels.astype(np.uint8)*255
+    canvas = pygame.surfarray.make_surface(pixels.squeeze())
 
-      if self.render_mode == "human":
-        # Copy canvas drawings to the window
-        self.window.blit(canvas, canvas.get_rect())
-        pygame.event.pump()
-        pygame.display.update()
+    if self.render_mode == "human":
+      # Copy canvas drawings to the window
+      self.window.blit(canvas, canvas.get_rect())
+      pygame.event.pump()
+      pygame.display.update()
 
-        # Ensure that human rendering occurs at the pre-defined framerate
-        self.clock.tick(self.metadata["render_fps"])
-      else:
-        return pixels
-  
+      # Ensure that human rendering occurs at the pre-defined framerate
+      self.clock.tick(self.metadata["render_fps"])
+    else:
+      return pixels
+
   ############################################################################
   # Scenario simulation methods
   ############################################################################
@@ -301,7 +309,7 @@ class ParticleSurveillance(gym.Env):
       path.append(GroundTruthState(
           updated_state, timestamp=self.time,
           metadata={"index": index}))
-      
+
   ############################################################################
   # Particle swarm methods
   ############################################################################
@@ -309,11 +317,12 @@ class ParticleSurveillance(gym.Env):
     return np.linalg.norm(swarm_pos - detection_pos, axis=1)
 
   def _swarm_optim_default(self):
-    options = {'c1': 0, 'c2': 0.5, 'w': 0.8}
+    options = {'c1': 0.1, 'c2': 0.5, 'w': 0.8}
     return IncrementalGlobalBestPSO(n_particles=1000,
                                     dimensions=2,
                                     options=options,
                                     bounds=([-45, -45], [45, 45]),
+                                    pbest_reset_interval=300,
                                     )
 
 
@@ -341,7 +350,7 @@ if __name__ == '__main__':
       n_elements_x=32,
       n_elements_y=32,
       element_spacing=0.5,  # Wavelengths
-      element_tx_power=100e3,
+      element_tx_power=10,
       # System parameters
       center_frequency=3e9,
       system_temperature=290,
@@ -364,8 +373,8 @@ if __name__ == '__main__':
       death_probability=0,
       initial_number_targets=10,
       render_mode='human',
-      )
-  
+  )
+
   # Agent
   from mpar_sim.agents.raster_scan import RasterScanAgent
   import numpy as np
@@ -382,7 +391,7 @@ if __name__ == '__main__':
       prf=5e3,
       n_pulses=100,
   )
-  
+
   env.reset()
 
   for i in range(1000):

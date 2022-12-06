@@ -124,6 +124,7 @@ class IncrementalGlobalBestPSO(SwarmOptimizer):
       vh_strategy="unmodified",
       center=1.0,
       init_pos=None,
+      pbest_reset_interval=None,
   ) -> None:
     super(IncrementalGlobalBestPSO, self).__init__(
         n_particles=n_particles,
@@ -150,7 +151,9 @@ class IncrementalGlobalBestPSO(SwarmOptimizer):
     self.name = __name__
 
     # Reset memory-based items
+    self.pbest_reset_interval = pbest_reset_interval
     self.swarm.pbest_cost = np.full(self.swarm_size[0], np.inf)
+    self.iter_count = 0
     # Populate memory of the handlers
     self.bh.memory = self.swarm.position
     self.vh.memory = self.swarm.velocity
@@ -166,6 +169,8 @@ class IncrementalGlobalBestPSO(SwarmOptimizer):
                                                          **kwargs)
 
     # Compute personal best position/cost
+    if self.pbest_reset_interval is not None and self.iter_count % self.pbest_reset_interval == 0:
+      self.swarm.pbest_cost = np.full(self.swarm_size[0], np.inf)
     self.swarm.pbest_pos, self.swarm.pbest_cost = compute_pbest(self.swarm)
 
     # Compute global best position/cost
@@ -183,10 +188,9 @@ class IncrementalGlobalBestPSO(SwarmOptimizer):
     self._populate_history(hist)
 
     # Perform options update
-    # TODO: Add a global iterator to this.
     if iters is not None:
       self.swarm.options = self.oh(
-          self.options, iternow=i, itermax=iters
+          self.options, iternow=self.iter_count, itermax=iters
       )
 
     # Perform velocity and position updates
@@ -200,6 +204,7 @@ class IncrementalGlobalBestPSO(SwarmOptimizer):
     if pool:
       pool.close()
 
+    self.iter_count += 1
     return (self.swarm.best_cost, self.swarm.best_pos)
 
 
