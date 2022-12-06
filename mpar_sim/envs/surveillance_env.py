@@ -21,10 +21,11 @@ from mpar_sim.radar import PhasedArrayRadar
 from mpar_sim.looks.look import Look
 from pyswarms.base.base_single import SwarmOptimizer
 import matplotlib.pyplot as plt
+import pygame
 
 
-class RadarSurveillance(gym.Env):
-  metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 4}
+class ParticleSurveillance(gym.Env):
+  metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 60}
 
   def __init__(self,
                radar: PhasedArrayRadar,
@@ -48,7 +49,7 @@ class RadarSurveillance(gym.Env):
     self.seed = seed
 
     # TODO: Let the user specify the image size
-    self.observation_shape = (128, 128, 1)
+    self.observation_shape = (256, 256, 1)
     self.observation_space = spaces.Box(
         low=np.zeros(self.observation_shape, dtype=np.uint8),
         high=np.ones(self.observation_shape, dtype=np.uint8),
@@ -72,6 +73,10 @@ class RadarSurveillance(gym.Env):
                                self.swarm_optim.bounds[1][1],
                                self.observation_shape[1])
 
+    # Render objects
+    self.window = None
+    self.clock = None
+
   def step(self, action):
 
     # Point the radar in the right direction
@@ -87,7 +92,7 @@ class RadarSurveillance(gym.Env):
       path.states[-1].rcs = 10
 
     detections = self.radar.measure(self.target_paths, noise=True)
-    
+
     # TODO: Periodically reset the personal best of each particle
 
     # Update the particle swarm output
@@ -96,12 +101,14 @@ class RadarSurveillance(gym.Env):
       el = det.state_vector[0].degrees
       self.swarm_optim.optimize(
           self._distance_objective, detection_pos=np.array([az, el]))
-      
+
     # Mutate particles based on Engelbrecht equations (16.66-16.67)
     sigma = 0.1*(self.swarm_optim.bounds[1][0] - self.swarm_optim.bounds[0][0])
     Pm = 0.05
-    mutate = self.np_random.uniform(0, 1, size=self.swarm_optim.swarm.position.shape) < Pm
-    self.swarm_optim.swarm.position[mutate] += self.np_random.normal(0, sigma, size=self.swarm_optim.swarm.position[mutate].shape)
+    mutate = self.np_random.uniform(
+        0, 1, size=self.swarm_optim.swarm.position.shape) < Pm
+    self.swarm_optim.swarm.position[mutate] += self.np_random.normal(
+        0, sigma, size=self.swarm_optim.swarm.position[mutate].shape)
 
     # If multiple subarrays are scheduled to execute at once, the timestep will be zero. In this case, don't update the environment just yet.
     # For the single-beam case, this will always execute
@@ -132,6 +139,10 @@ class RadarSurveillance(gym.Env):
     reward = len(detections)
     terminated = False
     truncated = False
+
+    if self.render_mode == "human":
+      self._render_frame()
+
     return observation, reward, terminated, truncated, info
 
   def reset(self, seed=None, options=None):
@@ -170,44 +181,68 @@ class RadarSurveillance(gym.Env):
     observation = self._get_obs()
     info = self._get_info()
 
-    if self.render_mode == "human":
-      self._render_frame()
-
     # Reset metrics/helpful debug info
     self.target_history = []
     self.detection_history = []
 
+    if self.render_mode == "human":
+      self._render_frame()
+
     return observation, info
 
+  def render(self):
+    if self.render_mode == "rgb_array":
+      return self._render_frame()
+
+  def close(self):
+    if self.window is not None:
+      pygame.display.quit()
+      pygame.quit()
+
   ############################################################################
-  # Internal methods
+  # Internal gym-specific methods
   ############################################################################
   def _get_obs(self):
     az_indices = np.digitize(
         self.swarm_optim.swarm.position[:, 0], self.az_axis) - 1
     el_indices = np.digitize(
         self.swarm_optim.swarm.position[:, 1], self.el_axis) - 1
-    obs = np.zeros(self.observation_shape, dtype=np.float32)
+    obs = np.zeros(self.observation_shape, dtype=np.uint8)
     obs[az_indices, el_indices] = 1
     return obs
 
   def _get_info(self):
     return {}
 
-  def _render_frame():
-    raise NotImplementedError
+  def _render_frame(self):
+      if self.window is None and self.render_mode == "human":
+        pygame.init()
+        pygame.display.init()
+        self.window = pygame.display.set_mode(
+            self.observation_shape[:2])
 
-  def _distance_objective(self, swarm_pos, detection_pos):
-    return np.linalg.norm(swarm_pos - detection_pos, axis=1)
+      if self.clock is None and self.render_mode == "human":
+        self.clock = pygame.time.Clock()
 
-  def _swarm_optim_default(self):
-    options = {'c1': 0, 'c2': 0.5, 'w': 0.8}
-    return IncrementalGlobalBestPSO(n_particles=500,
-                                    dimensions=2,
-                                    options=options,
-                                    bounds=([-45, -45], [45, 45]),
-                                    )
+      # Draw canvas from pixels
+      pixels = ~self._get_obs().astype(bool)
+      pixels = pixels.astype(np.uint8)*255
+      canvas = pygame.surfarray.make_surface(pixels.squeeze())
 
+      if self.render_mode == "human":
+        # Copy canvas drawings to the window
+        self.window.blit(canvas, canvas.get_rect())
+        pygame.event.pump()
+        pygame.display.update()
+
+        # Ensure that human rendering occurs at the pre-defined framerate
+        self.clock.tick(self.metadata["render_fps"])
+      else:
+        return pixels
+  
+  ############################################################################
+  # Scenario simulation methods
+  ############################################################################
   def _initialize_targets(self):
     """
     Create new targets based on the initial state and preexisting states specified in the environment's input arguments
@@ -266,6 +301,20 @@ class RadarSurveillance(gym.Env):
       path.append(GroundTruthState(
           updated_state, timestamp=self.time,
           metadata={"index": index}))
+      
+  ############################################################################
+  # Particle swarm methods
+  ############################################################################
+  def _distance_objective(self, swarm_pos, detection_pos):
+    return np.linalg.norm(swarm_pos - detection_pos, axis=1)
+
+  def _swarm_optim_default(self):
+    options = {'c1': 0, 'c2': 0.5, 'w': 0.8}
+    return IncrementalGlobalBestPSO(n_particles=1000,
+                                    dimensions=2,
+                                    options=options,
+                                    bounds=([-45, -45], [45, 45]),
+                                    )
 
 
 if __name__ == '__main__':
@@ -307,15 +356,16 @@ if __name__ == '__main__':
   )
 
   # Environment
-  env = RadarSurveillance(
+  env = ParticleSurveillance(
       radar=radar,
       transition_model=transition_model,
       initial_state=initial_state,
       birth_rate=0,
       death_probability=0,
-      initial_number_targets=10)
-  env.reset()
-
+      initial_number_targets=10,
+      render_mode='human',
+      )
+  
   # Agent
   from mpar_sim.agents.raster_scan import RasterScanAgent
   import numpy as np
@@ -332,6 +382,8 @@ if __name__ == '__main__':
       prf=5e3,
       n_pulses=100,
   )
+  
+  env.reset()
 
   for i in range(1000):
     look = search_agent.act(env.time)[0]
@@ -342,23 +394,27 @@ if __name__ == '__main__':
 
   # PLOTS
 
-  # Plot the particle swarm history
-  from pyswarms.utils.functions import single_obj as fx
-  from pyswarms.utils.plotters import (
-      plot_cost_history, plot_contour, plot_surface)
-  from pyswarms.utils.plotters.formatters import Mesher
-  from pyswarms.utils.plotters.formatters import Designer
-  d = Designer(limits=[(-45, 45), (-45, 45)],
-               label=['azimuth (deg.)', 'elevation (deg.)'])
+  # # Plot the particle swarm history
+  # from pyswarms.utils.functions import single_obj as fx
+  # from pyswarms.utils.plotters import (
+  #     plot_cost_history, plot_contour, plot_surface)
+  # from pyswarms.utils.plotters.formatters import Mesher
+  # from pyswarms.utils.plotters.formatters import Designer
+  # d = Designer(limits=[(-45, 45), (-45, 45)],
+  #              label=['azimuth (deg.)', 'elevation (deg.)'])
 
-  animation = plot_contour(pos_history=env.swarm_optim.pos_history,
-                           designer=d,)
-  # Plot the scenario
-  from stonesoup.plotter import Plotter, Dimension
+  # animation = plot_contour(pos_history=env.swarm_optim.pos_history,
+  #                          designer=d,)
+  # # animation.save('particles.gif', writer='ffmpeg', fps=10)
+  # # Plot the scenario
+  # from stonesoup.plotter import Plotter, Dimension
+
+  # plotter = Plotter(Dimension.THREE)
+  # plotter.plot_sensors(radar, "Radar")
+  # plotter.plot_ground_truths(env.target_history, radar.position_mapping)
+  # plotter.plot_measurements(env.detection_history, radar.position_mapping)
 
   # plt.figure()
-  plotter = Plotter(Dimension.THREE)
-  plotter.plot_sensors(radar, "Radar")
-  plotter.plot_ground_truths(env.target_history, radar.position_mapping)
-  plotter.plot_measurements(env.detection_history, radar.position_mapping)
-  plt.show()
+  # plt.imshow(obs, cmap='gray')
+
+  # plt.show()
