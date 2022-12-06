@@ -11,7 +11,7 @@ from stonesoup.models.measurement.nonlinear import RangeRangeRateBinning
 from stonesoup.sensor.radar.radar import RadarElevationBearingRangeRate
 from stonesoup.sensor.sensor import Sensor
 from stonesoup.types.array import CovarianceMatrix, StateVector
-from stonesoup.types.detection import TrueDetection
+from stonesoup.types.detection import TrueDetection, MissedDetection
 from stonesoup.types.groundtruth import GroundTruthState
 from stonesoup.types.state import StateVector
 from stonesoup.types.detection import Clutter
@@ -27,8 +27,6 @@ from mpar_sim.models.measurement.estimation import (angle_crlb, range_crlb,
 from mpar_sim.models.measurement.nonlinear import RangeRangeRateBinningAliasing
 from stonesoup.models.clutter import ClutterModel
 from stonesoup.types.angle import Elevation, Bearing
-
-
 
 
 class PhasedArrayRadar(Sensor):
@@ -130,7 +128,6 @@ class PhasedArrayRadar(Sensor):
 
     return rotz(theta_z) @ roty(theta_y) @ rotx(theta_x)
 
-  @lru_cache
   def load_look(self, look: Look):
     """
     Allocate resources for the given radar job
@@ -212,9 +209,8 @@ class PhasedArrayRadar(Sensor):
     """
     measurement_vector = self.measurement_model.function(state, noise=False)
     # Check if state falls within sensor's FOV
-    az_t = measurement_vector[0, 0].degrees - self.rotation_offset[2]
-    el_t = measurement_vector[1, 0].degrees - \
-        self.rotation_offset[2]
+    az_t = measurement_vector[1, 0].degrees - self.rotation_offset[2]
+    el_t = measurement_vector[0, 0].degrees - self.rotation_offset[1]
     true_range = measurement_vector[2, 0]
     return (self.az_fov[0] <= az_t <= self.az_fov[1]) and (self.el_fov[0] <= el_t <= self.el_fov[1]) and (true_range <= self.max_range)
 
@@ -308,6 +304,8 @@ class PhasedArrayRadar(Sensor):
                                   groundtruth_path=truth)
         detections.add(detection)
 
+    # TODO: Add an else statement with missed detections here
+
     if self.include_false_alarms:
       # Generate uniformly distributed false alarms in the radar beam
       # Compute the number of false alarms
@@ -318,7 +316,6 @@ class PhasedArrayRadar(Sensor):
       n_false_alarms = int(np.random.poisson(n_expected_false_alarms))
 
       # Generate random false alarm positions
-      # TODO: Bin these quantities
       el = np.random.uniform(low=-self.beam.elevation_beamwidth/2,
                              high=self.beam.elevation_beamwidth/2,
                              size=n_false_alarms) + self.beam.elevation_steering_angle
@@ -331,7 +328,13 @@ class PhasedArrayRadar(Sensor):
       v = np.random.uniform(low=-self.max_unambiguous_radial_speed,
                             high=self.max_unambiguous_radial_speed,
                             size=n_false_alarms)
-      
+
+      # Bin range and velocity
+      r = np.floor(r / self.range_resolution) * \
+          self.range_resolution + self.range_resolution/2
+      v = np.floor(v / self.velocity_resolution) * \
+          self.velocity_resolution + self.velocity_resolution/2
+
       # Add false alarms to the detection report
       for i in range(n_false_alarms):
         detections.add(Clutter(np.array([[Elevation(np.deg2rad(el[i]))],
