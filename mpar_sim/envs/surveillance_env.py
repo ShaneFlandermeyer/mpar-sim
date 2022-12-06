@@ -22,6 +22,7 @@ from mpar_sim.looks.look import Look
 from pyswarms.base.base_single import SwarmOptimizer
 import matplotlib.pyplot as plt
 import pygame
+from mpar_sim.defaults import default_radar, default_raster_scan_agent, default_gbest_pso
 
 
 class ParticleSurveillance(gym.Env):
@@ -63,7 +64,7 @@ class ParticleSurveillance(gym.Env):
     self.render_mode = render_mode
 
     if swarm_optim is None:
-      self.swarm_optim = self._swarm_optim_default()
+      self.swarm_optim = default_gbest_pso()
 
     # Pre-compute azimuth/elevation axis values needed to digitize the particles for the observation output
     self.az_axis = np.linspace(self.swarm_optim.bounds[0][0],
@@ -312,8 +313,8 @@ class ParticleSurveillance(gym.Env):
   ############################################################################
   # Particle swarm methods
   ############################################################################
-  def _distance_objective(self, 
-                          swarm_pos: np.ndarray, 
+  def _distance_objective(self,
+                          swarm_pos: np.ndarray,
                           detection_pos: np.ndarray) -> np.ndarray:
     """
     Compute the distance between each particle and the detection
@@ -332,15 +333,6 @@ class ParticleSurveillance(gym.Env):
     """
     return np.linalg.norm(swarm_pos - detection_pos, axis=1)
 
-  def _swarm_optim_default(self):
-    options = {'c1': 0.1, 'c2': 0.5, 'w': 0.8}
-    return IncrementalGlobalBestPSO(n_particles=1000,
-                                    dimensions=2,
-                                    options=options,
-                                    bounds=([-45, -45], [45, 45]),
-                                    pbest_reset_interval=250,
-                                    )
-
 
 if __name__ == '__main__':
   # Target generation model
@@ -356,29 +348,8 @@ if __name__ == '__main__':
       initial_state_mean, initial_state_covariance)
 
   # Radar system object
-  radar = PhasedArrayRadar(
-      ndim_state=transition_model.ndim_state,
-      position_mapping=(0, 2, 4),
-      velocity_mapping=(1, 3, 5),
-      position=np.array([[0], [0], [0]]),
-      rotation_offset=np.array([[0], [0], [0]]),
-      # Array parameters
-      n_elements_x=32,
-      n_elements_y=32,
-      element_spacing=0.5,  # Wavelengths
-      element_tx_power=10,
-      # System parameters
-      center_frequency=3e9,
-      system_temperature=290,
-      noise_figure=4,
-      # Scan settings
-      beam_shape=RectangularBeam,
-      az_fov=[-60, 60],
-      el_fov=[-60, 60],
-      # Detection settings
-      false_alarm_rate=1e-7,
-      include_false_alarms=True
-  )
+  radar = default_radar()
+  agent = default_raster_scan_agent()
 
   # Environment
   env = ParticleSurveillance(
@@ -390,28 +361,10 @@ if __name__ == '__main__':
       initial_number_targets=20,
       render_mode='human',
   )
-
-  # Agent
-  from mpar_sim.agents.raster_scan import RasterScanAgent
-  import numpy as np
-
-  search_agent = RasterScanAgent(
-      azimuth_scan_limits=np.array([-45, 45]),
-      elevation_scan_limits=np.array([-45, 45]),
-      azimuth_beam_spacing=0.8,
-      elevation_beam_spacing=0.8,
-      azimuth_beamwidth=5,
-      elevation_beamwidth=5,
-      bandwidth=100e6,
-      pulsewidth=10e-6,
-      prf=5e3,
-      n_pulses=100,
-  )
-
   env.reset()
 
   for i in range(1000):
-    look = search_agent.act(env.time)[0]
+    look = agent.act(env.time)[0]
     az = look.azimuth_steering_angle
     el = look.elevation_steering_angle
 
