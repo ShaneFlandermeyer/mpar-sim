@@ -56,6 +56,6 @@ def default_gbest_pso():
                                   dimensions=2,
                                   options=options,
                                   bounds=([-45, -45], [45, 45]),
-                                  pbest_reset_interval=250,
+                                  pbest_reset_interval=500,
                                   )
   

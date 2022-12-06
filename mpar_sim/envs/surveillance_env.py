@@ -58,7 +58,13 @@ class ParticleSurveillance(gym.Env):
 
     # Currently, actions are limited to beam steering angles in azimuth and elevation
     # TODO: Make the action space include all look parameters
-    self.action_space = spaces.Box(-90, 90, shape=(2,), dtype=np.float32)
+    self.action_space = spaces.Dict(
+        {
+            "azimuth_steering_angle": spaces.Box(-90, 90, shape=(1,), dtype=np.float32),
+            "elevation_steering_angle": spaces.Box(-90, 90, shape=(1,), dtype=np.float32),
+        }
+    )
+    # self.action_space = spaces.Box(-90, 90, shape=(2,), dtype=np.float32)
 
     assert render_mode is None or render_mode in self.metadata["render_modes"]
     self.render_mode = render_mode
@@ -78,11 +84,11 @@ class ParticleSurveillance(gym.Env):
     self.window = None
     self.clock = None
 
-  def step(self, action):
+  def step(self, action: dict):
 
     # Point the radar in the right direction
-    self.look.azimuth_steering_angle = action[0]
-    self.look.elevation_steering_angle = action[1]
+    self.look.azimuth_steering_angle = action["azimuth_steering_angle"]
+    self.look.elevation_steering_angle = action["elevation_steering_angle"]
     self.look.start_time = self.time
     self.radar.load_look(self.look)
     timestep = datetime.timedelta(seconds=self.look.dwell_time)
@@ -93,8 +99,6 @@ class ParticleSurveillance(gym.Env):
       path.states[-1].rcs = 10
 
     detections = self.radar.measure(self.target_paths, noise=True)
-
-    # TODO: Periodically reset the personal best of each particle
 
     # Update the particle swarm output
     for det in detections:
@@ -174,6 +178,7 @@ class ParticleSurveillance(gym.Env):
         start_time=self.time,
         priority=0,
     )
+    self.radar.load_look(self.look)
 
     self.swarm_optim.reset()
     self.swarm_optim.swarm.pbest_cost = np.full(
@@ -369,31 +374,3 @@ if __name__ == '__main__':
     el = look.elevation_steering_angle
 
     obs, reward, terminated, truncated, info = env.step(np.array([az, el]))
-
-  # PLOTS
-
-  # # Plot the particle swarm history
-  from pyswarms.utils.functions import single_obj as fx
-  from pyswarms.utils.plotters import (
-      plot_cost_history, plot_contour, plot_surface)
-  from pyswarms.utils.plotters.formatters import Mesher
-  from pyswarms.utils.plotters.formatters import Designer
-  d = Designer(limits=[(-45, 45), (-45, 45)],
-               label=['azimuth (deg.)', 'elevation (deg.)'])
-
-  animation = plot_contour(pos_history=env.swarm_optim.pos_history,
-                           designer=d,
-                           title='Search space')
-  # # animation.save('particles.gif', writer='ffmpeg', fps=10)
-  # Plot the scenario
-  from stonesoup.plotter import Plotter, Dimension
-
-  plotter = Plotter(Dimension.THREE)
-  plotter.plot_sensors(radar, "Radar")
-  plotter.plot_ground_truths(env.target_history, radar.position_mapping)
-  plotter.plot_measurements(env.detection_history, radar.position_mapping)
-
-  # plt.figure()
-  # plt.imshow(obs, cmap='gray')
-
-  plt.show()
