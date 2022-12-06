@@ -1,6 +1,6 @@
 import copy
 import datetime
-from typing import Collection, Optional
+from typing import Collection, Dict, Optional
 
 import gymnasium as gym
 import numpy as np
@@ -62,6 +62,13 @@ class ParticleSurveillance(gym.Env):
         {
             "azimuth_steering_angle": spaces.Box(-90, 90, shape=(1,), dtype=np.float32),
             "elevation_steering_angle": spaces.Box(-90, 90, shape=(1,), dtype=np.float32),
+            "azimuth_beamwidth": spaces.Box(0, np.inf, shape=(1,), dtype=np.float32),
+            "elevation_beamwidth": spaces.Box(0, np.inf, shape=(1,), dtype=np.float32),
+            "bandwidth": spaces.Box(0, np.inf, shape=(1,), dtype=np.float32),
+            "pulsewidth": spaces.Box(0, np.inf, shape=(1,), dtype=np.float32),
+            "prf": spaces.Box(0, np.inf, shape=(1,), dtype=np.float32),
+            "n_pulses": spaces.Box(0, np.inf, shape=(1,), dtype=np.float32),
+            "tx_power": spaces.Box(0, np.inf, shape=(1,), dtype=np.float32),
         }
     )
     # self.action_space = spaces.Box(-90, 90, shape=(2,), dtype=np.float32)
@@ -84,14 +91,13 @@ class ParticleSurveillance(gym.Env):
     self.window = None
     self.clock = None
 
-  def step(self, action: dict):
+  def step(self, action: Dict):
+    
+    look = self._action_dict_to_look(action)
 
     # Point the radar in the right direction
-    self.look.azimuth_steering_angle = action["azimuth_steering_angle"]
-    self.look.elevation_steering_angle = action["elevation_steering_angle"]
-    self.look.start_time = self.time
-    self.radar.load_look(self.look)
-    timestep = datetime.timedelta(seconds=self.look.dwell_time)
+    self.radar.load_look(look)
+    timestep = datetime.timedelta(seconds=look.dwell_time)
 
     # Add an RCS to each target
     # TODO: Each target should have an RCS update function
@@ -160,29 +166,7 @@ class ParticleSurveillance(gym.Env):
     # Reset targets
     self._initialize_targets()
 
-    # TODO: For now, all look parameters but the beam angles are fixed
-    # TODO: This should pass through the resource manager to ensure that all parameters are consistent/can be allocated
-    self.look = Look(
-        # Beam parameters
-        azimuth_steering_angle=0,
-        elevation_steering_angle=0,
-        azimuth_beamwidth=10,
-        elevation_beamwidth=10,
-        # Waveform parameters
-        bandwidth=100e6,
-        pulsewidth=10e-6,
-        prf=5000,
-        n_pulses=100,
-        tx_power=10e3,
-        # Scheduler parameters
-        start_time=self.time,
-        priority=0,
-    )
-    self.radar.load_look(self.look)
-
     self.swarm_optim.reset()
-    self.swarm_optim.swarm.pbest_cost = np.full(
-        self.swarm_optim.swarm_size[0], np.inf)
 
     observation = self._get_obs()
     info = self._get_info()
@@ -338,6 +322,20 @@ class ParticleSurveillance(gym.Env):
     """
     return np.linalg.norm(swarm_pos - detection_pos, axis=1)
 
+  def _action_dict_to_look(self, action: Dict) -> Look:
+    return Look(
+      azimuth_steering_angle=action["azimuth_steering_angle"],
+      elevation_steering_angle=action["elevation_steering_angle"],
+      azimuth_beamwidth=action["azimuth_beamwidth"],
+      elevation_beamwidth=action["elevation_beamwidth"],
+      bandwidth=action["bandwidth"],
+      pulsewidth=action["pulsewidth"],
+      prf=action["prf"],
+      n_pulses=action["n_pulses"],
+      tx_power=action["tx_power"],
+      start_time=self.time,
+    )
+    
 
 if __name__ == '__main__':
   # Target generation model
