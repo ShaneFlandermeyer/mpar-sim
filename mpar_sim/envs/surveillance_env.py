@@ -1,3 +1,4 @@
+import copy
 import datetime
 from typing import Collection, Optional
 
@@ -49,11 +50,12 @@ class RadarSurveillance(gym.Env):
     # TODO: Let the user specify the image size
     self.observation_shape = (128, 128, 1)
     self.observation_space = spaces.Box(
-        low=np.zeros(self.observation_shape, dtype=np.float32),
-        high=np.ones(self.observation_shape, dtype=np.float32),
-        dtype=np.float32)
+        low=np.zeros(self.observation_shape, dtype=np.uint8),
+        high=np.ones(self.observation_shape, dtype=np.uint8),
+        dtype=np.uint8)
 
     # Currently, actions are limited to beam steering angles in azimuth and elevation
+    # TODO: Make the action space include all look parameters
     self.action_space = spaces.Box(-90, 90, shape=(2,), dtype=np.float32)
 
     assert render_mode is None or render_mode in self.metadata["render_modes"]
@@ -75,6 +77,7 @@ class RadarSurveillance(gym.Env):
     # Point the radar in the right direction
     self.look.azimuth_steering_angle = action[0]
     self.look.elevation_steering_angle = action[1]
+    self.look.start_time = self.time
     self.radar.load_look(self.look)
     timestep = datetime.timedelta(seconds=self.look.dwell_time)
 
@@ -84,6 +87,8 @@ class RadarSurveillance(gym.Env):
       path.states[-1].rcs = 10
 
     detections = self.radar.measure(self.target_paths, noise=True)
+    
+    # TODO: Periodically reset the personal best of each particle
 
     # Update the particle swarm output
     for det in detections:
@@ -91,6 +96,12 @@ class RadarSurveillance(gym.Env):
       el = det.state_vector[0].degrees
       self.swarm_optim.optimize(
           self._distance_objective, detection_pos=np.array([az, el]))
+      
+    # Mutate particles based on Engelbrecht equations (16.66-16.67)
+    sigma = 0.1*(self.swarm_optim.bounds[1][0] - self.swarm_optim.bounds[0][0])
+    Pm = 0.05
+    mutate = self.np_random.uniform(0, 1, size=self.swarm_optim.swarm.position.shape) < Pm
+    self.swarm_optim.swarm.position[mutate] += self.np_random.normal(0, sigma, size=self.swarm_optim.swarm.position[mutate].shape)
 
     # If multiple subarrays are scheduled to execute at once, the timestep will be zero. In this case, don't update the environment just yet.
     # For the single-beam case, this will always execute
@@ -109,7 +120,11 @@ class RadarSurveillance(gym.Env):
         self.target_paths.add(target)
 
       self.time += timestep
-    
+
+    # Update useful info
+    self.target_history |= self.target_paths
+    self.detection_history.append(detections)
+
     # Create outputs
     observation = self._get_obs()
     info = self._get_info()
@@ -140,7 +155,7 @@ class RadarSurveillance(gym.Env):
         # Waveform parameters
         bandwidth=50e6,
         pulsewidth=10e-6,
-        prf=1500,
+        prf=5000,
         n_pulses=100,
         tx_power=100e5,
         # Scheduler parameters
@@ -149,13 +164,18 @@ class RadarSurveillance(gym.Env):
     )
 
     self.swarm_optim.reset()
-    self.swarm_optim.swarm.pbest_cost = np.full(self.swarm_optim.swarm_size[0], np.inf)
+    self.swarm_optim.swarm.pbest_cost = np.full(
+        self.swarm_optim.swarm_size[0], np.inf)
 
     observation = self._get_obs()
     info = self._get_info()
 
     if self.render_mode == "human":
       self._render_frame()
+
+    # Reset metrics/helpful debug info
+    self.target_history = []
+    self.detection_history = []
 
     return observation, info
 
@@ -164,9 +184,9 @@ class RadarSurveillance(gym.Env):
   ############################################################################
   def _get_obs(self):
     az_indices = np.digitize(
-        self.swarm_optim.swarm.position[:, 0], self.az_axis)
+        self.swarm_optim.swarm.position[:, 0], self.az_axis) - 1
     el_indices = np.digitize(
-        self.swarm_optim.swarm.position[:, 1], self.el_axis)
+        self.swarm_optim.swarm.position[:, 1], self.el_axis) - 1
     obs = np.zeros(self.observation_shape, dtype=np.float32)
     obs[az_indices, el_indices] = 1
     return obs
@@ -181,8 +201,7 @@ class RadarSurveillance(gym.Env):
     return np.linalg.norm(swarm_pos - detection_pos, axis=1)
 
   def _swarm_optim_default(self):
-    options = {'c1': 0.1, 'c2': 0.5, 'w': 0.9}
-
+    options = {'c1': 0, 'c2': 0.5, 'w': 0.8}
     return IncrementalGlobalBestPSO(n_particles=500,
                                     dimensions=2,
                                     options=options,
@@ -256,9 +275,9 @@ if __name__ == '__main__':
       ConstantVelocity(10),
       ConstantVelocity(0),
   ])
-  initial_state_mean = StateVector([10e3, 10, 5e3, 0, 0, 0])
+  initial_state_mean = StateVector([10e3, 10, 0, 0, 0, 0])
   initial_state_covariance = CovarianceMatrix(
-      np.diag([200, 0, 200, 0, 2000, 50]))
+      np.diag([200, 20, 200, 20, 2000, 10]))
   initial_state = GaussianState(
       initial_state_mean, initial_state_covariance)
 
@@ -283,8 +302,8 @@ if __name__ == '__main__':
       az_fov=[-60, 60],
       el_fov=[-60, 60],
       # Detection settings
-      false_alarm_rate=1e-6,
-      include_false_alarms=False
+      false_alarm_rate=1e-7,
+      include_false_alarms=True
   )
 
   # Environment
@@ -292,15 +311,54 @@ if __name__ == '__main__':
       radar=radar,
       transition_model=transition_model,
       initial_state=initial_state,
-      birth_rate=0.1,
-      death_probability=0.01,
-      initial_number_targets=5)
+      birth_rate=0,
+      death_probability=0,
+      initial_number_targets=10)
   env.reset()
 
+  # Agent
+  from mpar_sim.agents.raster_scan import RasterScanAgent
+  import numpy as np
+
+  search_agent = RasterScanAgent(
+      azimuth_scan_limits=np.array([-45, 45]),
+      elevation_scan_limits=np.array([-45, 45]),
+      azimuth_beam_spacing=1,
+      elevation_beam_spacing=1,
+      azimuth_beamwidth=10,
+      elevation_beamwidth=10,
+      bandwidth=100e6,
+      pulsewidth=10e-6,
+      prf=5e3,
+      n_pulses=100,
+  )
+
   for i in range(1000):
-    # TODO: Random actions for now
-    az = np.random.uniform(20, 30)
-    el = np.random.uniform(-30, 30)
+    look = search_agent.act(env.time)[0]
+    az = look.azimuth_steering_angle
+    el = look.elevation_steering_angle
+
     obs, reward, terminated, truncated, info = env.step(np.array([az, el]))
-    # if reward > 0:
-    #   print(reward)
+
+  # PLOTS
+
+  # Plot the particle swarm history
+  from pyswarms.utils.functions import single_obj as fx
+  from pyswarms.utils.plotters import (
+      plot_cost_history, plot_contour, plot_surface)
+  from pyswarms.utils.plotters.formatters import Mesher
+  from pyswarms.utils.plotters.formatters import Designer
+  d = Designer(limits=[(-45, 45), (-45, 45)],
+               label=['azimuth (deg.)', 'elevation (deg.)'])
+
+  animation = plot_contour(pos_history=env.swarm_optim.pos_history,
+                           designer=d,)
+  # Plot the scenario
+  from stonesoup.plotter import Plotter, Dimension
+
+  # plt.figure()
+  plotter = Plotter(Dimension.THREE)
+  plotter.plot_sensors(radar, "Radar")
+  plotter.plot_ground_truths(env.target_history, radar.position_mapping)
+  plotter.plot_measurements(env.detection_history, radar.position_mapping)
+  plt.show()

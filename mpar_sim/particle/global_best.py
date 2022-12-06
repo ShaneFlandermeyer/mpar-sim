@@ -141,14 +141,14 @@ class IncrementalGlobalBestPSO(SwarmOptimizer):
     self.rep = Reporter(logger=logging.getLogger(__name__))
     # Initialize the resettable attributes
     self.reset()
-    
+
     # Initialize the topology
     self.top = Star()
     self.bh = BoundaryHandler(strategy=bh_strategy)
     self.vh = VelocityHandler(strategy=vh_strategy)
     self.oh = OptionsHandler(strategy=oh_strategy)
     self.name = __name__
-    
+
     # Reset memory-based items
     self.swarm.pbest_cost = np.full(self.swarm_size[0], np.inf)
     # Populate memory of the handlers
@@ -181,14 +181,14 @@ class IncrementalGlobalBestPSO(SwarmOptimizer):
         velocity=self.swarm.velocity,
     )
     self._populate_history(hist)
-    
+
     # Perform options update
     # TODO: Add a global iterator to this.
     if iters is not None:
       self.swarm.options = self.oh(
           self.options, iternow=i, itermax=iters
       )
-      
+
     # Perform velocity and position updates
     self.swarm.velocity = self.top.compute_velocity(
         self.swarm, self.velocity_clamp, self.vh, self.bounds
@@ -196,10 +196,10 @@ class IncrementalGlobalBestPSO(SwarmOptimizer):
     self.swarm.position = self.top.compute_position(
         self.swarm, self.bounds, self.bh
     )
-    
+
     if pool:
       pool.close()
-      
+
     return (self.swarm.best_cost, self.swarm.best_pos)
 
 
@@ -207,36 +207,33 @@ if __name__ == '__main__':
 
   from pyswarms.utils.functions import single_obj as fx
   from pyswarms.utils.plotters.formatters import Mesher
-  from pyswarms.utils.plotters import (plot_cost_history, plot_contour, plot_surface)
-  
-  import matplotlib.pyplot as plt
+  from pyswarms.utils.plotters import (
+      plot_cost_history, plot_contour, plot_surface)
 
-  
-  
+  import matplotlib.pyplot as plt
 
   # Set-up hyperparameters
   options = {'c1': 0.5, 'c2': 0.3, 'w': 0.9}
 
   # Call instance of GlobalBestPSO
-  optimizer = IncrementalGlobalBestPSO(n_particles=100, 
+  optimizer = IncrementalGlobalBestPSO(n_particles=100,
                                        dimensions=2,
                                        options=options,
                                        bounds=None
                                        )
-  
+
   # Perform optimization
   tic = time.time()
   for i in range(100):
     optimizer.optimize(fx.sphere)
   print('Time: ', time.time() - tic)
-  
-  
+
   # Initialize mesher with sphere function
   # plot_cost_history(cost_history=optimizer.cost_history)
   m = Mesher(func=fx.sphere)
   animation = plot_contour(pos_history=optimizer.pos_history,
                            mesher=m,
-                           mark=(0,0))
-  animation.save('plot0.gif', writer='imagemagick', fps=10)
+                           mark=(0, 0))
+#   animation.save('plot0.gif', writer='imagemagick', fps=10)
   # plt.show()
   # print(optimizer.cost_history)
