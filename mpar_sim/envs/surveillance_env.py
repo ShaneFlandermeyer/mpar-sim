@@ -3,8 +3,6 @@ from typing import Collection, Optional
 
 import gymnasium as gym
 import numpy as np
-from attr import attrib, attrs
-from attr.validators import instance_of
 from gymnasium import spaces
 from ordered_set import OrderedSet
 from stonesoup.base import Property
@@ -17,49 +15,36 @@ from stonesoup.types.groundtruth import GroundTruthPath, GroundTruthState
 from stonesoup.types.numeric import Probability
 from stonesoup.types.state import GaussianState
 from mpar_sim.beam.beam import RectangularBeam
+from mpar_sim.particle.global_best import IncrementalGlobalBestPSO
 from mpar_sim.radar import PhasedArrayRadar
 from mpar_sim.looks.look import Look
+from pyswarms.base.base_single import SwarmOptimizer
+import matplotlib.pyplot as plt
 
 
-@attrs
 class RadarSurveillance(gym.Env):
   metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 4}
 
-  # Target generation parameters
-  radar = attrib(
-      type=PhasedArrayRadar,
-      validator=instance_of(PhasedArrayRadar)
-  )
-  transition_model = attrib(
-      type=TransitionModel,
-      validator=instance_of(TransitionModel)
-  )
-  initial_state = attrib(
-      type=GaussianState,
-      validator=instance_of(GaussianState)
-  )
-  birth_rate = attrib(
-      type=float,
-      default=1.0,
-      validator=instance_of((int, float))
-  )
-  death_probability = attrib(
-      type=Probability,
-      default=0.1,
-      validator=instance_of((Probability, float))
-  )
-  seed = attrib(type=int, default=None,)
-  preexisting_states = attrib(
-      type=Collection[StateVector],
-      default=list(),
-  )
-  initial_number_targets = attrib(
-      default=0,
-      validator=instance_of(int)
-  )
-
-  def __init__(self, render_mode=None):
-    # TODO: Define environment-specific parameters
+  def __init__(self,
+               radar: PhasedArrayRadar,
+               transition_model: TransitionModel,
+               initial_state: GaussianState,
+               birth_rate: float = 1.0,
+               death_probability: float = 0.01,
+               preexisting_states: Collection[StateVector] = [],
+               initial_number_targets: int = 0,
+               swarm_optim=None,
+               seed=None,
+               render_mode=None):
+    # Define environment-specific parameters
+    self.radar = radar
+    self.transition_model = transition_model
+    self.initial_state = initial_state
+    self.birth_rate = birth_rate
+    self.death_probability = death_probability
+    self.preexisting_states = preexisting_states
+    self.initial_number_targets = initial_number_targets
+    self.seed = seed
 
     # TODO: Let the user specify the image size
     self.observation_shape = (128, 128, 1)
@@ -74,39 +59,65 @@ class RadarSurveillance(gym.Env):
     assert render_mode is None or render_mode in self.metadata["render_modes"]
     self.render_mode = render_mode
 
+    if swarm_optim is None:
+      self.swarm_optim = self._swarm_optim_default()
+
+    # Pre-compute azimuth/elevation axis values needed to digitize the particles for the observation output
+    self.az_axis = np.linspace(self.swarm_optim.bounds[0][0],
+                               self.swarm_optim.bounds[1][0],
+                               self.observation_shape[0])
+    self.el_axis = np.linspace(self.swarm_optim.bounds[0][1],
+                               self.swarm_optim.bounds[1][1],
+                               self.observation_shape[1])
+
   def step(self, action):
-    
+
     # Point the radar in the right direction
     self.look.azimuth_steering_angle = action[0]
     self.look.elevation_steering_angle = action[1]
     self.radar.load_look(self.look)
-    timestep = datetime.timedelta(self.look.dwell_time)
-    
+    timestep = datetime.timedelta(seconds=self.look.dwell_time)
+
     # Add an RCS to each target
     # TODO: Each target should have an RCS update function
     for path in self.target_paths:
       path.states[-1].rcs = 10
-    
-    detections = radar.measure(self.target_paths, noise=True)
-    
-    # TODO: Update the particle swarm
-    
-    # Randomly drop targets
-    self.target_paths.difference_update(
-        path for path in self.target_paths if self.np_random.rand() <= self.death_probability
-    )
 
-    # Move targets forward in time
-    # TODO: timestep depends on the action taken!!!
+    detections = self.radar.measure(self.target_paths, noise=True)
+
+    # Update the particle swarm output
+    for det in detections:
+      az = det.state_vector[1].degrees
+      el = det.state_vector[0].degrees
+      self.swarm_optim.optimize(
+          self._distance_objective, detection_pos=np.array([az, el]))
+
+    # If multiple subarrays are scheduled to execute at once, the timestep will be zero. In this case, don't update the environment just yet.
+    # For the single-beam case, this will always execute
     if timestep > datetime.timedelta(seconds=0):
+      # Randomly drop targets
+      self.target_paths.difference_update(
+          path for path in self.target_paths if self.np_random.uniform(0, 1) <= self.death_probability
+      )
+
+      # Move targets forward in time
       self._move_targets(timestep)
 
-    # Randomly create new targets
-    for _ in range(self.np_random.poisson(self.birth_rate)):
-      target = self._new_target(self.time)
-      self.target_paths.add(target)
+      # Randomly create new targets
+      for _ in range(self.np_random.poisson(self.birth_rate)):
+        target = self._new_target(self.time)
+        self.target_paths.add(target)
 
-    self.time += timestep
+      self.time += timestep
+    
+    # Create outputs
+    observation = self._get_obs()
+    info = self._get_info()
+    # TODO: Implement a real reward function
+    reward = len(detections)
+    terminated = False
+    truncated = False
+    return observation, reward, terminated, truncated, info
 
   def reset(self, seed=None, options=None):
     super().reset(seed=seed)
@@ -117,29 +128,67 @@ class RadarSurveillance(gym.Env):
 
     # Reset targets
     self._initialize_targets()
-    
+
     # TODO: For now, all look parameters but the beam angles are fixed
     # TODO: This should pass through the resource manager to ensure that all parameters are consistent/can be allocated
     self.look = Look(
-      # Beam parameters
-      azimuth_steering_angle=0,
-      elevation_steering_angle=0,
-      azimuth_beamwidth=10,
-      elevation_beamwidth=10,
-      # Waveform parameters
-      bandwidth=50e6,
-      pulsewidth=10e-6,
-      prf=1500,
-      n_pulses=10,
-      tx_power=100e3,
-      # Scheduler parameters
-      start_time=self.time,
-      priority=0,
+        # Beam parameters
+        azimuth_steering_angle=0,
+        elevation_steering_angle=0,
+        azimuth_beamwidth=10,
+        elevation_beamwidth=10,
+        # Waveform parameters
+        bandwidth=50e6,
+        pulsewidth=10e-6,
+        prf=1500,
+        n_pulses=100,
+        tx_power=100e5,
+        # Scheduler parameters
+        start_time=self.time,
+        priority=0,
     )
+
+    self.swarm_optim.reset()
+    self.swarm_optim.swarm.pbest_cost = np.full(self.swarm_optim.swarm_size[0], np.inf)
+
+    observation = self._get_obs()
+    info = self._get_info()
+
+    if self.render_mode == "human":
+      self._render_frame()
+
+    return observation, info
 
   ############################################################################
   # Internal methods
   ############################################################################
+  def _get_obs(self):
+    az_indices = np.digitize(
+        self.swarm_optim.swarm.position[:, 0], self.az_axis)
+    el_indices = np.digitize(
+        self.swarm_optim.swarm.position[:, 1], self.el_axis)
+    obs = np.zeros(self.observation_shape, dtype=np.float32)
+    obs[az_indices, el_indices] = 1
+    return obs
+
+  def _get_info(self):
+    return {}
+
+  def _render_frame():
+    raise NotImplementedError
+
+  def _distance_objective(self, swarm_pos, detection_pos):
+    return np.linalg.norm(swarm_pos - detection_pos, axis=1)
+
+  def _swarm_optim_default(self):
+    options = {'c1': 0.1, 'c2': 0.5, 'w': 0.9}
+
+    return IncrementalGlobalBestPSO(n_particles=500,
+                                    dimensions=2,
+                                    options=options,
+                                    bounds=([-45, -45], [45, 45]),
+                                    )
+
   def _initialize_targets(self):
     """
     Create new targets based on the initial state and preexisting states specified in the environment's input arguments
@@ -212,7 +261,7 @@ if __name__ == '__main__':
       np.diag([200, 0, 200, 0, 2000, 50]))
   initial_state = GaussianState(
       initial_state_mean, initial_state_covariance)
-  
+
   # Radar system object
   radar = PhasedArrayRadar(
       ndim_state=transition_model.ndim_state,
@@ -240,8 +289,18 @@ if __name__ == '__main__':
 
   # Environment
   env = RadarSurveillance(
-    radar=radar,
-    transition_model=transition_model,
-    initial_state=initial_state,)
+      radar=radar,
+      transition_model=transition_model,
+      initial_state=initial_state,
+      birth_rate=0.1,
+      death_probability=0.01,
+      initial_number_targets=5)
   env.reset()
-  env.step(np.array([0, 0]))
+
+  for i in range(1000):
+    # TODO: Random actions for now
+    az = np.random.uniform(20, 30)
+    el = np.random.uniform(-30, 30)
+    obs, reward, terminated, truncated, info = env.step(np.array([az, el]))
+    # if reward > 0:
+    #   print(reward)
