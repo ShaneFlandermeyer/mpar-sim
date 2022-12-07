@@ -23,22 +23,32 @@ def azel2uv(az: np.ndarray, el: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
 def sph2cart(
     azimuth: Union[float, np.ndarray],
     elevation: Union[float, np.ndarray],
-    r: Union[float, np.ndarray]
+    range: Union[float, np.ndarray],
+    degrees: bool = False
 ) -> Union[Tuple[float, float, float], Tuple[np.ndarray, np.ndarray, np.ndarray]]:
   """
   Convert spherical coordinates to cartesian
 
-  Args:
-      azimuth (Union[float, np.ndarray]): Azimuth angle in radians
-      elevation (Union[float, np.ndarray]): Elevation angle in radians
-      r (Union[float, np.ndarray]): Range
+  Parameters
+  ----------
+  azimuth: Union[float, np.ndarray]: 
+    Azimuth angle in radians
+  elevation: Union[float, np.ndarray]: 
+    Elevation angle
+  range: Union[float, np.ndarray]: 
+    Range
+  degrees: bool
 
-  Returns:
+  Returns
+  -------
       Union[float, np.ndarray]: Cartesian coordinates
   """
-  x = r * np.cos(elevation) * np.cos(azimuth)
-  y = r * np.cos(elevation) * np.sin(azimuth)
-  z = r * np.sin(elevation)
+  if degrees:
+    azimuth = np.deg2rad(azimuth)
+    elevation = np.deg2rad(elevation)
+  x = range * np.cos(elevation) * np.cos(azimuth)
+  y = range * np.cos(elevation) * np.sin(azimuth)
+  z = range * np.sin(elevation)
 
   return (x, y, z)
 

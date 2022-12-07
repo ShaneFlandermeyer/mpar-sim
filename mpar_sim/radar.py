@@ -260,9 +260,7 @@ class PhasedArrayRadar(Sensor):
 
       # Probability of detection
       if snr_db > 0:
-        N = self.n_pulses
         pfa = self.false_alarm_rate
-        # pd = albersheim_pd(snr_db, pfa, N)
         pd = pfa**(1/(1+snr_lin))
       else:
         pd = 0  # Assume targets are not detected with negative SNR

@@ -2,6 +2,8 @@
 These functions give valid instances of several objects implemented in this project for convenient access. The parameters are chosen to be reasonable for a typical scenario, although they're almost certainly sub-optimal
 """
 
+from datetime import timedelta
+
 import gymnasium as gym
 import numpy as np
 
@@ -10,6 +12,8 @@ from mpar_sim.beam.beam import RectangularBeam
 from mpar_sim.particle.global_best import IncrementalGlobalBestPSO
 from mpar_sim.particle.local_best import IncrementalLocalBestPSO
 from mpar_sim.radar import PhasedArrayRadar
+from mpar_sim.resource_management import PAPResourceManager
+from mpar_sim.schedulers import BestFirstScheduler
 
 
 def default_radar():
@@ -51,7 +55,8 @@ def default_raster_scan_agent():
       prf=5e3,
       n_pulses=100,
   )
-  
+
+
 def default_gbest_pso():
   options = {'c1': 0.2, 'c2': 0.5, 'w': 0.8}
   return IncrementalGlobalBestPSO(n_particles=500,
@@ -61,11 +66,23 @@ def default_gbest_pso():
                                   pbest_reset_interval=1000,
                                   )
 
+
 def default_lbest_pso():
   options = {'c1': 0.2, 'c2': 0.5, 'w': 0.8}
   return IncrementalLocalBestPSO(n_particles=500,
-                                  dimensions=2,
-                                  options=options,
-                                  bounds=([-45, -45], [45, 45]),
-                                  pbest_reset_interval=1000,
-                                  )
+                                 dimensions=2,
+                                 options=options,
+                                 bounds=([-45, -45], [45, 45]),
+                                 pbest_reset_interval=1000,
+                                 )
+
+
+def default_scheduler(radar: PhasedArrayRadar):
+  manager = PAPResourceManager(radar,
+                               max_duty_cycle=0.1,
+                               max_bandwidth=100e6)
+  return BestFirstScheduler(manager,
+                            sort_key="start_time",
+                            reverse_sort=True,
+                            max_queue_size=10,
+                            max_time_delta=timedelta(seconds=0.5))

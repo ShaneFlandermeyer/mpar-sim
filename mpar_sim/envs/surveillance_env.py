@@ -4,25 +4,19 @@ from typing import Collection, Dict, Optional
 
 import gymnasium as gym
 import numpy as np
+import pygame
 from gymnasium import spaces
 from ordered_set import OrderedSet
-from stonesoup.base import Property
 from stonesoup.models.transition.base import TransitionModel
-from stonesoup.models.transition.linear import (
-    CombinedLinearGaussianTransitionModel, ConstantVelocity, SingerApproximate)
-from stonesoup.simulator.simple import SingleTargetGroundTruthSimulator
-from stonesoup.types.array import CovarianceMatrix, StateVector
+from stonesoup.types.array import StateVector
 from stonesoup.types.groundtruth import GroundTruthPath, GroundTruthState
-from stonesoup.types.numeric import Probability
 from stonesoup.types.state import GaussianState
-from mpar_sim.beam.beam import RectangularBeam
-from mpar_sim.particle.global_best import IncrementalGlobalBestPSO
-from mpar_sim.radar import PhasedArrayRadar
+
+from mpar_sim.common.coordinate_transform import sph2cart
+from mpar_sim.defaults import default_gbest_pso, default_lbest_pso
 from mpar_sim.looks.look import Look
+from mpar_sim.radar import PhasedArrayRadar
 from pyswarms.base.base_single import SwarmOptimizer
-import matplotlib.pyplot as plt
-import pygame
-from mpar_sim.defaults import default_radar, default_raster_scan_agent, default_gbest_pso, default_lbest_pso
 
 
 class ParticleSurveillance(gym.Env):
@@ -36,9 +30,37 @@ class ParticleSurveillance(gym.Env):
                death_probability: float = 0.01,
                preexisting_states: Collection[StateVector] = [],
                initial_number_targets: int = 0,
-               swarm_optim=None,
-               seed=None,
-               render_mode=None):
+               swarm_optim: SwarmOptimizer = None,
+               seed: int = None,
+               render_mode: str = None):
+    """
+    An environment for simulating a radar surveillance scenario. Targets are generated with initial positions/velocities drawn from a Gaussian distribution and new targets are generated from a poisson process.
+
+    The action space the environment includes all parameters needed to specify a look, and the observation space is a 256x256x1 grayscale image representing the particle swarm in az/el space. That is, each pixel is 255 if a particle is present at that location, and 0 otherwise.
+
+    Parameters
+    ----------
+    radar : PhasedArrayRadar
+        Radar used to simulate detections
+    transition_model : TransitionModel
+        Target state transition model
+    initial_state : GaussianState
+        Gaussian mean vector/covariance matrix that defines the initial state distribution for targets
+    birth_rate : float, optional
+        Lambda parameter of poisson target generation process that defines the rate of target generation per timestep, by default 1.0
+    death_probability : float, optional
+        Probability of death at each time step (per target), by default 0.01
+    preexisting_states : Collection[StateVector], optional
+        A list of deterministic target states that are generated every time the scenario is initialized. This can be useful if you want to simulate a specific set of target trajectories, by default []
+    initial_number_targets : int, optional
+        Number of targets generated at the start of the simulation, by default 0
+    swarm_optim : _type_, optional
+        Particle swarm optimizer object used to generate the state images, by default None
+    seed : int, optional
+        Random seed used for the env's np_random member, by default None
+    render_mode : str, optional
+        If 'rgb_array', the observations are given as numpy arrays. If 'human', an additional PyGame window is created to show the observations in real time, by default None
+    """
     # Define environment-specific parameters
     self.radar = radar
     self.transition_model = transition_model
@@ -69,7 +91,6 @@ class ParticleSurveillance(gym.Env):
             "tx_power": spaces.Box(0, np.inf, shape=(1,), dtype=np.float32),
         }
     )
-    # self.action_space = spaces.Box(-90, 90, shape=(2,), dtype=np.float32)
 
     assert render_mode is None or render_mode in self.metadata["render_modes"]
     self.render_mode = render_mode
@@ -90,7 +111,7 @@ class ParticleSurveillance(gym.Env):
     self.clock = None
 
   def step(self, action: Dict):
-    
+
     look = self._action_dict_to_look(action)
 
     # Point the radar in the right direction
@@ -163,16 +184,17 @@ class ParticleSurveillance(gym.Env):
     self.index = 0
 
     # Reset targets
+    # TODO: Initial state mean/covariance should be generated randomly at each reset
     self._initialize_targets()
 
     self.swarm_optim.reset()
 
-    observation = self._get_obs()
-    info = self._get_info()
-
     # Reset metrics/helpful debug info
     self.target_history = []
     self.detection_history = []
+
+    observation = self._get_obs()
+    info = self._get_info()
 
     if self.render_mode == "human":
       self._render_frame()
@@ -269,17 +291,20 @@ class ParticleSurveillance(gym.Env):
 
     Returns
     -------
-    _type_
-        _description_
+    GroundTruthPath
+        A new ground truth path starting at the target's initial state
     """
-    vector = state_vector or \
+    state = state_vector or \
         self.initial_state.state_vector + \
         self.initial_state.covar @ \
         self.np_random.standard_normal(size=(self.initial_state.ndim, 1))
+    # Convert state vector from spherical to cartesian
+    x, y, z = sph2cart(*state[self.radar.position_mapping, :], degrees=True)
+    state[self.radar.position_mapping, :] = np.array([x, y, z])[:, np.newaxis]
 
     target_path = GroundTruthPath()
     target_path.append(GroundTruthState(
-        state_vector=vector,
+        state_vector=state,
         timestamp=time,
         metadata={"index": self.index})
     )
@@ -337,16 +362,14 @@ class ParticleSurveillance(gym.Env):
         Look object that can be used to interface with the radar simulator
     """
     return Look(
-      azimuth_steering_angle=action["azimuth_steering_angle"],
-      elevation_steering_angle=action["elevation_steering_angle"],
-      azimuth_beamwidth=action["azimuth_beamwidth"],
-      elevation_beamwidth=action["elevation_beamwidth"],
-      bandwidth=action["bandwidth"],
-      pulsewidth=action["pulsewidth"],
-      prf=action["prf"],
-      n_pulses=action["n_pulses"],
-      tx_power=action["tx_power"],
-      start_time=self.time,
+        azimuth_steering_angle=action["azimuth_steering_angle"],
+        elevation_steering_angle=action["elevation_steering_angle"],
+        azimuth_beamwidth=action["azimuth_beamwidth"],
+        elevation_beamwidth=action["elevation_beamwidth"],
+        bandwidth=action["bandwidth"],
+        pulsewidth=action["pulsewidth"],
+        prf=action["prf"],
+        n_pulses=action["n_pulses"],
+        tx_power=action["tx_power"],
+        start_time=self.time,
     )
-    
-
