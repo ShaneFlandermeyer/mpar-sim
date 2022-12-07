@@ -4,9 +4,11 @@ These functions give valid instances of several objects implemented in this proj
 
 import gymnasium as gym
 import numpy as np
+
 from mpar_sim.agents.raster_scan import RasterScanAgent
 from mpar_sim.beam.beam import RectangularBeam
 from mpar_sim.particle.global_best import IncrementalGlobalBestPSO
+from mpar_sim.particle.local_best import IncrementalLocalBestPSO
 from mpar_sim.radar import PhasedArrayRadar
 
 
@@ -51,11 +53,19 @@ def default_raster_scan_agent():
   )
   
 def default_gbest_pso():
-  options = {'c1': 0.1, 'c2': 0.5, 'w': 0.8}
-  return IncrementalGlobalBestPSO(n_particles=1000,
+  options = {'c1': 0.2, 'c2': 0.5, 'w': 0.8}
+  return IncrementalGlobalBestPSO(n_particles=500,
                                   dimensions=2,
                                   options=options,
                                   bounds=([-45, -45], [45, 45]),
-                                  pbest_reset_interval=500,
+                                  pbest_reset_interval=1000,
                                   )
-  
+
+def default_lbest_pso():
+  options = {'c1': 0.2, 'c2': 0.5, 'w': 0.8}
+  return IncrementalLocalBestPSO(n_particles=500,
+                                  dimensions=2,
+                                  options=options,
+                                  bounds=([-45, -45], [45, 45]),
+                                  pbest_reset_interval=1000,
+                                  )

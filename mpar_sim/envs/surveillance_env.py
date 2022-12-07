@@ -22,7 +22,7 @@ from mpar_sim.looks.look import Look
 from pyswarms.base.base_single import SwarmOptimizer
 import matplotlib.pyplot as plt
 import pygame
-from mpar_sim.defaults import default_radar, default_raster_scan_agent, default_gbest_pso
+from mpar_sim.defaults import default_radar, default_raster_scan_agent, default_gbest_pso, default_lbest_pso
 
 
 class ParticleSurveillance(gym.Env):
@@ -77,7 +77,7 @@ class ParticleSurveillance(gym.Env):
     self.render_mode = render_mode
 
     if swarm_optim is None:
-      self.swarm_optim = default_gbest_pso()
+      self.swarm_optim = default_lbest_pso()
 
     # Pre-compute azimuth/elevation axis values needed to digitize the particles for the observation output
     self.az_axis = np.linspace(self.swarm_optim.bounds[0][0],
@@ -115,7 +115,7 @@ class ParticleSurveillance(gym.Env):
 
     # Mutate particles based on Engelbrecht equations (16.66-16.67)
     sigma = 0.1*(self.swarm_optim.bounds[1][0] - self.swarm_optim.bounds[0][0])
-    Pm = 0.05
+    Pm = 0.01
     mutate = self.np_random.uniform(
         0, 1, size=self.swarm_optim.swarm.position.shape) < Pm
     self.swarm_optim.swarm.position[mutate] += self.np_random.normal(

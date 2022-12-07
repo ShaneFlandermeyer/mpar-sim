@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 
 r"""
-A Global-best Particle Swarm Optimization (gbest PSO) algorithm.
+A local-best Particle Swarm Optimization (gbest PSO) algorithm.
 
 It takes a set of candidate solutions, and tries to find the best
 solution using a position-velocity update method. Uses a
-star-topology where each particle is attracted to the best
-performing particle.
+ring-topology where each particle is attracted to the best
+performing particle in its neighborhood.
 
 Unlike the pyswarms version, this class updates the swarm incrementally and does not specify an upper limit on the number of iterations. This makes it possible to use in a "streaming" context, e.g., for the duration of a phased array's operation.
 
@@ -73,7 +73,7 @@ from pyswarms.base.base_single import SwarmOptimizer
 from pyswarms.utils.reporter import Reporter
 
 
-class IncrementalGlobalBestPSO(SwarmOptimizer):
+class IncrementalLocalBestPSO(SwarmOptimizer):
   """Initialize the swarm
 
     Attributes
@@ -144,7 +144,7 @@ class IncrementalGlobalBestPSO(SwarmOptimizer):
     self.reset()
 
     # Initialize the topology
-    self.top = Star()
+    self.top = Ring(static=True)
     self.bh = BoundaryHandler(strategy=bh_strategy)
     self.vh = VelocityHandler(strategy=vh_strategy)
     self.oh = OptionsHandler(strategy=oh_strategy)
