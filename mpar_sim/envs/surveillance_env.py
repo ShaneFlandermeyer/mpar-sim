@@ -24,13 +24,17 @@ class ParticleSurveillance(gym.Env):
 
   def __init__(self,
                radar: PhasedArrayRadar,
+               # Target generation parameters
                transition_model: TransitionModel,
                initial_state: GaussianState,
                birth_rate: float = 1.0,
                death_probability: float = 0.01,
                preexisting_states: Collection[StateVector] = [],
                initial_number_targets: int = 0,
+               # Particle swarm parameters
                swarm_optim: SwarmOptimizer = None,
+               # Environment parameters
+               n_confirm_detections: int = 2,
                seed: int = None,
                render_mode: str = None):
     """
@@ -54,8 +58,11 @@ class ParticleSurveillance(gym.Env):
         A list of deterministic target states that are generated every time the scenario is initialized. This can be useful if you want to simulate a specific set of target trajectories, by default []
     initial_number_targets : int, optional
         Number of targets generated at the start of the simulation, by default 0
-    swarm_optim : _type_, optional
+    swarm_optim : SwarmOptimizer, optional
         Particle swarm optimizer object used to generate the state images, by default None
+    n_confirm_detections: int, optional
+        Number of detections required to confirm a target, by default 2.
+        If every target in the current scenario has been confirmed this many times, the episode is terminated.
     seed : int, optional
         Random seed used for the env's np_random member, by default None
     render_mode : str, optional
@@ -69,6 +76,7 @@ class ParticleSurveillance(gym.Env):
     self.death_probability = death_probability
     self.preexisting_states = preexisting_states
     self.initial_number_targets = initial_number_targets
+    self.n_confirm_detections = n_confirm_detections
     self.seed = seed
 
     self.observation_shape = (256, 256, 1)
@@ -133,8 +141,7 @@ class ParticleSurveillance(gym.Env):
         self.detection_count[target_id] = 0
       self.detection_count[target_id] += 1
       # Give a reward until the target has been detected too many times
-      # TODO: Don't hard-code this threshold
-      if self.detection_count[target_id] <= 5:
+      if self.detection_count[target_id] <= self.n_confirm_detections:
         cumulative_reward += 1
 
       # Update the particle swarm output
@@ -177,7 +184,13 @@ class ParticleSurveillance(gym.Env):
     observation = self._get_obs()
     reward = cumulative_reward
     info = self._get_info()
-    terminated = False
+
+    # Terminate the episode when all targets have been detected at least n_detections_max times
+    if len(self.detection_count.keys()) == len(self.target_history) and all(count >= self.n_confirm_detections for count in self.detection_count.values()):
+      terminated = True
+    else:
+      terminated = False
+
     truncated = False
 
     if self.render_mode == "human":
@@ -308,7 +321,7 @@ class ParticleSurveillance(gym.Env):
         self.initial_state.state_vector + \
         self.initial_state.covar @ \
         self.np_random.standard_normal(size=(self.initial_state.ndim, 1))
-    # Limit the az/el to the radar FOV
+    # Limit the az/el/range to the radar FOV
     # Assumes the first position index is az and the second is el
     state[self.radar.position_mapping[0]] = np.clip(
         state[self.radar.position_mapping[0]],
@@ -316,6 +329,9 @@ class ParticleSurveillance(gym.Env):
     state[self.radar.position_mapping[1]] = np.clip(
         state[self.radar.position_mapping[1]],
         self.radar.el_fov[0], self.radar.el_fov[1])
+    state[self.radar.position_mapping[2]] = np.clip(
+        state[self.radar.position_mapping[2]],
+        0, self.radar.max_range)
     # Convert state vector from spherical to cartesian
     x, y, z = sph2cart(*state[self.radar.position_mapping, :], degrees=True)
     state[self.radar.position_mapping, :] = np.array([x, y, z])[:, np.newaxis]
@@ -341,9 +357,13 @@ class ParticleSurveillance(gym.Env):
       path.append(GroundTruthState(
           updated_state, timestamp=self.time,
           metadata={"index": index}))
-      
+
       # Remove targets that have left the radar's FOV
       if not self.radar.is_detectable(path[-1]):
+        # Remove target ID from the detection count dictionary
+        if path.id in self.detection_count:
+          del self.detection_count[path.id]
+        # Remove target from the list of current targets
         self.target_paths.difference_update(path)
 
   ############################################################################

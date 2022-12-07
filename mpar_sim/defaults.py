@@ -34,8 +34,8 @@ def default_radar():
       noise_figure=4,
       # Scan settings
       beam_shape=RectangularBeam,
-      az_fov=[-60, 60],
-      el_fov=[-60, 60],
+      az_fov=[-45, 45],
+      el_fov=[-45, 45],
       # Detection settings
       false_alarm_rate=1e-6,
       include_false_alarms=False

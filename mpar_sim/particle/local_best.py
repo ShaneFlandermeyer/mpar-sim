@@ -206,3 +206,7 @@ class IncrementalLocalBestPSO(SwarmOptimizer):
 
     self.iter_count += 1
     return (self.swarm.best_cost, self.swarm.best_pos)
+
+  def reset(self):
+      super().reset()
+      self.swarm.pbest_cost = np.full(self.swarm_size[0], np.inf)

@@ -37,8 +37,8 @@ transition_model = CombinedLinearGaussianTransitionModel([
 
 # NOTE: Specifying initial state in terms of az/el/range (in degrees)!
 initial_state = GaussianState(
-    state_vector=[0, 0, 0, 0, 10e3, 0],
-    covar=np.diag([10, 0, 10, 0, 5e3, 0])
+    state_vector=[0, 0, 0, 0, 15e3, 0],
+    covar=np.diag([5, 100, 5, 100, 5e3, 0])
 )
 # Radar system object
 radar = default_radar()
@@ -52,10 +52,11 @@ env = gym.make('mpar_sim/ParticleSurveillance-v0',
                radar=radar,
                transition_model=transition_model,
                initial_state=initial_state,
-               birth_rate=0.01,
+               birth_rate=0,
                death_probability=0,
                initial_number_targets=20,
-               render_mode='rgb_array',
+               n_confirm_detections=1,
+               render_mode='human',
                )
 
 # %%
@@ -82,6 +83,11 @@ for i in range(1000):
           tx_power=look.tx_power,
       )
   )
+  done = terminated or truncated
+  if done:
+    # At this point, you would normally reset the environment. For this demonstration, we just break out of the loop
+    print("Episode finished after {} timesteps".format(i+1))
+    break
 
 # %%
 # Visualizations
