@@ -106,7 +106,7 @@ class ParticleSurveillance(gym.Env):
                                self.swarm_optim.bounds[1][1],
                                self.observation_shape[1])
 
-    # Render objects
+    # PyGame objects
     self.window = None
     self.clock = None
 
@@ -125,10 +125,21 @@ class ParticleSurveillance(gym.Env):
 
     detections = self.radar.measure(self.target_paths, noise=True)
 
-    # Update the particle swarm output
-    for det in detections:
-      az = det.state_vector[1].degrees
-      el = det.state_vector[0].degrees
+    cumulative_reward = 0
+    for detection in detections:
+      # Update the detection count for this target
+      target_id = detection.groundtruth_path.id
+      if target_id not in self.detection_count.keys():
+        self.detection_count[target_id] = 0
+      self.detection_count[target_id] += 1
+      # Give a reward until the target has been detected too many times
+      # TODO: Don't hard-code this threshold
+      if self.detection_count[target_id] <= 5:
+        cumulative_reward += 1
+
+      # Update the particle swarm output
+      az = detection.state_vector[1].degrees
+      el = detection.state_vector[0].degrees
       self.swarm_optim.optimize(
           self._distance_objective, detection_pos=np.array([az, el]))
 
@@ -164,10 +175,8 @@ class ParticleSurveillance(gym.Env):
 
     # Create outputs
     observation = self._get_obs()
+    reward = cumulative_reward
     info = self._get_info()
-    # TODO: Implement a simple reward function for the case without false alarms and no tracking
-    # This should give a positive reward each time a target is detected up to N detections, after which it should give no reward
-    reward = len(detections)
     terminated = False
     truncated = False
 
@@ -192,6 +201,7 @@ class ParticleSurveillance(gym.Env):
     # Reset metrics/helpful debug info
     self.target_history = []
     self.detection_history = []
+    self.detection_count = dict()
 
     observation = self._get_obs()
     info = self._get_info()
@@ -298,6 +308,14 @@ class ParticleSurveillance(gym.Env):
         self.initial_state.state_vector + \
         self.initial_state.covar @ \
         self.np_random.standard_normal(size=(self.initial_state.ndim, 1))
+    # Limit the az/el to the radar FOV
+    # Assumes the first position index is az and the second is el
+    state[self.radar.position_mapping[0]] = np.clip(
+        state[self.radar.position_mapping[0]],
+        self.radar.az_fov[0], self.radar.az_fov[1])
+    state[self.radar.position_mapping[1]] = np.clip(
+        state[self.radar.position_mapping[1]],
+        self.radar.el_fov[0], self.radar.el_fov[1])
     # Convert state vector from spherical to cartesian
     x, y, z = sph2cart(*state[self.radar.position_mapping, :], degrees=True)
     state[self.radar.position_mapping, :] = np.array([x, y, z])[:, np.newaxis]
@@ -314,7 +332,7 @@ class ParticleSurveillance(gym.Env):
 
   def _move_targets(self, dt: datetime.timedelta):
     """
-    Move targets forward in time
+    Move targets forward in time, removing targets that have left the radar's FOV
     """
     for path in self.target_paths:
       index = path[-1].metadata.get("index")
@@ -323,6 +341,10 @@ class ParticleSurveillance(gym.Env):
       path.append(GroundTruthState(
           updated_state, timestamp=self.time,
           metadata={"index": index}))
+      
+      # Remove targets that have left the radar's FOV
+      if not self.radar.is_detectable(path[-1]):
+        self.target_paths.difference_update(path)
 
   ############################################################################
   # Particle swarm methods

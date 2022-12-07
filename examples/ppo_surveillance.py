@@ -42,8 +42,8 @@ initial_state = GaussianState(
 )
 # Radar system object
 radar = default_radar()
-radar.false_alarm_rate = 1e-8
-radar.include_false_alarms = True
+radar.false_alarm_rate = 1e-6
+radar.include_false_alarms = False
 radar.element_tx_power = 25
 scheduler = default_scheduler(radar)
 

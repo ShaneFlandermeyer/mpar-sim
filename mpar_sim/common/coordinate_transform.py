@@ -56,22 +56,34 @@ def sph2cart(
 def cart2sph(
     x: Union[float, np.ndarray],
     y: Union[float, np.ndarray],
-    z: Union[float, np.ndarray]
+    z: Union[float, np.ndarray],
+    degrees: bool = False
 ) -> Union[Tuple[float, float, float], Tuple[np.ndarray, np.ndarray, np.ndarray]]:
   """
   Convert cartesian coordinates to spherical
 
-  Args:
-      x (Union[float, np.ndarray]): X coordinate
-      y (Union[float, np.ndarray]): Y coordinate
-      z (Union[float, np.ndarray]): Z coordinate
+  Parameters
+  ----------
+  x: Union[float, np.ndarray]
+    X coordinate
+  y: Union[float, np.ndarray]
+    Y coordinate
+  z: Union[float, np.ndarray]
+    Z coordinate
+  degrees: bool
+    Return az/el in degrees if true and radians if false, default is false
 
-  Returns:
+  Returns
+  -------
       Union[float, np.ndarray]: Spherical coordinates
   """
   azimuth = np.arctan2(y, x)
   elevation = np.arctan2(z, np.sqrt(x**2 + y**2))
   r = np.sqrt(x**2 + y**2 + z**2)
+  
+  if degrees:
+    azimuth = np.rad2deg(azimuth)
+    elevation = np.rad2deg(elevation)
 
   return (azimuth, elevation, r)
 

@@ -206,39 +206,3 @@ class IncrementalLocalBestPSO(SwarmOptimizer):
 
     self.iter_count += 1
     return (self.swarm.best_cost, self.swarm.best_pos)
-
-
-if __name__ == '__main__':
-
-  from pyswarms.utils.functions import single_obj as fx
-  from pyswarms.utils.plotters.formatters import Mesher
-  from pyswarms.utils.plotters import (
-      plot_cost_history, plot_contour, plot_surface)
-
-  import matplotlib.pyplot as plt
-
-  # Set-up hyperparameters
-  options = {'c1': 0.5, 'c2': 0.3, 'w': 0.9}
-
-  # Call instance of GlobalBestPSO
-  optimizer = IncrementalGlobalBestPSO(n_particles=100,
-                                       dimensions=2,
-                                       options=options,
-                                       bounds=None
-                                       )
-
-  # Perform optimization
-  tic = time.time()
-  for i in range(100):
-    optimizer.optimize(fx.sphere)
-  print('Time: ', time.time() - tic)
-
-  # Initialize mesher with sphere function
-  # plot_cost_history(cost_history=optimizer.cost_history)
-  m = Mesher(func=fx.sphere)
-  animation = plot_contour(pos_history=optimizer.pos_history,
-                           mesher=m,
-                           mark=(0, 0))
-#   animation.save('plot0.gif', writer='imagemagick', fps=10)
-  # plt.show()
-  # print(optimizer.cost_history)

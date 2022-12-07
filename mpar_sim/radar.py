@@ -207,12 +207,14 @@ class PhasedArrayRadar(Sensor):
     bool
         Whether the target can be detected by the radar
     """
-    measurement_vector = self.measurement_model.function(state, noise=False)
+    pos_xyz = state.state_vector[self.position_mapping, :]
+    az, el, range = cart2sph(*pos_xyz, degrees=True)
     # Check if state falls within sensor's FOV
-    az_t = measurement_vector[1, 0].degrees - self.rotation_offset[2]
-    el_t = measurement_vector[0, 0].degrees - self.rotation_offset[1]
-    true_range = measurement_vector[2, 0]
-    return (self.az_fov[0] <= az_t <= self.az_fov[1]) and (self.el_fov[0] <= el_t <= self.el_fov[1]) and (true_range <= self.max_range)
+    relative_az = az - self.rotation_offset[2]
+    relative_el = el - self.rotation_offset[1]
+    return (self.az_fov[0] <= relative_az <= self.az_fov[1]) and \
+           (self.el_fov[0] <= relative_el <= self.el_fov[1]) and \
+           (range <= self.max_range)
 
   def measure(self,
               ground_truths: Set[GroundTruthState],
