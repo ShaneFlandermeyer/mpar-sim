@@ -82,6 +82,8 @@ class RasterScanAgent(Agent):
     """
     Select a new set of task parameters
 
+    TODO: This should take an observation and return only one task for gym compatibility 
+    
     Parameters
     ----------
     current_time: datetime.datetime

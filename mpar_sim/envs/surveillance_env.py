@@ -49,7 +49,6 @@ class ParticleSurveillance(gym.Env):
     self.initial_number_targets = initial_number_targets
     self.seed = seed
 
-    # TODO: Let the user specify the image size
     self.observation_shape = (256, 256, 1)
     self.observation_space = spaces.Box(
         low=np.zeros(self.observation_shape, dtype=np.uint8),
@@ -57,7 +56,6 @@ class ParticleSurveillance(gym.Env):
         dtype=np.uint8)
 
     # Currently, actions are limited to beam steering angles in azimuth and elevation
-    # TODO: Make the action space include all look parameters
     self.action_space = spaces.Dict(
         {
             "azimuth_steering_angle": spaces.Box(-90, 90, shape=(1,), dtype=np.float32),
@@ -146,7 +144,8 @@ class ParticleSurveillance(gym.Env):
     # Create outputs
     observation = self._get_obs()
     info = self._get_info()
-    # TODO: Implement a real reward function
+    # TODO: Implement a simple reward function for the case without false alarms and no tracking
+    # This should give a positive reward each time a target is detected up to N detections, after which it should give no reward
     reward = len(detections)
     terminated = False
     truncated = False
@@ -223,6 +222,7 @@ class ParticleSurveillance(gym.Env):
       self.clock = pygame.time.Clock()
 
     # Draw canvas from pixels
+    # The observation gets inverted here because I want black pixels on a white background.
     pixels = ~self._get_obs()
     canvas = pygame.surfarray.make_surface(pixels.squeeze())
 
@@ -323,6 +323,19 @@ class ParticleSurveillance(gym.Env):
     return np.linalg.norm(swarm_pos - detection_pos, axis=1)
 
   def _action_dict_to_look(self, action: Dict) -> Look:
+    """
+    Convert an action dictionary with the necessary fields to a Look object
+
+    Parameters
+    ----------
+    action : Dict
+        Action dictionary
+
+    Returns
+    -------
+    Look
+        Look object that can be used to interface with the radar simulator
+    """
     return Look(
       azimuth_steering_angle=action["azimuth_steering_angle"],
       elevation_steering_angle=action["elevation_steering_angle"],
@@ -337,38 +350,3 @@ class ParticleSurveillance(gym.Env):
     )
     
 
-if __name__ == '__main__':
-  # Target generation model
-  transition_model = CombinedLinearGaussianTransitionModel([
-      ConstantVelocity(10),
-      ConstantVelocity(10),
-      ConstantVelocity(0),
-  ])
-  initial_state_mean = StateVector([10e3, 10, 0, 0, 0, 0])
-  initial_state_covariance = CovarianceMatrix(
-      np.diag([200, 20, 200, 20, 2000, 10]))
-  initial_state = GaussianState(
-      initial_state_mean, initial_state_covariance)
-
-  # Radar system object
-  radar = default_radar()
-  agent = default_raster_scan_agent()
-
-  # Environment
-  env = ParticleSurveillance(
-      radar=radar,
-      transition_model=transition_model,
-      initial_state=initial_state,
-      birth_rate=0.1,
-      death_probability=0.01,
-      initial_number_targets=20,
-      render_mode='human',
-  )
-  env.reset()
-
-  for i in range(1000):
-    look = agent.act(env.time)[0]
-    az = look.azimuth_steering_angle
-    el = look.elevation_steering_angle
-
-    obs, reward, terminated, truncated, info = env.step(np.array([az, el]))
