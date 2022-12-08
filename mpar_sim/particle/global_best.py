@@ -119,7 +119,7 @@ class IncrementalGlobalBestPSO(SwarmOptimizer):
       options,
       bounds=None,
       oh_strategy=None,
-      bh_strategy="periodic",
+      bh_strategy="reflective",
       velocity_clamp=None,
       vh_strategy="unmodified",
       center=1.0,

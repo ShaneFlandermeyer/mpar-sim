@@ -91,11 +91,8 @@ class ParticleSurveillance(gym.Env):
     self.max_random_el_covar = max_random_el_covar
     self.seed = seed
 
-    self.observation_shape = (256, 256, 1)
     self.observation_space = spaces.Box(
-        low=np.zeros(self.observation_shape, dtype=np.uint8),
-        high=255*np.ones(self.observation_shape, dtype=np.uint8),
-        dtype=np.uint8)
+        low=0, high=255, shape=(512, 512, 1), dtype=np.uint8)
 
     # Currently, actions are limited to beam steering angles in azimuth and elevation
     self.action_space = spaces.Dict(
@@ -121,10 +118,10 @@ class ParticleSurveillance(gym.Env):
     # Pre-compute azimuth/elevation axis values needed to digitize the particles for the observation output
     self.az_axis = np.linspace(self.swarm_optim.bounds[0][0],
                                self.swarm_optim.bounds[1][0],
-                               self.observation_shape[0])
+                               self.observation_space.shape[0])
     self.el_axis = np.linspace(self.swarm_optim.bounds[0][1],
                                self.swarm_optim.bounds[1][1],
-                               self.observation_shape[1])
+                               self.observation_space.shape[1])
 
     # PyGame objects
     self.window = None
@@ -277,7 +274,7 @@ class ParticleSurveillance(gym.Env):
         self.swarm_optim.swarm.position[:, 0], self.az_axis) - 1
     el_indices = np.digitize(
         self.swarm_optim.swarm.position[:, 1], self.el_axis) - 1
-    obs = np.zeros(self.observation_shape, dtype=np.uint8)
+    obs = np.zeros(self.observation_space.shape, dtype=np.uint8)
     obs[az_indices, el_indices] = 255
     return obs
 
@@ -289,7 +286,7 @@ class ParticleSurveillance(gym.Env):
       pygame.init()
       pygame.display.init()
       self.window = pygame.display.set_mode(
-          self.observation_shape[:2])
+          self.observation_space.shape[:2])
 
     if self.clock is None and self.render_mode == "human":
       self.clock = pygame.time.Clock()
@@ -297,7 +294,8 @@ class ParticleSurveillance(gym.Env):
     # Draw canvas from pixels
     # The observation gets inverted here because I want black pixels on a white background.
     pixels = ~self._get_obs()
-    canvas = pygame.surfarray.make_surface(pixels.squeeze())
+    pixels = np.flip(pixels.squeeze(), axis=1)
+    canvas = pygame.surfarray.make_surface(pixels)
 
     if self.render_mode == "human":
       # Copy canvas drawings to the window

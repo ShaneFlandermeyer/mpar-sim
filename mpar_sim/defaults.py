@@ -62,7 +62,7 @@ def default_gbest_pso():
   return IncrementalGlobalBestPSO(n_particles=1000,
                                   dimensions=2,
                                   options=options,
-                                  bounds=([-45, -45], [45, 45]),
+                                  bounds=np.array([[-45, -45], [45, 45]]),
                                   pbest_reset_interval=1000,
                                   )
 
@@ -72,7 +72,7 @@ def default_lbest_pso():
   return IncrementalLocalBestPSO(n_particles=1000,
                                  dimensions=2,
                                  options=options,
-                                 bounds=([-45, -45], [45, 45]),
+                                 bounds=np.array([[-45, -45], [45, 45]]),
                                  pbest_reset_interval=1000,
                                  )
 
