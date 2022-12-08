@@ -56,8 +56,8 @@ env = gym.make('mpar_sim/ParticleSurveillance-v0',
                initial_state=initial_state,
                birth_rate=0,
                death_probability=0,
-               initial_number_targets=20,
-               n_confirm_detections=1,
+               initial_number_targets=25,
+               n_confirm_detections=2,
                randomize_initial_state=True,
                render_mode='rgb_array',
                )
@@ -68,7 +68,8 @@ agent = default_raster_scan_agent()
 
 obs, info = env.reset()
 tic = time.time()
-for i in range(1000):
+i = 0
+while True:
   # Create a look and schedule it. This fills in the tx power field based on the number of elements used to form the beam
   action = agent.act(env.time)
   scheduler.schedule(list(action), env.time)
@@ -90,11 +91,12 @@ for i in range(1000):
   done = terminated or truncated
   if done:
     # At this point, you would normally reset the environment. For this demonstration, we just break out of the loop
+    toc = time.time()
     print("Episode finished after {} timesteps".format(i+1))
+    print(f"Episode took {toc-tic} seconds")
     break
-    obs, info = env.reset()
-toc = time.time()
-print(f"Episode took {toc-tic} seconds")
+  i += 1
+
 
 # %%
 # Visualizations

@@ -340,7 +340,7 @@ class ParticleSurveillance(gym.Env):
     time : datetime.datetime
         Time of target creation
     state_vector : StateVector, optional
-        Target state, by default None
+        Target state where the position components are given in az/el/range in degrees and the velocities are in m/s, by default None
 
     Returns
     -------
@@ -377,7 +377,7 @@ class ParticleSurveillance(gym.Env):
           updated_state, timestamp=self.time,
           metadata={"index": index}))
 
-    # TODO: Remove target IDs from the dictionary if that target has left the FOV
+    # Remove targets that have left the radar FOV
     stale_targets = set()
     for path in self.target_paths:
       if not self.radar.is_detectable(path[-1]):
