@@ -1,5 +1,6 @@
 # %%
 # Imports
+import time
 from stonesoup.plotter import Plotter, Dimension
 import matplotlib.pyplot as plt
 from pyswarms.utils.plotters.formatters import Designer
@@ -38,13 +39,14 @@ transition_model = CombinedLinearGaussianTransitionModel([
 # NOTE: Specifying initial state in terms of az/el/range (in degrees)!
 initial_state = GaussianState(
     state_vector=[0, 0, 0, 0, 15e3, 0],
-    covar=np.diag([5, 100, 5, 100, 5e3, 0])
+    covar=np.diag([10, 100, 10, 100, 5e3, 100])
 )
 # Radar system object
 radar = default_radar()
-radar.false_alarm_rate = 1e-6
+radar.false_alarm_rate = 1e-7
 radar.include_false_alarms = False
-radar.element_tx_power = 25
+radar.element_tx_power = 1000
+radar.max_range = 20e3
 scheduler = default_scheduler(radar)
 
 # Environment
@@ -56,7 +58,8 @@ env = gym.make('mpar_sim/ParticleSurveillance-v0',
                death_probability=0,
                initial_number_targets=20,
                n_confirm_detections=1,
-               render_mode='human',
+               randomize_initial_state=True,
+               render_mode='rgb_array',
                )
 
 # %%
@@ -64,6 +67,7 @@ env = gym.make('mpar_sim/ParticleSurveillance-v0',
 agent = default_raster_scan_agent()
 
 obs, info = env.reset()
+tic = time.time()
 for i in range(1000):
   # Create a look and schedule it. This fills in the tx power field based on the number of elements used to form the beam
   action = agent.act(env.time)
@@ -88,6 +92,9 @@ for i in range(1000):
     # At this point, you would normally reset the environment. For this demonstration, we just break out of the loop
     print("Episode finished after {} timesteps".format(i+1))
     break
+    obs, info = env.reset()
+toc = time.time()
+print(f"Episode took {toc-tic} seconds")
 
 # %%
 # Visualizations

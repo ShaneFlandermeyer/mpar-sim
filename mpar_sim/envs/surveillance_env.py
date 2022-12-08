@@ -11,7 +11,7 @@ from stonesoup.models.transition.base import TransitionModel
 from stonesoup.types.array import StateVector
 from stonesoup.types.groundtruth import GroundTruthPath, GroundTruthState
 from stonesoup.types.state import GaussianState
-
+from stonesoup.types.detection import Clutter
 from mpar_sim.common.coordinate_transform import sph2cart
 from mpar_sim.defaults import default_gbest_pso, default_lbest_pso
 from mpar_sim.looks.look import Look
@@ -34,6 +34,9 @@ class ParticleSurveillance(gym.Env):
                # Particle swarm parameters
                swarm_optim: SwarmOptimizer = None,
                # Environment parameters
+               randomize_initial_state: bool = False,
+               max_random_az_covar: float = 10,
+               max_random_el_covar: float = 10,
                n_confirm_detections: int = 2,
                seed: int = None,
                render_mode: str = None):
@@ -63,6 +66,12 @@ class ParticleSurveillance(gym.Env):
     n_confirm_detections: int, optional
         Number of detections required to confirm a target, by default 2.
         If every target in the current scenario has been confirmed this many times, the episode is terminated.
+    randomize_initial_state: bool, optional
+        If true, the initial state is randomized on every call to reset(), by default false
+    max_random_az_covar: float, optional
+        Specifies the maximum azimuth covariance when the initial state is randomized, by default 10
+    max_random_el_covar: float, optional
+        Specifies the maximum elevation covariance when the initial state is randomized, by default 10
     seed : int, optional
         Random seed used for the env's np_random member, by default None
     render_mode : str, optional
@@ -77,6 +86,9 @@ class ParticleSurveillance(gym.Env):
     self.preexisting_states = preexisting_states
     self.initial_number_targets = initial_number_targets
     self.n_confirm_detections = n_confirm_detections
+    self.randomize_initial_state = randomize_initial_state
+    self.max_random_az_covar = max_random_az_covar
+    self.max_random_el_covar = max_random_el_covar
     self.seed = seed
 
     self.observation_shape = (256, 256, 1)
@@ -136,13 +148,15 @@ class ParticleSurveillance(gym.Env):
     cumulative_reward = 0
     for detection in detections:
       # Update the detection count for this target
-      target_id = detection.groundtruth_path.id
-      if target_id not in self.detection_count.keys():
-        self.detection_count[target_id] = 0
-      self.detection_count[target_id] += 1
-      # Give a reward until the target has been detected too many times
-      if self.detection_count[target_id] <= self.n_confirm_detections:
-        cumulative_reward += 1
+      # TODO: In practice, we won't know if the detection is from clutter or not. However, for the first simulation I'm assuming no false alarms so this is to make the reward calculation still work when the false alarm switch is on
+      if not isinstance(detection, Clutter):
+        target_id = detection.groundtruth_path.id
+        if target_id not in self.detection_count.keys():
+          self.detection_count[target_id] = 0
+        self.detection_count[target_id] += 1
+        # Give a reward until the target has been detected too many times
+        if self.detection_count[target_id] <= self.n_confirm_detections:
+          cumulative_reward += 1
 
       # Update the particle swarm output
       az = detection.state_vector[1].degrees
@@ -186,7 +200,8 @@ class ParticleSurveillance(gym.Env):
     info = self._get_info()
 
     # Terminate the episode when all targets have been detected at least n_detections_max times
-    if len(self.detection_count.keys()) == len(self.target_history) and all(count >= self.n_confirm_detections for count in self.detection_count.values()):
+    if len(self.detection_count) == len(self.target_paths) and \
+            all(count >= self.n_confirm_detections for count in self.detection_count.values()):
       terminated = True
     else:
       terminated = False
@@ -206,7 +221,20 @@ class ParticleSurveillance(gym.Env):
     self.index = 0
 
     # Reset targets
-    # TODO: Initial state mean/covariance should be generated randomly at each reset
+    if self.randomize_initial_state:
+      az_idx, el_idx, range_idx = self.radar.position_mapping
+      # Randomize the mean state vector
+      self.initial_state.state_vector[az_idx] = self.np_random.uniform(
+          self.radar.az_fov[0],
+          self.radar.az_fov[1])
+      self.initial_state.state_vector[el_idx] = self.np_random.uniform(
+          self.radar.el_fov[0],
+          self.radar.el_fov[1])
+      # Randomize the covariance
+      self.initial_state.covar[az_idx, az_idx] = self.np_random.uniform(
+          0, self.max_random_az_covar)
+      self.initial_state.covar[el_idx, el_idx] = self.np_random.uniform(
+          0, self.max_random_el_covar)
     self._initialize_targets()
 
     self.swarm_optim.reset()
@@ -301,7 +329,9 @@ class ParticleSurveillance(gym.Env):
     else:
       self.target_paths = OrderedSet()
 
-  def _new_target(self, time: datetime.datetime, state_vector: Optional[StateVector] = None) -> GroundTruthPath:
+  def _new_target(self,
+                  time: datetime.datetime,
+                  state_vector: Optional[StateVector] = None) -> GroundTruthPath:
     """
     Create a new target from the given state vector
 
@@ -321,17 +351,6 @@ class ParticleSurveillance(gym.Env):
         self.initial_state.state_vector + \
         self.initial_state.covar @ \
         self.np_random.standard_normal(size=(self.initial_state.ndim, 1))
-    # Limit the az/el/range to the radar FOV
-    # Assumes the first position index is az and the second is el
-    state[self.radar.position_mapping[0]] = np.clip(
-        state[self.radar.position_mapping[0]],
-        self.radar.az_fov[0], self.radar.az_fov[1])
-    state[self.radar.position_mapping[1]] = np.clip(
-        state[self.radar.position_mapping[1]],
-        self.radar.el_fov[0], self.radar.el_fov[1])
-    state[self.radar.position_mapping[2]] = np.clip(
-        state[self.radar.position_mapping[2]],
-        0, self.radar.max_range)
     # Convert state vector from spherical to cartesian
     x, y, z = sph2cart(*state[self.radar.position_mapping, :], degrees=True)
     state[self.radar.position_mapping, :] = np.array([x, y, z])[:, np.newaxis]
@@ -358,17 +377,20 @@ class ParticleSurveillance(gym.Env):
           updated_state, timestamp=self.time,
           metadata={"index": index}))
 
-      # Remove targets that have left the radar's FOV
+    # TODO: Remove target IDs from the dictionary if that target has left the FOV
+    stale_targets = set()
+    for path in self.target_paths:
       if not self.radar.is_detectable(path[-1]):
-        # Remove target ID from the detection count dictionary
+        stale_targets.add(path)
         if path.id in self.detection_count:
           del self.detection_count[path.id]
-        # Remove target from the list of current targets
-        self.target_paths.difference_update(path)
+
+    self.target_paths.difference_update(stale_targets)
 
   ############################################################################
   # Particle swarm methods
   ############################################################################
+
   def _distance_objective(self,
                           swarm_pos: np.ndarray,
                           detection_pos: np.ndarray) -> np.ndarray:
