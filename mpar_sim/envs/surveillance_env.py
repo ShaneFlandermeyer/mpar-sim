@@ -39,7 +39,8 @@ class ParticleSurveillance(gym.Env):
                max_random_el_covar: float = 10,
                n_confirm_detections: int = 2,
                seed: int = None,
-               render_mode: str = None):
+               render_mode: str = None
+               ):
     """
     An environment for simulating a radar surveillance scenario. Targets are generated with initial positions/velocities drawn from a Gaussian distribution and new targets are generated from a poisson process.
 
@@ -95,20 +96,36 @@ class ParticleSurveillance(gym.Env):
         low=0, high=255, shape=(512, 512, 1), dtype=np.uint8)
 
     # Currently, actions are limited to beam steering angles in azimuth and elevation
-    self.action_space = spaces.Dict(
-        {
-            "azimuth_steering_angle": spaces.Box(-90, 90, shape=(1,), dtype=np.float32),
-            "elevation_steering_angle": spaces.Box(-90, 90, shape=(1,), dtype=np.float32),
-            "azimuth_beamwidth": spaces.Box(0, np.inf, shape=(1,), dtype=np.float32),
-            "elevation_beamwidth": spaces.Box(0, np.inf, shape=(1,), dtype=np.float32),
-            "bandwidth": spaces.Box(0, np.inf, shape=(1,), dtype=np.float32),
-            "pulsewidth": spaces.Box(0, np.inf, shape=(1,), dtype=np.float32),
-            "prf": spaces.Box(0, np.inf, shape=(1,), dtype=np.float32),
-            "n_pulses": spaces.Box(0, np.inf, shape=(1,), dtype=np.float32),
-            "tx_power": spaces.Box(0, np.inf, shape=(1,), dtype=np.float32),
-        }
-    )
-
+    self.action_space = spaces.Tuple((
+        # Azimuth steering angle
+        spaces.Box(self.radar.az_fov[0], self.radar.az_fov[1], dtype=np.float32),
+        # Elevation steering angle
+        spaces.Box(self.radar.el_fov[0], self.radar.el_fov[1], dtype=np.float32),
+        # TODO: Add other look parameters to the action space
+        # Azimuth beamwidth
+        # spaces.Box(0, np.inf, shape=(1,), dtype=np.float32),
+        # # elevation_beamwidth
+        # spaces.Box(0, np.inf, shape=(1,), dtype=np.float32),
+        # # bandwidth
+        # spaces.Box(0, np.inf, shape=(1,), dtype=np.float32),
+        # # pulsewidth 
+        # spaces.Box(0, np.inf, shape=(1,), dtype=np.float32),
+        # # prf 
+        # spaces.Box(0, np.inf, shape=(1,), dtype=np.float32),
+        # # n_pulses
+        # spaces.Box(0, np.inf, shape=(1,), dtype=np.float32),
+        # # tx_power
+        # spaces.Box(0, np.inf, shape=(1,), dtype=np.float32),
+    ))
+    # TODO: Hard-coding these for now
+    self.azimuth_beamwidth = 5
+    self.elevation_beamwidth = 5
+    self.bandwidth = 100e6
+    self.pulsewidth = 10e-6
+    self.prf = 5e3
+    self.n_pulses = 100
+    self.tx_power = 22e3
+    
     assert render_mode is None or render_mode in self.metadata["render_modes"]
     self.render_mode = render_mode
 
@@ -129,7 +146,19 @@ class ParticleSurveillance(gym.Env):
 
   def step(self, action: Dict):
 
-    look = self._action_dict_to_look(action)
+    # TODO: Add a resource management component here
+    look = Look(
+        azimuth_steering_angle=action[0],
+        elevation_steering_angle=action[1],
+        azimuth_beamwidth=self.azimuth_beamwidth,
+        elevation_beamwidth=self.elevation_beamwidth,
+        bandwidth=self.bandwidth,
+        pulsewidth=self.pulsewidth,
+        prf=self.prf,
+        n_pulses=self.n_pulses,
+        tx_power=self.tx_power,
+        start_time=self.time,
+    )
 
     # Point the radar in the right direction
     self.radar.load_look(look)
@@ -197,6 +226,7 @@ class ParticleSurveillance(gym.Env):
     info = self._get_info()
 
     # Terminate the episode when all targets have been detected at least n_detections_max times
+    # TODO: Set a maximum number of steps per episode
     if len(self.detection_count) == len(self.target_paths) and \
             all(count >= self.n_confirm_detections for count in self.detection_count.values()):
       terminated = True
@@ -257,7 +287,7 @@ class ParticleSurveillance(gym.Env):
     if self.window is not None:
       pygame.display.quit()
       pygame.quit()
-
+    
   ############################################################################
   # Internal gym-specific methods
   ############################################################################
@@ -408,30 +438,3 @@ class ParticleSurveillance(gym.Env):
         The distance of each particle from the detection
     """
     return np.linalg.norm(swarm_pos - detection_pos, axis=1)
-
-  def _action_dict_to_look(self, action: Dict) -> Look:
-    """
-    Convert an action dictionary with the necessary fields to a Look object
-
-    Parameters
-    ----------
-    action : Dict
-        Action dictionary
-
-    Returns
-    -------
-    Look
-        Look object that can be used to interface with the radar simulator
-    """
-    return Look(
-        azimuth_steering_angle=action["azimuth_steering_angle"],
-        elevation_steering_angle=action["elevation_steering_angle"],
-        azimuth_beamwidth=action["azimuth_beamwidth"],
-        elevation_beamwidth=action["elevation_beamwidth"],
-        bandwidth=action["bandwidth"],
-        pulsewidth=action["pulsewidth"],
-        prf=action["prf"],
-        n_pulses=action["n_pulses"],
-        tx_power=action["tx_power"],
-        start_time=self.time,
-    )
