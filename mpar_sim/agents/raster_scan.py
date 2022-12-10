@@ -78,7 +78,7 @@ class RasterScanAgent(Agent):
     self.current_position = 0
     self.time = None
 
-  def act(self, current_time: datetime.datetime, n_looks: int = 1) -> List[VolumeSearchLook]:
+  def act(self, obs) -> VolumeSearchLook:
     """
     Select a new set of task parameters
 
@@ -94,28 +94,19 @@ class RasterScanAgent(Agent):
     Look
         A new look at the next beam position in the raster scan
     """
-    if self.time is None:
-      self.time = current_time
-      
-    
-    looks = []
-    for _ in range(n_looks):
-        beam_position = self.beam_positions[:, self.current_position]
-        self.current_position = (self.current_position + 1) % self.n_positions
 
-        # Create a new look
-        look = VolumeSearchLook(
-            start_time=current_time,
-            azimuth_steering_angle=beam_position[0],
-            elevation_steering_angle=beam_position[1],
-            azimuth_beamwidth=self.azimuth_beamwidth,
-            elevation_beamwidth=self.elevation_beamwidth,
-            bandwidth=self.bandwidth,
-            pulsewidth=self.pulsewidth,
-            prf=self.prf,
-            n_pulses=self.n_pulses,
-            priority=self.priority,
-        )
-        looks.append(look)
-
-    return looks
+    beam_position = self.beam_positions[:, self.current_position]
+    self.current_position = (self.current_position + 1) % self.n_positions
+    # Create a new look
+    look = VolumeSearchLook(
+        azimuth_steering_angle=beam_position[0],
+        elevation_steering_angle=beam_position[1],
+        azimuth_beamwidth=self.azimuth_beamwidth,
+        elevation_beamwidth=self.elevation_beamwidth,
+        bandwidth=self.bandwidth,
+        pulsewidth=self.pulsewidth,
+        prf=self.prf,
+        n_pulses=self.n_pulses,
+        priority=self.priority,
+    )
+    return look

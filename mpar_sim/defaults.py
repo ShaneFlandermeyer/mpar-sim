@@ -46,8 +46,8 @@ def default_raster_scan_agent():
   return RasterScanAgent(
       azimuth_scan_limits=np.array([-45, 45]),
       elevation_scan_limits=np.array([-45, 45]),
-      azimuth_beam_spacing=0.8,
-      elevation_beam_spacing=0.8,
+      azimuth_beam_spacing=0.75,
+      elevation_beam_spacing=0.75,
       azimuth_beamwidth=5,
       elevation_beamwidth=5,
       bandwidth=100e6,
@@ -59,7 +59,7 @@ def default_raster_scan_agent():
 
 def default_gbest_pso():
   options = {'c1': 0.2, 'c2': 0.5, 'w': 0.8}
-  return IncrementalGlobalBestPSO(n_particles=1000,
+  return IncrementalGlobalBestPSO(n_particles=2500,
                                   dimensions=2,
                                   options=options,
                                   bounds=np.array([[-45, -45], [45, 45]]),
@@ -69,7 +69,7 @@ def default_gbest_pso():
 
 def default_lbest_pso():
   options = {'c1': 0.2, 'c2': 0.5, 'w': 0.8}
-  return IncrementalLocalBestPSO(n_particles=1000,
+  return IncrementalLocalBestPSO(n_particles=2500,
                                  dimensions=2,
                                  options=options,
                                  bounds=np.array([[-45, -45], [45, 45]]),

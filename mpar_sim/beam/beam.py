@@ -80,7 +80,8 @@ class RectangularBeam(Beam):
         Union[float, np.ndarray]: Beam shape loss (dB)
     """
     loss = np.zeros_like(az)
-    loss[np.logical_or(np.abs(az) > self.azimuth_beamwidth/2, np.abs(el) > self.elevation_beamwidth/2)] = np.inf
+    loss[np.logical_or(np.abs(az) > self.azimuth_beamwidth/2,
+                       np.abs(el) > self.elevation_beamwidth/2)] = np.inf
     return loss
 
 

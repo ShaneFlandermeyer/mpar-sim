@@ -24,6 +24,13 @@ class ParticleSurveillance(gym.Env):
 
   def __init__(self,
                radar: PhasedArrayRadar,
+               # Radar parameters
+               azimuth_beamwidth: float,
+               elevation_beamwidth: float,
+               bandwidth: float,
+               pulsewidth: float,
+               prf: float,
+               n_pulses: float,
                # Target generation parameters
                transition_model: TransitionModel,
                initial_state: GaussianState,
@@ -39,7 +46,7 @@ class ParticleSurveillance(gym.Env):
                max_random_el_covar: float = 10,
                n_confirm_detections: int = 2,
                seed: int = None,
-               render_mode: str = None
+               render_mode: str = None,
                ):
     """
     An environment for simulating a radar surveillance scenario. Targets are generated with initial positions/velocities drawn from a Gaussian distribution and new targets are generated from a poisson process.
@@ -91,6 +98,13 @@ class ParticleSurveillance(gym.Env):
     self.max_random_az_covar = max_random_az_covar
     self.max_random_el_covar = max_random_el_covar
     self.seed = seed
+    # Radar parameters
+    self.azimuth_beamwidth = azimuth_beamwidth
+    self.elevation_beamwidth = elevation_beamwidth
+    self.bandwidth = bandwidth
+    self.pulsewidth = pulsewidth
+    self.prf = prf
+    self.n_pulses = n_pulses
 
     self.observation_space = spaces.Box(
         low=0, high=255, shape=(512, 512, 1), dtype=np.uint8)
@@ -98,34 +112,27 @@ class ParticleSurveillance(gym.Env):
     # Currently, actions are limited to beam steering angles in azimuth and elevation
     self.action_space = spaces.Tuple((
         # Azimuth steering angle
-        spaces.Box(self.radar.az_fov[0], self.radar.az_fov[1], dtype=np.float32),
+        spaces.Box(self.radar.az_fov[0],
+                   self.radar.az_fov[1], dtype=np.float32),
         # Elevation steering angle
-        spaces.Box(self.radar.el_fov[0], self.radar.el_fov[1], dtype=np.float32),
+        spaces.Box(self.radar.el_fov[0],
+                   self.radar.el_fov[1], dtype=np.float32),
         # TODO: Add other look parameters to the action space
-        # Azimuth beamwidth
+        # # Azimuth beamwidth
         # spaces.Box(0, np.inf, shape=(1,), dtype=np.float32),
         # # elevation_beamwidth
         # spaces.Box(0, np.inf, shape=(1,), dtype=np.float32),
         # # bandwidth
         # spaces.Box(0, np.inf, shape=(1,), dtype=np.float32),
-        # # pulsewidth 
+        # # pulsewidth
         # spaces.Box(0, np.inf, shape=(1,), dtype=np.float32),
-        # # prf 
+        # # prf
         # spaces.Box(0, np.inf, shape=(1,), dtype=np.float32),
         # # n_pulses
         # spaces.Box(0, np.inf, shape=(1,), dtype=np.float32),
-        # # tx_power
-        # spaces.Box(0, np.inf, shape=(1,), dtype=np.float32),
     ))
-    # TODO: Hard-coding these for now
-    self.azimuth_beamwidth = 5
-    self.elevation_beamwidth = 5
-    self.bandwidth = 100e6
-    self.pulsewidth = 10e-6
-    self.prf = 5e3
-    self.n_pulses = 100
-    self.tx_power = 22e3
     
+
     assert render_mode is None or render_mode in self.metadata["render_modes"]
     self.render_mode = render_mode
 
@@ -156,7 +163,8 @@ class ParticleSurveillance(gym.Env):
         pulsewidth=self.pulsewidth,
         prf=self.prf,
         n_pulses=self.n_pulses,
-        tx_power=self.tx_power,
+        tx_power=self.radar.n_elements_x *
+        self.radar.n_elements_y*self.radar.element_tx_power,
         start_time=self.time,
     )
 
@@ -226,7 +234,6 @@ class ParticleSurveillance(gym.Env):
     info = self._get_info()
 
     # Terminate the episode when all targets have been detected at least n_detections_max times
-    # TODO: Set a maximum number of steps per episode
     if len(self.detection_count) == len(self.target_paths) and \
             all(count >= self.n_confirm_detections for count in self.detection_count.values()):
       terminated = True
@@ -287,7 +294,7 @@ class ParticleSurveillance(gym.Env):
     if self.window is not None:
       pygame.display.quit()
       pygame.quit()
-    
+
   ############################################################################
   # Internal gym-specific methods
   ############################################################################
@@ -309,9 +316,23 @@ class ParticleSurveillance(gym.Env):
     return obs
 
   def _get_info(self):
-    return {}
+    # Compute the fraction of targets in the scenario that have been initiated (i.e. detected at least n_confirm_detections times)
+    n_initiated_targets = np.sum(
+        [count >= self.n_confirm_detections for count in self.detection_count.values()])
+    initiation_ratio = n_initiated_targets / len(self.target_paths)
+    return {
+        "initiation_ratio": initiation_ratio,
+    }
 
-  def _render_frame(self):
+  def _render_frame(self) -> Optional[np.ndarray]:
+    """
+    Draw the current observation in a PyGame window if render_mode is 'human', or return the pixels as a numpy array if not.
+
+    Returns
+    -------
+    Optional[np.ndarray]
+        Grayscale pixel representation of the observation if render_mode is 'rgb_array', otherwise None.
+    """
     if self.window is None and self.render_mode == "human":
       pygame.init()
       pygame.display.init()
