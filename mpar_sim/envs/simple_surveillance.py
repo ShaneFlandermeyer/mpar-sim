@@ -19,7 +19,7 @@ from mpar_sim.radar import PhasedArrayRadar
 from pyswarms.base.base_single import SwarmOptimizer
 
 
-class ParticleSurveillance(gym.Env):
+class SimpleParticleSurveillance(gym.Env):
   metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 60}
 
   def __init__(self,

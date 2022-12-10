@@ -2,11 +2,14 @@
 # Imports
 import copy
 import time
-import cv2
+import warnings
 
+import cv2
 import gymnasium as gym
 import matplotlib.pyplot as plt
 import numpy as np
+import pytorch_lightning as pl
+import torch
 from lightning_rl.models.on_policy_models import PPO
 from pyswarms.utils.functions import single_obj as fx
 from pyswarms.utils.plotters import (plot_contour, plot_cost_history,
@@ -18,21 +21,19 @@ from stonesoup.plotter import Dimension, Plotter
 from stonesoup.types.array import CovarianceMatrix, StateVector
 from stonesoup.types.state import GaussianState
 from torch import distributions, nn
-import torch
+
+import mpar_sim.envs
 from mpar_sim.agents.raster_scan import RasterScanAgent
 from mpar_sim.beam.beam import GaussianBeam, RectangularBeam
 from mpar_sim.common.wrap_to_interval import wrap_to_interval
-
-import mpar_sim.envs
 from mpar_sim.defaults import (default_gbest_pso, default_lbest_pso,
                                default_radar, default_raster_scan_agent,
                                default_scheduler)
 from mpar_sim.radar import PhasedArrayRadar
 from mpar_sim.wrappers.image_to_pytorch import ImageToPytorch
 from mpar_sim.wrappers.squeeze_image import SqueezeImage
-import pytorch_lightning as pl
+from mpar_sim.wrappers.wrap_action_tuple import WrapActionTuple
 
-import warnings
 warnings.filterwarnings("ignore")
 # %%
 # Agent object definition
@@ -124,9 +125,9 @@ class PPOSurveillanceAgent(PPO):
 # Set up the environment
 # Target generation model
 transition_model = CombinedLinearGaussianTransitionModel([
-    ConstantVelocity(0),
-    ConstantVelocity(0),
-    ConstantVelocity(0),
+    ConstantVelocity(10),
+    ConstantVelocity(10),
+    ConstantVelocity(10),
 ])
 
 # Radar system object
@@ -166,7 +167,7 @@ print(initial_state.state_vector)
 
 
 # Environment creation
-env = gym.make('mpar_sim/ParticleSurveillance-v0',
+env = gym.make('mpar_sim/SimpleParticleSurveillance-v0',
                radar=radar,
                # Radar parameters
                azimuth_beamwidth  =5,
@@ -189,7 +190,9 @@ env = gym.make('mpar_sim/ParticleSurveillance-v0',
 # Wrap the environment
 n_env = 16
 max_episode_steps = 2000
-
+# Action wrappers
+env = WrapActionTuple(env)
+# Observation wrappers
 env = gym.wrappers.ResizeObservation(env, (84, 84))
 env = ImageToPytorch(env)
 env = SqueezeImage(env)
@@ -256,8 +259,8 @@ ppo_agent.eval()
 # raster_init_ratio = np.zeros((max_episode_steps,))
 ppo_init_ratio = np.ones((max_episode_steps,))
 raster_init_ratio = np.ones((max_episode_steps,))
-az_axis = np.linspace(radar.az_fov[0], radar.az_fov[1], 32)
-el_axis = np.linspace(radar.el_fov[0], radar.el_fov[1], 32)
+az_axis = np.linspace(radar.az_fov[0], radar.az_fov[1], 50)
+el_axis = np.linspace(radar.el_fov[0], radar.el_fov[1], 50)
 beam_coverage_map = np.zeros((len(el_axis), len(az_axis)))
 
 obs, info = test_env.reset()
@@ -289,9 +292,6 @@ while not done:
       device=ppo_agent.device, dtype=torch.float32)
   action_tensor = ppo_agent.forward(obs_tensor)[0].sample()
   actions = action_tensor.detach().cpu().numpy()
-  # When the variance is high, I've found that it's better to wrap the actions back into the valid range rather than clip them. Helps with exploration
-  actions[0,0] = wrap_to_interval(actions[0,0], radar.az_fov[0], radar.az_fov[1])
-  actions[0,1] = wrap_to_interval(actions[0,1], radar.el_fov[0], radar.el_fov[1])
   
   obs, reward, terminated, truncated, info = test_env.step(actions.T)
   done = terminated or truncated
@@ -300,11 +300,11 @@ while not done:
     ppo_init_ratio[i] = info['initiation_ratio']
       
 #   if i > 500:
-#     az_start = np.digitize(actions[0, 0] - 1.5, az_axis) - 1
-#     el_start = np.digitize(actions[0, 1] - 1.5, el_axis) - 1
-#     az_stop = np.digitize(actions[0, 0] +  1.5, az_axis) - 1
-#     el_stop = np.digitize(actions[0, 1] +  1.5, el_axis) - 1
-#     beam_coverage_map[el_start:el_stop, az_start:az_stop] += 1
+  az_start = np.digitize(actions[0, 0] - 1.5, az_axis) - 1
+  el_start = np.digitize(actions[0, 1] - 1.5, el_axis) - 1
+  az_stop = np.digitize(actions[0, 0] +  1.5, az_axis) - 1
+  el_stop = np.digitize(actions[0, 1] +  1.5, el_axis) - 1
+  beam_coverage_map[el_start:el_stop, az_start:az_stop] += 1
 
   i += 1
 toc = time.time()
@@ -318,10 +318,10 @@ plt.xlabel('Time step (dwells)')
 plt.ylabel('Fraction of Targets Detected')
 plt.legend(['Raster', 'RL'])
 
-# plt.figure()
-# plt.imshow(beam_coverage_map, 
-#            norm='linear', 
-#            extent=[az_axis[0], az_axis[-1], el_axis[0], el_axis[-1]])
+plt.figure()
+plt.imshow(beam_coverage_map,
+           norm='linear', 
+           extent=[az_axis[0], az_axis[-1], el_axis[0], el_axis[-1]])
 
 
 # # %%
