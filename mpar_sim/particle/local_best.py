@@ -124,7 +124,6 @@ class IncrementalLocalBestPSO(SwarmOptimizer):
       vh_strategy="unmodified",
       center=1.0,
       init_pos=None,
-      pbest_reset_interval=None,
   ) -> None:
     super().__init__(
         n_particles=n_particles,
@@ -151,7 +150,6 @@ class IncrementalLocalBestPSO(SwarmOptimizer):
     self.name = __name__
 
     # Reset memory-based items
-    self.pbest_reset_interval = pbest_reset_interval
     self.swarm.pbest_cost = np.full(self.swarm_size[0], np.inf)
     self.iter_count = 0
     # Populate memory of the handlers
@@ -167,11 +165,6 @@ class IncrementalLocalBestPSO(SwarmOptimizer):
                                                          objective_func,
                                                          pool=pool,
                                                          **kwargs)
-
-    # Compute personal best position/cost
-    if self.pbest_reset_interval is not None and self.iter_count % self.pbest_reset_interval == 0:
-      self.swarm.pbest_cost = np.full(self.swarm_size[0], np.inf)
-    self.swarm.pbest_pos, self.swarm.pbest_cost = compute_pbest(self.swarm)
 
     # Compute global best position/cost
     self.swarm.best_pos, self.swarm.best_cost = self.top.compute_gbest(

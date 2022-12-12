@@ -181,7 +181,7 @@ class SimpleParticleSurveillance(gym.Env):
     cumulative_reward = 0
     for detection in detections:
       # Update the detection count for this target
-      # TODO: In practice, we won't know if the detection is from clutter or not. However, for the first simulation I'm assuming no false alarms so this is to make the reward calculation still work when the false alarm switch is on
+      # In practice, we won't know if the detection is from clutter or not. However, for the first simulation I'm assuming no false alarms so this is to make the reward calculation still work when the false alarm switch is on
       if not isinstance(detection, Clutter):
         target_id = detection.groundtruth_path.id
         if target_id not in self.detection_count.keys():
@@ -190,13 +190,8 @@ class SimpleParticleSurveillance(gym.Env):
         # Give a reward until the target has been detected too many times
         if self.detection_count[target_id] <= self.n_confirm_detections:
           cumulative_reward += 1
-      # Update particle swarm positions
-      # az = detection.state_vector[1].degrees
-      # el = detection.state_vector[0].degrees
-      # self.swarm_optim.optimize(
-      #     self._distance_objective, detection_pos=np.array([az, el]))
-      
-      # TODO: I'm not sure if I should only do this here or for every case like above. Might be causing issues
+
+      # Only update the swarm state for particles that have not been confirmed
       if isinstance(detection, Clutter) or self.detection_count[target_id] <= self.n_confirm_detections:
         az = detection.state_vector[1].degrees
         el = detection.state_vector[0].degrees
@@ -204,12 +199,13 @@ class SimpleParticleSurveillance(gym.Env):
             self._distance_objective, detection_pos=np.array([az, el]))
 
     # Mutate particles based on Engelbrecht equations (16.66-16.67)
-    # sigma = 0.1*(self.swarm_optim.bounds[1][0] - self.swarm_optim.bounds[0][0])
-    # Pm = 0.01
-    # mutate = self.np_random.uniform(
-    #     0, 1, size=self.swarm_optim.swarm.position.shape) < Pm
-    # self.swarm_optim.swarm.position[mutate] += self.np_random.normal(
-    #     0, sigma, size=self.swarm_optim.swarm.position[mutate].shape)
+    Pm = 0.005
+    mutate = self.np_random.uniform(
+        0, 1, size=len(self.swarm_optim.swarm.position)) < Pm
+    sigma = 0.1*(self.swarm_optim.bounds[1] - self.swarm_optim.bounds[0])[np.newaxis, :]
+    sigma = np.repeat(sigma, np.count_nonzero(mutate), axis=0)
+    self.swarm_optim.swarm.position[mutate] += self.np_random.normal(
+        np.zeros_like(sigma), sigma)
 
     # If multiple subarrays are scheduled to execute at once, the timestep will be zero. In this case, don't update the environment just yet.
     # For the single-beam case, this will always execute
@@ -220,8 +216,8 @@ class SimpleParticleSurveillance(gym.Env):
       )
 
       # Move targets forward in time
-      # TODO: Uncomment this
-      # self._move_targets(timestep)
+      # TODO: Uncomment this. Slows things down and doesn't make much difference in surveillance scenarios since they're so short
+      self._move_targets(timestep)
 
       # Randomly create new targets
       for _ in range(self.np_random.poisson(self.birth_rate)):
