@@ -204,12 +204,12 @@ class SimpleParticleSurveillance(gym.Env):
             self._distance_objective, detection_pos=np.array([az, el]))
 
     # Mutate particles based on Engelbrecht equations (16.66-16.67)
-    sigma = 0.1*(self.swarm_optim.bounds[1][0] - self.swarm_optim.bounds[0][0])
-    Pm = 0.01
-    mutate = self.np_random.uniform(
-        0, 1, size=self.swarm_optim.swarm.position.shape) < Pm
-    self.swarm_optim.swarm.position[mutate] += self.np_random.normal(
-        0, sigma, size=self.swarm_optim.swarm.position[mutate].shape)
+    # sigma = 0.1*(self.swarm_optim.bounds[1][0] - self.swarm_optim.bounds[0][0])
+    # Pm = 0.01
+    # mutate = self.np_random.uniform(
+    #     0, 1, size=self.swarm_optim.swarm.position.shape) < Pm
+    # self.swarm_optim.swarm.position[mutate] += self.np_random.normal(
+    #     0, sigma, size=self.swarm_optim.swarm.position[mutate].shape)
 
     # If multiple subarrays are scheduled to execute at once, the timestep will be zero. In this case, don't update the environment just yet.
     # For the single-beam case, this will always execute
@@ -220,7 +220,8 @@ class SimpleParticleSurveillance(gym.Env):
       )
 
       # Move targets forward in time
-      self._move_targets(timestep)
+      # TODO: Uncomment this
+      # self._move_targets(timestep)
 
       # Randomly create new targets
       for _ in range(self.np_random.poisson(self.birth_rate)):
@@ -321,12 +322,19 @@ class SimpleParticleSurveillance(gym.Env):
     return obs
 
   def _get_info(self):
-    # Compute the fraction of targets in the scenario that have been initiated (i.e. detected at least n_confirm_detections times)
+    """
+    Returns helpful info about the current state of the environment, including:
+    
+    - initation ratio: the fraction of targets in the scenario that have been initiated (i.e. detected at least n_confirm_detections times)
+    - swarm_positions: the current positions of all the particles in the swarm
+    """
     n_initiated_targets = np.sum(
         [count >= self.n_confirm_detections for count in self.detection_count.values()])
     initiation_ratio = n_initiated_targets / len(self.target_paths)
+    swarm_pos = self.swarm_optim.swarm.position
     return {
         "initiation_ratio": initiation_ratio,
+        "swarm_positions": swarm_pos,
     }
 
   def _render_frame(self) -> Optional[np.ndarray]:
