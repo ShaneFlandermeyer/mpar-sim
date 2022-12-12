@@ -216,7 +216,6 @@ class SimpleParticleSurveillance(gym.Env):
       )
 
       # Move targets forward in time
-      # TODO: Uncomment this. Slows things down and doesn't make much difference in surveillance scenarios since they're so short
       self._move_targets(timestep)
 
       # Randomly create new targets
@@ -429,8 +428,10 @@ class SimpleParticleSurveillance(gym.Env):
     """
     for path in self.target_paths:
       index = path[-1].metadata.get("index")
-      updated_state = self.transition_model.function(
-          path[-1], noise=True, time_interval=dt)
+      updated_state = self.transition_model(np.asarray(path[-1].state_vector), 
+                                            dt=dt.total_seconds())
+      # updated_state = self.transition_model.function(
+      #     path[-1], noise=True, time_interval=dt)
       path.append(GroundTruthState(
           updated_state, timestamp=self.time,
           metadata={"index": index}))
