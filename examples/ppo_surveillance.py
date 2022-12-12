@@ -157,20 +157,16 @@ radar = PhasedArrayRadar(
 
 # NOTE: Specifying initial state in terms of az/el/range (in degrees)!
 initial_state = GaussianState(
-    state_vector=[np.random.uniform(-45, 45), 
-                  np.random.uniform(-45, 45), 
-                  0, 
-                  0, 15e3, 0],
-    covar=np.diag([10, 100, 10, 100, 1e3, 100])
+    state_vector=[30, 0, 30, 0, 15e3, 0],
+    covar=np.diag([0, 100, 0, 100, 1e3, 100])
 )
-print(initial_state.state_vector)
 
 
 # Environment creation
 env = gym.make('mpar_sim/SimpleParticleSurveillance-v0',
                radar=radar,
                # Radar parameters
-               azimuth_beamwidth  =5,
+               azimuth_beamwidth=5,
                elevation_beamwidth=5,
                bandwidth=100e6,
                pulsewidth=10e-6,
@@ -178,15 +174,16 @@ env = gym.make('mpar_sim/SimpleParticleSurveillance-v0',
                n_pulses=32,
                transition_model=transition_model,
                initial_state=initial_state,
-               birth_rate=0,
+               birth_rate=0.01,
                death_probability=0,
                initial_number_targets=25,
                n_confirm_detections=3,
-               randomize_initial_state=False,
+               randomize_initial_state=True,
                max_random_az_covar=50,
                max_random_el_covar=50,
                render_mode='rgb_array',
                )
+
 # Wrap the environment
 n_env = 16
 max_episode_steps = 2000
@@ -201,8 +198,8 @@ env = gym.wrappers.TimeLimit(env, max_episode_steps=max_episode_steps)
 test_env = gym.vector.SyncVectorEnv([lambda: env])
 
 
-# env = gym.vector.AsyncVectorEnv([lambda: env]*n_env)
-# env = gym.wrappers.RecordEpisodeStatistics(env=env, deque_size=20)
+env = gym.vector.AsyncVectorEnv([lambda: env]*n_env)
+env = gym.wrappers.RecordEpisodeStatistics(env=env, deque_size=20)
 seed = np.random.randint(0, 2**32 - 1)
 # %%
 # Train the RL agent
@@ -228,7 +225,7 @@ seed = np.random.randint(0, 2**32 - 1)
 #                                  )
 
 # trainer = pl.Trainer(
-#     max_time="00:00:30:00",
+#     max_time="00:01:00:00",
 #     gradient_clip_val=0.5,
 #     accelerator='gpu',
 #     devices=1,
@@ -243,85 +240,86 @@ raster_agent = RasterScanAgent(
     elevation_scan_limits=np.array([-45, 45]),
     azimuth_beam_spacing=0.5,
     elevation_beam_spacing=0.5,
-    azimuth_beamwidth  =5,
+    azimuth_beamwidth=5,
     elevation_beamwidth=5,
     bandwidth=100e6,
     pulsewidth=10e-6,
     prf=5e3,
     n_pulses=100,
 )
-# TODO: Break this back into two loops
-checkpoint_filename = "/home/shane/src/mpar-sim/lightning_logs/version_11/checkpoints/epoch=199-step=23904.ckpt"
+checkpoint_filename = "/home/shane/src/mpar-sim/lightning_logs/version_16/checkpoints/epoch=94-step=22800.ckpt"
 ppo_agent = PPOSurveillanceAgent.load_from_checkpoint(
     checkpoint_filename, env=test_env, seed=seed)
 ppo_agent.eval()
 
-# raster_init_ratio = np.zeros((max_episode_steps,))
-ppo_init_ratio = np.ones((max_episode_steps,))
-raster_init_ratio = np.ones((max_episode_steps,))
-az_axis = np.linspace(radar.az_fov[0], radar.az_fov[1], 50)
-el_axis = np.linspace(radar.el_fov[0], radar.el_fov[1], 50)
-beam_coverage_map = np.zeros((len(el_axis), len(az_axis)))
-
-obs, info = test_env.reset()
-tic = time.time()
-i = 0
-done = False
-while not done:
-  look = raster_agent.act(obs)
-  actions = np.array([[look.azimuth_steering_angle,
-                     look.elevation_steering_angle]])
-  obs, reward, terminated, truncated, info = test_env.step(actions.T)
-  done = terminated or truncated
-  # Compute the fraction of targets whose tracks have been initiated
-  if not terminated:
-    raster_init_ratio[i] = info['initiation_ratio']
+n_test = 10
+ppo_init_ratio = np.ones((max_episode_steps, n_test))
+raster_init_ratio = np.ones((max_episode_steps, n_test))
+for itest in range(n_test):
+  print("Iteration:", itest)
+  seed = np.random.randint(0, 2**32 - 1)
   
-  i += 1
-toc = time.time()
-print("Episode finished after {} timesteps".format(i))
-print(f"Episode took {toc-tic} seconds")
+  # az_axis = np.linspace(radar.az_fov[0], radar.az_fov[1], 100)
+  # el_axis = np.linspace(radar.el_fov[0], radar.el_fov[1], 100)
+  # beam_coverage_map = np.zeros((len(el_axis), len(az_axis)))
 
+  obs, info = test_env.reset(seed=seed)
+  tic = time.time()
+  i = 0
+  done = False
+  while not done:
+    look = raster_agent.act(obs)
+    actions = np.array([[look.azimuth_steering_angle,
+                        look.elevation_steering_angle]])
+    obs, reward, terminated, truncated, info = test_env.step(actions.T)
+    done = terminated or truncated
+    # Compute the fraction of targets whose tracks have been initiated
+    if not terminated:
+      raster_init_ratio[i, itest] = info['initiation_ratio']
 
-obs, info = test_env.reset()
-tic = time.time()
-i = 0
-done = False
-while not done:
-  obs_tensor = torch.as_tensor(obs).to(
-      device=ppo_agent.device, dtype=torch.float32)
-  action_tensor = ppo_agent.forward(obs_tensor)[0].sample()
-  actions = action_tensor.detach().cpu().numpy()
-  
-  obs, reward, terminated, truncated, info = test_env.step(actions.T)
-  done = terminated or truncated
-  # Compute the fraction of targets whose tracks have been initiated
-  if not terminated:
-    ppo_init_ratio[i] = info['initiation_ratio']
-      
-#   if i > 500:
-  az_start = np.digitize(actions[0, 0] - 1.5, az_axis) - 1
-  el_start = np.digitize(actions[0, 1] - 1.5, el_axis) - 1
-  az_stop = np.digitize(actions[0, 0] +  1.5, az_axis) - 1
-  el_stop = np.digitize(actions[0, 1] +  1.5, el_axis) - 1
-  beam_coverage_map[el_start:el_stop, az_start:az_stop] += 1
+    i += 1
+  toc = time.time()
+  print("Raster: Episode finished after {} timesteps".format(i))
+  print(f"Raster: Episode took {toc-tic} seconds")
 
-  i += 1
-toc = time.time()
-print("Episode finished after {} timesteps".format(i))
-print(f"Episode took {toc-tic} seconds")
+  obs, info = test_env.reset(seed=seed)
+  tic = time.time()
+  i = 0
+  done = False
+  while not done:
+    obs_tensor = torch.as_tensor(obs).to(
+        device=ppo_agent.device, dtype=torch.float32)
+    action_tensor = ppo_agent.forward(obs_tensor)[0].sample()
+    actions = action_tensor.detach().cpu().numpy()
+
+    obs, reward, terminated, truncated, info = test_env.step(actions.T)
+    done = terminated or truncated
+    # Compute the fraction of targets whose tracks have been initiated
+    if not terminated:
+      ppo_init_ratio[i, itest] = info['initiation_ratio']
+
+    # az_start = np.digitize(actions[0, 0] - 2.5, az_axis) - 1
+    # el_start = np.digitize(actions[0, 1] - 2.5, el_axis) - 1
+    # az_stop = np.digitize(actions[0, 0]  + 2.5, az_axis) - 1
+    # el_stop = np.digitize(actions[0, 1]  + 2.5, el_axis) - 1
+    # beam_coverage_map[el_start:el_stop, az_start:az_stop] += 1
+
+    i += 1
+  toc = time.time()
+  print("RL: Episode finished after {} timesteps".format(i))
+  print(f"RL: Episode took {toc-tic} seconds")
 
 plt.figure()
-plt.plot(raster_init_ratio[:-1])
-plt.plot(ppo_init_ratio[:-1])
+plt.plot(np.mean(raster_init_ratio[:-1, :], axis=1))
+plt.plot(np.mean(ppo_init_ratio[:-1, :], axis=1))
 plt.xlabel('Time step (dwells)')
 plt.ylabel('Fraction of Targets Detected')
 plt.legend(['Raster', 'RL'])
 
-plt.figure()
-plt.imshow(beam_coverage_map,
-           norm='linear', 
-           extent=[az_axis[0], az_axis[-1], el_axis[0], el_axis[-1]])
+# plt.figure()
+# plt.imshow(beam_coverage_map,
+#            norm='linear',
+#            extent=[az_axis[0], az_axis[-1], el_axis[0], el_axis[-1]])
 
 
 # # %%

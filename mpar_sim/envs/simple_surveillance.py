@@ -131,7 +131,6 @@ class SimpleParticleSurveillance(gym.Env):
         # # n_pulses
         # spaces.Box(0, np.inf, shape=(1,), dtype=np.float32),
     ))
-    
 
     assert render_mode is None or render_mode in self.metadata["render_modes"]
     self.render_mode = render_mode
@@ -191,12 +190,18 @@ class SimpleParticleSurveillance(gym.Env):
         # Give a reward until the target has been detected too many times
         if self.detection_count[target_id] <= self.n_confirm_detections:
           cumulative_reward += 1
-
-      # Update the particle swarm output
-      az = detection.state_vector[1].degrees
-      el = detection.state_vector[0].degrees
-      self.swarm_optim.optimize(
-          self._distance_objective, detection_pos=np.array([az, el]))
+      # Update particle swarm positions
+      # az = detection.state_vector[1].degrees
+      # el = detection.state_vector[0].degrees
+      # self.swarm_optim.optimize(
+      #     self._distance_objective, detection_pos=np.array([az, el]))
+      
+      # TODO: I'm not sure if I should only do this here or for every case like above. Might be causing issues
+      if isinstance(detection, Clutter) or self.detection_count[target_id] <= self.n_confirm_detections:
+        az = detection.state_vector[1].degrees
+        el = detection.state_vector[0].degrees
+        self.swarm_optim.optimize(
+            self._distance_objective, detection_pos=np.array([az, el]))
 
     # Mutate particles based on Engelbrecht equations (16.66-16.67)
     sigma = 0.1*(self.swarm_optim.bounds[1][0] - self.swarm_optim.bounds[0][0])
