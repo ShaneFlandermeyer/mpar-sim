@@ -261,7 +261,7 @@ raster_agent = RasterScanAgent(
 raster_agent.azimuth_beamwidth = az_bw
 raster_agent.elevation_beamwidth = el_bw
 
-checkpoint_filename = "/home/shane/src/mpar-sim/lightning_logs/version_57/checkpoints/epoch=71-step=17088.ckpt"
+checkpoint_filename = "/home/shane/src/mpar-sim/lightning_logs/version_59/checkpoints/epoch=71-step=17208.ckpt"
 ppo_agent = PPOSurveillanceAgent.load_from_checkpoint(
     checkpoint_filename, env=env, seed=seed)
 ppo_agent.eval()

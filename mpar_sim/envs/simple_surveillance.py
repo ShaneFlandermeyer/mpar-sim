@@ -115,28 +115,7 @@ class SimpleParticleSurveillance(gym.Env):
         high=np.array([self.radar.az_fov[1], self.radar.el_fov[1]]),
         shape=(2,),
         dtype=np.float32)
-    # self.action_space = spaces.Tuple((
-    #     # Azimuth steering angle
-    #     spaces.Box(self.radar.az_fov[0],
-    #                self.radar.az_fov[1], dtype=np.float32),
-    #     # Elevation steering angle
-    #     spaces.Box(self.radar.el_fov[0],
-    #                self.radar.el_fov[1], dtype=np.float32),
-    #     # TODO: Add other look parameters to the action space
-    #     # # Azimuth beamwidth
-    #     # spaces.Box(0, np.inf, shape=(1,), dtype=np.float32),
-    #     # # elevation_beamwidth
-    #     # spaces.Box(0, np.inf, shape=(1,), dtype=np.float32),
-    #     # # bandwidth
-    #     # spaces.Box(0, np.inf, shape=(1,), dtype=np.float32),
-    #     # # pulsewidth
-    #     # spaces.Box(0, np.inf, shape=(1,), dtype=np.float32),
-    #     # # prf
-    #     # spaces.Box(0, np.inf, shape=(1,), dtype=np.float32),
-    #     # # n_pulses
-    #     # spaces.Box(0, np.inf, shape=(1,), dtype=np.float32),
-    # ))
-
+    # TODO: Add the other look parameters to the action space.
     assert render_mode is None or render_mode in self.metadata["render_modes"]
     self.render_mode = render_mode
 
@@ -183,7 +162,7 @@ class SimpleParticleSurveillance(gym.Env):
 
     detections = self.radar.measure(self.target_paths, noise=True)
 
-    cumulative_reward = 0
+    reward = 0
     for detection in detections:
       # Update the detection count for this target
       # In practice, we won't know if the detection is from clutter or not. However, for the first simulation I'm assuming no false alarms so this is to make the reward calculation still work when the false alarm switch is on
@@ -192,9 +171,9 @@ class SimpleParticleSurveillance(gym.Env):
         if target_id not in self.detection_count.keys():
           self.detection_count[target_id] = 0
         self.detection_count[target_id] += 1
-        # Give a reward until the target has been detected too many times
-        if self.detection_count[target_id] <= self.n_confirm_detections:
-          cumulative_reward += 1
+        # Give a reward if a "track" is initiated.
+        if self.detection_count[target_id] == self.n_confirm_detections:
+          reward += self.n_confirm_detections
 
       # Only update the swarm state for particles that have not been confirmed
       if isinstance(detection, Clutter) or self.detection_count[target_id] <= self.n_confirm_detections:
@@ -237,7 +216,6 @@ class SimpleParticleSurveillance(gym.Env):
 
     # Create outputs
     observation = self._get_obs()
-    reward = cumulative_reward
     info = self._get_info()
 
     # Terminate the episode when all targets have been detected at least n_detections_max times
