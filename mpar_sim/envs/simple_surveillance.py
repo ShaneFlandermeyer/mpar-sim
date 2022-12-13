@@ -110,27 +110,32 @@ class SimpleParticleSurveillance(gym.Env):
         low=0, high=255, shape=(512, 512, 1), dtype=np.uint8)
 
     # Currently, actions are limited to beam steering angles in azimuth and elevation
-    self.action_space = spaces.Tuple((
-        # Azimuth steering angle
-        spaces.Box(self.radar.az_fov[0],
-                   self.radar.az_fov[1], dtype=np.float32),
-        # Elevation steering angle
-        spaces.Box(self.radar.el_fov[0],
-                   self.radar.el_fov[1], dtype=np.float32),
-        # TODO: Add other look parameters to the action space
-        # # Azimuth beamwidth
-        # spaces.Box(0, np.inf, shape=(1,), dtype=np.float32),
-        # # elevation_beamwidth
-        # spaces.Box(0, np.inf, shape=(1,), dtype=np.float32),
-        # # bandwidth
-        # spaces.Box(0, np.inf, shape=(1,), dtype=np.float32),
-        # # pulsewidth
-        # spaces.Box(0, np.inf, shape=(1,), dtype=np.float32),
-        # # prf
-        # spaces.Box(0, np.inf, shape=(1,), dtype=np.float32),
-        # # n_pulses
-        # spaces.Box(0, np.inf, shape=(1,), dtype=np.float32),
-    ))
+    self.action_space = spaces.Box(
+        low=np.array([self.radar.az_fov[0], self.radar.el_fov[0]]),
+        high=np.array([self.radar.az_fov[1], self.radar.el_fov[1]]),
+        shape=(2,),
+        dtype=np.float32)
+    # self.action_space = spaces.Tuple((
+    #     # Azimuth steering angle
+    #     spaces.Box(self.radar.az_fov[0],
+    #                self.radar.az_fov[1], dtype=np.float32),
+    #     # Elevation steering angle
+    #     spaces.Box(self.radar.el_fov[0],
+    #                self.radar.el_fov[1], dtype=np.float32),
+    #     # TODO: Add other look parameters to the action space
+    #     # # Azimuth beamwidth
+    #     # spaces.Box(0, np.inf, shape=(1,), dtype=np.float32),
+    #     # # elevation_beamwidth
+    #     # spaces.Box(0, np.inf, shape=(1,), dtype=np.float32),
+    #     # # bandwidth
+    #     # spaces.Box(0, np.inf, shape=(1,), dtype=np.float32),
+    #     # # pulsewidth
+    #     # spaces.Box(0, np.inf, shape=(1,), dtype=np.float32),
+    #     # # prf
+    #     # spaces.Box(0, np.inf, shape=(1,), dtype=np.float32),
+    #     # # n_pulses
+    #     # spaces.Box(0, np.inf, shape=(1,), dtype=np.float32),
+    # ))
 
     assert render_mode is None or render_mode in self.metadata["render_modes"]
     self.render_mode = render_mode
@@ -150,7 +155,7 @@ class SimpleParticleSurveillance(gym.Env):
     self.window = None
     self.clock = None
 
-  def step(self, action: Dict):
+  def step(self, action: np.ndarray):
 
     # TODO: Add a resource management component here
     look = Look(
@@ -202,7 +207,8 @@ class SimpleParticleSurveillance(gym.Env):
     Pm = 0.005
     mutate = self.np_random.uniform(
         0, 1, size=len(self.swarm_optim.swarm.position)) < Pm
-    sigma = 0.1*(self.swarm_optim.bounds[1] - self.swarm_optim.bounds[0])[np.newaxis, :]
+    sigma = 0.1*(self.swarm_optim.bounds[1] -
+                 self.swarm_optim.bounds[0])[np.newaxis, :]
     sigma = np.repeat(sigma, np.count_nonzero(mutate), axis=0)
     self.swarm_optim.swarm.position[mutate] += self.np_random.normal(
         np.zeros_like(sigma), sigma)
@@ -319,7 +325,7 @@ class SimpleParticleSurveillance(gym.Env):
   def _get_info(self):
     """
     Returns helpful info about the current state of the environment, including:
-    
+
     - initation ratio: the fraction of targets in the scenario that have been initiated (i.e. detected at least n_confirm_detections times)
     - swarm_positions: the current positions of all the particles in the swarm
     """
@@ -428,7 +434,7 @@ class SimpleParticleSurveillance(gym.Env):
     """
     for path in self.target_paths:
       index = path[-1].metadata.get("index")
-      updated_state = self.transition_model(np.asarray(path[-1].state_vector), 
+      updated_state = self.transition_model(np.asarray(path[-1].state_vector),
                                             dt=dt.total_seconds())
       # updated_state = self.transition_model.function(
       #     path[-1], noise=True, time_interval=dt)
