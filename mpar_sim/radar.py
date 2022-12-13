@@ -169,6 +169,7 @@ class PhasedArrayRadar(Sensor):
     effective_az_beamwidth = look.azimuth_beamwidth * az_broadening
     effective_el_beamwidth = look.elevation_beamwidth * el_broadening
     self.beam = self.beam_shape(
+        wavelength=self.wavelength,
         azimuth_beamwidth=effective_az_beamwidth,
         elevation_beamwidth=effective_el_beamwidth,
         azimuth_steering_angle=look.azimuth_steering_angle,

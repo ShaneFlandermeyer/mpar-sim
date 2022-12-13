@@ -24,7 +24,7 @@ from torch import distributions, nn
 
 import mpar_sim.envs
 from mpar_sim.agents.raster_scan import RasterScanAgent
-from mpar_sim.beam.beam import GaussianBeam, RectangularBeam
+from mpar_sim.beam.beam import GaussianBeam, RectangularBeam, SincBeam
 from mpar_sim.common.wrap_to_interval import wrap_to_interval
 from mpar_sim.defaults import (default_gbest_pso, default_lbest_pso,
                                default_radar, default_raster_scan_agent,
@@ -151,7 +151,7 @@ radar = PhasedArrayRadar(
     system_temperature=290,
     noise_figure=4,
     # Scan settings
-    beam_shape=GaussianBeam,
+    beam_shape=SincBeam,
     az_fov=[-45, 45],
     el_fov=[-45, 45],
     # Detection settings
@@ -211,6 +211,7 @@ n_env = 16
 env = gym.vector.AsyncVectorEnv([lambda: env]*n_env)
 # n_env = 1
 # env = gym.vector.SyncVectorEnv([lambda: env])
+
 env = gym.wrappers.RecordEpisodeStatistics(env=env, deque_size=20)
 
 # %% Train the RL agent
