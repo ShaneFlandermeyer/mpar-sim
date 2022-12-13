@@ -1,7 +1,5 @@
 import numpy as np
-import numba as nb
 
-@nb.jit(nogil=True, cache=True)
 def block_diag(mat: np.ndarray, nreps: int = 1) -> np.ndarray:
   """
   Create a block diagonal matrix from a 2D array, where the input array is repeated nrep times
@@ -24,8 +22,7 @@ def block_diag(mat: np.ndarray, nreps: int = 1) -> np.ndarray:
     result[k*rows:(k+1)*rows, k*cols:(k+1)*cols] = mat
   return result
 
-@nb.jit(nogil=True, cache=True)
-def cv_wna(state: np.ndarray, q: float, dt: float):
+def constant_velocity(state: np.ndarray, q: float, dt: float):
   """
   3D constant velocity model with white noise acceleration
 

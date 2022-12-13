@@ -29,7 +29,7 @@ from mpar_sim.common.wrap_to_interval import wrap_to_interval
 from mpar_sim.defaults import (default_gbest_pso, default_lbest_pso,
                                default_radar, default_raster_scan_agent,
                                default_scheduler)
-from mpar_sim.models.motion.constant_velocity import cv_wna
+from mpar_sim.models.motion.constant_velocity import constant_velocity
 from mpar_sim.radar import PhasedArrayRadar
 from mpar_sim.wrappers.image_to_pytorch import ImageToPytorch
 from mpar_sim.wrappers.squeeze_image import SqueezeImage
@@ -132,7 +132,7 @@ class PPOSurveillanceAgent(PPO):
 # %% Set up the environment
 # In this experiment, targets move according to a constant velocity, white noise acceleration model.
 # http://www.control.isy.liu.se/student/graduate/targettracking/file/le2_handout.pdf
-transition_model = lambda state, dt: cv_wna(state, q=10, dt=dt)
+transition_model = lambda state, dt: constant_velocity(state, q=10, dt=dt)
 
 # Radar system object
 radar = PhasedArrayRadar(
@@ -201,7 +201,7 @@ max_episode_steps = 2000
 # Action wrappers
 env = WrapActionTuple(env)
 # Observation wrappers
-env = gym.wrappers.ResizeObservation(env, (84, 84))
+env = gym.wrappers.ResizeObservation(env, (64, 64))
 env = ImageToPytorch(env)
 env = SqueezeImage(env)
 env = gym.wrappers.FrameStack(env, 4)
@@ -214,35 +214,35 @@ env = gym.vector.AsyncVectorEnv([lambda: env]*n_env)
 env = gym.wrappers.RecordEpisodeStatistics(env=env, deque_size=20)
 
 # %% Train the RL agent
-# ppo_agent = PPOSurveillanceAgent(env,
-#                                  n_rollouts_per_epoch=10,
-#                                  n_steps_per_rollout=128,
-#                                  n_gradient_steps=3,
-#                                  batch_size=256,
-#                                  gamma=0.99,
-#                                  gae_lambda=0.9,
-#                                  value_coef=0.5,
-#                                  entropy_coef=0.01,
-#                                  seed=seed,
-#                                  normalize_advantage=True,
-#                                  policy_clip_range=0.1,
-#                                  target_kl=None,
-#                                  # Radar parameters
-#                                  azimuth_beamwidth=az_bw,
-#                                  elevation_beamwidth=el_bw,
-#                                  bandwidth=bw,
-#                                  pulsewidth=pulsewidth,
-#                                  prf=prf,
-#                                  n_pulses=n_pulses,
-#                                  )
+ppo_agent = PPOSurveillanceAgent(env,
+                                 n_rollouts_per_epoch=10,
+                                 n_steps_per_rollout=128,
+                                 n_gradient_steps=3,
+                                 batch_size=256,
+                                 gamma=0.99,
+                                 gae_lambda=0.9,
+                                 value_coef=0.5,
+                                 entropy_coef=0.01,
+                                 seed=seed,
+                                 normalize_advantage=True,
+                                 policy_clip_range=0.1,
+                                 target_kl=None,
+                                 # Radar parameters
+                                 azimuth_beamwidth=az_bw,
+                                 elevation_beamwidth=el_bw,
+                                 bandwidth=bw,
+                                 pulsewidth=pulsewidth,
+                                 prf=prf,
+                                 n_pulses=n_pulses,
+                                 )
 
-# trainer = pl.Trainer(
-#     max_time="00:00:30:00",
-#     gradient_clip_val=0.5,
-#     accelerator='gpu',
-#     devices=1,
-# )
-# trainer.fit(ppo_agent)
+trainer = pl.Trainer(
+    max_time="00:00:30:00",
+    gradient_clip_val=0.5,
+    accelerator='gpu',
+    devices=1,
+)
+trainer.fit(ppo_agent)
 
 # %% Agent creation
 raster_agent = RasterScanAgent(
