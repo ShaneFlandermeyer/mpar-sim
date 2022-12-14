@@ -174,8 +174,7 @@ class IncrementalGlobalBestPSO(SwarmOptimizer):
     self.swarm.pbest_pos, self.swarm.pbest_cost = compute_pbest(self.swarm)
 
     # Compute global best position/cost
-    self.swarm.best_pos, self.swarm.best_cost = self.top.compute_gbest(
-        self.swarm, k=20, p=2)
+    self.swarm.best_pos, self.swarm.best_cost = self.top.compute_gbest(self.swarm)
 
     # Save to history
     hist = self.ToHistory(
