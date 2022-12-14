@@ -68,7 +68,8 @@ def default_gbest_pso():
 
 
 def default_lbest_pso():
-  options = {'c1': 0.2, 'c2': 0.5, 'w': 0.8}
+  # options = {'c1': 0.2, 'c2': 0.5, 'w': 0.8}
+  options = {'c1': 0, 'c2': 0.9, 'w': 0.5}
   return IncrementalLocalBestPSO(n_particles=2500,
                                  dimensions=2,
                                  options=options,

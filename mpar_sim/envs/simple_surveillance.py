@@ -38,6 +38,7 @@ class SimpleParticleSurveillance(gym.Env):
                death_probability: float = 0.01,
                preexisting_states: Collection[StateVector] = [],
                initial_number_targets: int = 0,
+               max_initial_number_targets: int = 0,
                # Particle swarm parameters
                swarm_optim: SwarmOptimizer = None,
                # Environment parameters
@@ -93,6 +94,7 @@ class SimpleParticleSurveillance(gym.Env):
     self.death_probability = death_probability
     self.preexisting_states = preexisting_states
     self.initial_number_targets = initial_number_targets
+    self.max_initial_number_targets = max_initial_number_targets
     self.n_confirm_detections = n_confirm_detections
     self.randomize_initial_state = randomize_initial_state
     self.max_random_az_covar = max_random_az_covar
@@ -107,7 +109,7 @@ class SimpleParticleSurveillance(gym.Env):
     self.n_pulses = n_pulses
 
     self.observation_space = spaces.Box(
-        low=0, high=255, shape=(512, 512, 1), dtype=np.uint8)
+        low=0, high=255, shape=(128, 128, 1), dtype=np.uint8)
 
     # Currently, actions are limited to beam steering angles in azimuth and elevation
     self.action_space = spaces.Box(
@@ -120,7 +122,7 @@ class SimpleParticleSurveillance(gym.Env):
     self.render_mode = render_mode
 
     if swarm_optim is None:
-      self.swarm_optim = default_lbest_pso()
+      self.swarm_optim = default_gbest_pso()
 
     # Pre-compute azimuth/elevation axis values needed to digitize the particles for the observation output
     self.az_axis = np.linspace(self.swarm_optim.bounds[0][0],
@@ -174,6 +176,7 @@ class SimpleParticleSurveillance(gym.Env):
         # Give a reward if a "track" is initiated.
         if self.detection_count[target_id] == self.n_confirm_detections:
           reward += self.n_confirm_detections
+          self.n_tracks_initiated += 1
 
       # Only update the swarm state for particles that have not been confirmed
       if isinstance(detection, Clutter) or self.detection_count[target_id] <= self.n_confirm_detections:
@@ -183,7 +186,7 @@ class SimpleParticleSurveillance(gym.Env):
             self._distance_objective, detection_pos=np.array([az, el]))
 
     # Mutate particles based on Engelbrecht equations (16.66-16.67)
-    Pm = 0.005
+    Pm = 0.001
     mutate = self.np_random.uniform(
         0, 1, size=len(self.swarm_optim.swarm.position)) < Pm
     sigma = 0.1*(self.swarm_optim.bounds[1] -
@@ -196,9 +199,13 @@ class SimpleParticleSurveillance(gym.Env):
     # For the single-beam case, this will always execute
     if timestep > datetime.timedelta(seconds=0):
       # Randomly drop targets
-      self.target_paths.difference_update(
-          path for path in self.target_paths if self.np_random.uniform(0, 1) <= self.death_probability
-      )
+      deleted_targets = [path for path in self.target_paths if self.np_random.uniform(
+          0, 1) <= self.death_probability]
+      # Delete the targets from the detection count
+      for path in deleted_targets:
+        if path.id in self.detection_count.keys():
+          del self.detection_count[path.id]
+      self.target_paths.difference_update(deleted_targets)
 
       # Move targets forward in time
       self._move_targets(timestep)
@@ -254,6 +261,9 @@ class SimpleParticleSurveillance(gym.Env):
           0, self.max_random_az_covar)
       self.initial_state.covar[el_idx, el_idx] = self.np_random.uniform(
           0, self.max_random_el_covar)
+      self.initial_number_targets = int(np.ceil(self.np_random.uniform(
+          0, self.max_initial_number_targets)))
+    # print(self.initial_state.state_vector)
     self._initialize_targets()
 
     self.swarm_optim.reset()
@@ -262,6 +272,7 @@ class SimpleParticleSurveillance(gym.Env):
     self.target_history = []
     self.detection_history = []
     self.detection_count = dict()
+    self.n_tracks_initiated = 0
 
     observation = self._get_obs()
     info = self._get_info()
@@ -314,6 +325,7 @@ class SimpleParticleSurveillance(gym.Env):
     return {
         "initiation_ratio": initiation_ratio,
         "swarm_positions": swarm_pos,
+        "n_tracks_initiated": self.n_tracks_initiated,
     }
 
   def _render_frame(self) -> Optional[np.ndarray]:
