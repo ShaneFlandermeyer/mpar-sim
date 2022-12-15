@@ -38,7 +38,6 @@ class SimpleParticleSurveillance(gym.Env):
                death_probability: float = 0.01,
                preexisting_states: Collection[StateVector] = [],
                initial_number_targets: int = 0,
-               max_initial_number_targets: int = 0,
                # Particle swarm parameters
                swarm_optim: SwarmOptimizer = None,
                # Environment parameters
@@ -94,7 +93,6 @@ class SimpleParticleSurveillance(gym.Env):
     self.death_probability = death_probability
     self.preexisting_states = preexisting_states
     self.initial_number_targets = initial_number_targets
-    self.max_initial_number_targets = max_initial_number_targets
     self.n_confirm_detections = n_confirm_detections
     self.randomize_initial_state = randomize_initial_state
     self.max_random_az_covar = max_random_az_covar
@@ -175,8 +173,14 @@ class SimpleParticleSurveillance(gym.Env):
         self.detection_count[target_id] += 1
         # Give a reward if a "track" is initiated.
         if self.detection_count[target_id] == self.n_confirm_detections:
-          reward += self.n_confirm_detections
           self.n_tracks_initiated += 1
+          reward += 1
+          
+          # az = detection.state_vector[1].degrees
+          # el = detection.state_vector[0].degrees
+          # TODO: Consider updating this every step, even if a new detection has not been made
+          # self.swarm_optim.optimize(
+          #     self._distance_objective, detection_pos=np.array([az, el]))
 
       # Only update the swarm state for particles that have not been confirmed
       if isinstance(detection, Clutter) or self.detection_count[target_id] <= self.n_confirm_detections:
@@ -261,8 +265,6 @@ class SimpleParticleSurveillance(gym.Env):
           0, self.max_random_az_covar)
       self.initial_state.covar[el_idx, el_idx] = self.np_random.uniform(
           0, self.max_random_el_covar)
-      self.initial_number_targets = int(np.ceil(self.np_random.uniform(
-          0, self.max_initial_number_targets)))
     # print(self.initial_state.state_vector)
     self._initialize_targets()
 
