@@ -224,10 +224,10 @@ env = SqueezeImage(env)
 env = gym.wrappers.FrameStack(env, 4)
 env = gym.wrappers.TimeLimit(env, max_episode_steps=max_episode_steps)
 
-n_env = 32
-env = gym.vector.AsyncVectorEnv([lambda: env]*n_env)
-# n_env = 1
-# env = gym.vector.SyncVectorEnv([lambda: env])
+# n_env = 32
+# env = gym.vector.AsyncVectorEnv([lambda: env]*n_env)
+n_env = 1
+env = gym.vector.SyncVectorEnv([lambda: env])
 
 
 env = gym.wrappers.ClipAction(env)
@@ -263,13 +263,13 @@ ppo_agent = PPOSurveillanceAgent(env,
 # ppo_agent = PPOSurveillanceAgent.load_from_checkpoint(
 #     checkpoint_filename, env=env, seed=seed)
 
-trainer = pl.Trainer(
-    max_time="00:02:00:00",
-    gradient_clip_val=0.5,
-    accelerator='gpu',
-    devices=1,
-)
-trainer.fit(ppo_agent)
+# trainer = pl.Trainer(
+#     max_time="00:02:00:00",
+#     gradient_clip_val=0.5,
+#     accelerator='gpu',
+#     devices=1,
+# )
+# trainer.fit(ppo_agent)
 
 
 # %% [markdown]
