@@ -1,8 +1,10 @@
 import datetime
+from typing import List
 import numpy as np
 from mpar_sim.looks.volume_search import VolumeSearchLook
 
 from mpar_sim.agents.agent import Agent
+
 
 class RasterScanAgent(Agent):
   """
@@ -43,6 +45,7 @@ class RasterScanAgent(Agent):
                pulsewidth: float = 10e-6,
                prf: float = 1500,
                n_pulses: int = 1,
+               priority: float = 1.0,
                ):
     self.azimuth_scan_limits = azimuth_scan_limits
     self.elevation_scan_limits = elevation_scan_limits
@@ -55,6 +58,7 @@ class RasterScanAgent(Agent):
     self.prf = prf
     self.n_pulses = n_pulses
     self.dwell_time = n_pulses / prf
+    self.priority = priority
 
     # Compute the beam search grid
     d_az = azimuth_beam_spacing*azimuth_beamwidth
@@ -63,20 +67,28 @@ class RasterScanAgent(Agent):
         azimuth_scan_limits[0], azimuth_scan_limits[1], d_az)
     el_beam_positions = np.arange(
         elevation_scan_limits[0], elevation_scan_limits[1], d_el)
+    # Ensure that the upper scan limits are included in the grid
+    if az_beam_positions[-1] != azimuth_scan_limits[1]:
+      az_beam_positions = np.append(az_beam_positions, azimuth_scan_limits[1])
+    if el_beam_positions[-1] != elevation_scan_limits[1]:
+      el_beam_positions = np.append(
+          el_beam_positions, elevation_scan_limits[1])
 
     # Create a grid that contains all possible beam positions
     az_grid, el_grid = np.meshgrid(az_beam_positions, el_beam_positions)
     self.beam_positions = np.stack((
         az_grid.flatten(), el_grid.flatten()), axis=0)
     self.n_positions = self.beam_positions.shape[1]
-    
+
     # Counters
     self.current_position = 0
     self.time = None
 
-  def act(self, current_time: datetime.datetime) -> VolumeSearchLook:
+  def act(self, obs) -> VolumeSearchLook:
     """
     Select a new set of task parameters
+
+    TODO: This should take an observation and return only one task for gym compatibility 
 
     Parameters
     ----------
@@ -88,15 +100,11 @@ class RasterScanAgent(Agent):
     Look
         A new look at the next beam position in the raster scan
     """
-    if self.time is None:
-        self.time = current_time
-        
+
     beam_position = self.beam_positions[:, self.current_position]
     self.current_position = (self.current_position + 1) % self.n_positions
-    
     # Create a new look
     look = VolumeSearchLook(
-        start_time=current_time,
         azimuth_steering_angle=beam_position[0],
         elevation_steering_angle=beam_position[1],
         azimuth_beamwidth=self.azimuth_beamwidth,
@@ -105,6 +113,6 @@ class RasterScanAgent(Agent):
         pulsewidth=self.pulsewidth,
         prf=self.prf,
         n_pulses=self.n_pulses,
+        priority=self.priority,
     )
-
     return look

@@ -2,7 +2,6 @@ import datetime
 from typing import Union
 
 
-# TODO: Add default parameters
 class Look():
   def __init__(self,
                # Beam parameters
@@ -19,7 +18,6 @@ class Look():
                # Scheduler parameters
                start_time: Union[float, datetime.datetime] = 0,
                priority: float = 0,
-               
                ) -> None:
     # Beam parameters
     self.azimuth_steering_angle = azimuth_steering_angle

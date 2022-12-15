@@ -1,4 +1,5 @@
 import copy
+from functools import lru_cache
 from typing import Callable, List, Set, Tuple, Union
 
 import numpy as np
@@ -10,7 +11,7 @@ from stonesoup.models.measurement.nonlinear import RangeRangeRateBinning
 from stonesoup.sensor.radar.radar import RadarElevationBearingRangeRate
 from stonesoup.sensor.sensor import Sensor
 from stonesoup.types.array import CovarianceMatrix, StateVector
-from stonesoup.types.detection import TrueDetection
+from stonesoup.types.detection import TrueDetection, MissedDetection
 from stonesoup.types.groundtruth import GroundTruthState
 from stonesoup.types.state import StateVector
 from stonesoup.types.detection import Clutter
@@ -25,6 +26,7 @@ from mpar_sim.models.measurement.estimation import (angle_crlb, range_crlb,
                                                     velocity_crlb)
 from mpar_sim.models.measurement.nonlinear import RangeRangeRateBinningAliasing
 from stonesoup.models.clutter import ClutterModel
+from stonesoup.types.angle import Elevation, Bearing
 
 
 class PhasedArrayRadar(Sensor):
@@ -167,6 +169,7 @@ class PhasedArrayRadar(Sensor):
     effective_az_beamwidth = look.azimuth_beamwidth * az_broadening
     effective_el_beamwidth = look.elevation_beamwidth * el_broadening
     self.beam = self.beam_shape(
+        wavelength=self.wavelength,
         azimuth_beamwidth=effective_az_beamwidth,
         elevation_beamwidth=effective_el_beamwidth,
         azimuth_steering_angle=look.azimuth_steering_angle,
@@ -192,6 +195,7 @@ class PhasedArrayRadar(Sensor):
         velocity_mapping=self.velocity_mapping,
         noise_covar=CovarianceMatrix(np.diag([0.1, 0.1, 0.1, 0.1])))
 
+  @lru_cache
   def is_detectable(self, state: GroundTruthState) -> bool:
     """
     Returns true if the target is within the radar's field of view (in range, azimuth, and elevation) and false otherwise
@@ -204,13 +208,14 @@ class PhasedArrayRadar(Sensor):
     bool
         Whether the target can be detected by the radar
     """
-    measurement_vector = self.measurement_model.function(state, noise=False)
+    pos_xyz = state.state_vector[self.position_mapping, :]
+    az, el, range = cart2sph(*pos_xyz, degrees=True)
     # Check if state falls within sensor's FOV
-    az_t = measurement_vector[0, 0].degrees - self.beam.azimuth_steering_angle
-    el_t = measurement_vector[1, 0].degrees - \
-        self.beam.elevation_steering_angle
-    true_range = measurement_vector[2, 0]
-    return (self.az_fov[0] <= az_t <= self.az_fov[1]) and (self.el_fov[0] <= el_t <= self.el_fov[1]) and (true_range <= self.max_range)
+    relative_az = az - self.rotation_offset[2]
+    relative_el = el - self.rotation_offset[1]
+    return (self.az_fov[0] <= relative_az <= self.az_fov[1]) and \
+           (self.el_fov[0] <= relative_el <= self.el_fov[1]) and \
+           (range <= self.max_range)
 
   def measure(self,
               ground_truths: Set[GroundTruthState],
@@ -258,9 +263,7 @@ class PhasedArrayRadar(Sensor):
 
       # Probability of detection
       if snr_db > 0:
-        N = self.n_pulses
         pfa = self.false_alarm_rate
-        # pd = albersheim_pd(snr_db, pfa, N)
         pd = pfa**(1/(1+snr_lin))
       else:
         pd = 0  # Assume targets are not detected with negative SNR
@@ -302,6 +305,8 @@ class PhasedArrayRadar(Sensor):
                                   groundtruth_path=truth)
         detections.add(detection)
 
+    # TODO: Add an else statement with missed detections here
+
     if self.include_false_alarms:
       # Generate uniformly distributed false alarms in the radar beam
       # Compute the number of false alarms
@@ -312,7 +317,6 @@ class PhasedArrayRadar(Sensor):
       n_false_alarms = int(np.random.poisson(n_expected_false_alarms))
 
       # Generate random false alarm positions
-      # TODO: Bin these quantities
       el = np.random.uniform(low=-self.beam.elevation_beamwidth/2,
                              high=self.beam.elevation_beamwidth/2,
                              size=n_false_alarms) + self.beam.elevation_steering_angle
@@ -325,11 +329,17 @@ class PhasedArrayRadar(Sensor):
       v = np.random.uniform(low=-self.max_unambiguous_radial_speed,
                             high=self.max_unambiguous_radial_speed,
                             size=n_false_alarms)
-      
+
+      # Bin range and velocity
+      r = np.floor(r / self.range_resolution) * \
+          self.range_resolution + self.range_resolution/2
+      v = np.floor(v / self.velocity_resolution) * \
+          self.velocity_resolution + self.velocity_resolution/2
+
       # Add false alarms to the detection report
       for i in range(n_false_alarms):
-        detections.add(Clutter(np.array([[np.deg2rad(el[i])],
-                                         [np.deg2rad(az[i])],
+        detections.add(Clutter(np.array([[Elevation(np.deg2rad(el[i]))],
+                                         [Bearing(np.deg2rad(az[i]))],
                                          [r[i]],
                                          [v[i]]]),
                                timestamp=truth.timestamp,

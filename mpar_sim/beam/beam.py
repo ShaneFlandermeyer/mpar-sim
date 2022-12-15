@@ -1,6 +1,6 @@
 import numpy as np
 from typing import Callable, Union, Tuple
-from mpar_sim.beam.common import beamwidth2gain
+from mpar_sim.beam.common import beamwidth2aperture, beamwidth2gain
 from mpar_sim.common.wrap_to_interval import wrap_to_interval
 
 
@@ -26,11 +26,13 @@ class Beam():
   directivity_beamwidth_prod = 26000
 
   def __init__(self,
+               wavelength: float,
                azimuth_beamwidth: float,
                elevation_beamwidth: float,
                azimuth_steering_angle: float = 0,
                elevation_steering_angle: float = 0) -> None:
 
+    self.wavelength = wavelength
     self.azimuth_steering_angle = azimuth_steering_angle
     self.elevation_steering_angle = elevation_steering_angle
     self.azimuth_beamwidth = azimuth_beamwidth
@@ -80,7 +82,8 @@ class RectangularBeam(Beam):
         Union[float, np.ndarray]: Beam shape loss (dB)
     """
     loss = np.zeros_like(az)
-    loss[np.logical_or(np.abs(az) > self.azimuth_beamwidth/2, np.abs(el) > self.elevation_beamwidth/2)] = np.inf
+    loss[np.logical_or(np.abs(az) > self.azimuth_beamwidth/2,
+                       np.abs(el) > self.elevation_beamwidth/2)] = np.inf
     return loss
 
 
@@ -123,9 +126,42 @@ class GaussianBeam(Beam):
     Returns:
         Union[float, np.ndarray]: Beam shape loss (dB)
     """
-    beam_shape_loss_az = np.exp(-4*np.log(2) *
-                                (az / self.azimuth_beamwidth)**2)
-    beam_shape_loss_el = np.exp(-4*np.log(2) *
-                                (el / self.elevation_beamwidth)**2)
-    beam_shape_loss_db = -10*np.log10(beam_shape_loss_az*beam_shape_loss_el)
-    return beam_shape_loss_db
+    az_pattern_gain = np.exp(-4*np.log(2) *
+                     (az / self.azimuth_beamwidth)**2)
+    el_pattern_gain = np.exp(-4*np.log(2) *
+                     (el / self.elevation_beamwidth)**2)
+    gain = az_pattern_gain*el_pattern_gain
+    return -10*np.log10(gain)
+
+
+class SincBeam(Beam):
+
+  directivity_beamwidth_prod = 26000
+
+  def __init__(self,
+               *args,
+               **kwargs) -> None:
+    super().__init__(*args, **kwargs)
+
+  def shape_loss(self,
+                 az: Union[float, np.ndarray],
+                 el: Union[float, np.ndarray]):
+    """
+    Compute the off-boresight pattern loss.
+    Parameters
+    ----------
+    az : Union[float, np.ndarray]
+        Azimuth angles 
+    el : Union[float, np.ndarray]
+        Elevation angles
+    Returns
+    -------
+    _type_
+        _description_
+    """
+    dnorm = beamwidth2aperture(
+        np.array([self.azimuth_beamwidth, self.elevation_beamwidth]), self.wavelength) / self.wavelength
+    az_pattern_gain = np.sinc(dnorm[0] * np.sin(np.deg2rad(az)))
+    el_pattern_gain = np.sinc(dnorm[1] * np.sin(np.deg2rad(el)))
+    gain = (az_pattern_gain*el_pattern_gain)**2
+    return -10*np.log10(gain)
