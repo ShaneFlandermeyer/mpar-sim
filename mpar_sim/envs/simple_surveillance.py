@@ -424,22 +424,17 @@ class SimpleParticleSurveillance(gym.Env):
     """
     Move targets forward in time, removing targets that have left the radar's FOV
     """
+    stale_targets = set()
     for path in self.target_paths:
       index = path[-1].metadata.get("index")
       updated_state = self.transition_model(np.asarray(path[-1].state_vector),
                                             dt=dt.total_seconds())
-      # updated_state = self.transition_model.function(
-      #     path[-1], noise=True, time_interval=dt)
       path.append(GroundTruthState(
           updated_state, timestamp=self.time,
           metadata={"index": index}))
-
-    # Remove targets that have left the radar FOV
-    stale_targets = set()
-    for path in self.target_paths:
       if not self.radar.is_detectable(path[-1]):
         stale_targets.add(path)
-        if path.id in self.detection_count:
+        if path.id in self.detection_count.keys():
           del self.detection_count[path.id]
 
     self.target_paths.difference_update(stale_targets)

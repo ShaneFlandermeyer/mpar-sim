@@ -42,7 +42,7 @@ from mpar_sim.wrappers.squeeze_image import SqueezeImage
 
 
 # %% [markdown]
-# ## Setup 
+# ## Setup
 
 # %%
 seed = np.random.randint(0, 2**32 - 1)
@@ -54,6 +54,8 @@ plt.rcParams["axes.labelweight"] = "bold"
 # ## RL agent defintion
 
 # %%
+
+
 class PPOSurveillanceAgent(PPO):
   def __init__(self,
                env: gym.Env,
@@ -89,11 +91,11 @@ class PPOSurveillanceAgent(PPO):
 
     # The actor head parameterizes the mean and variance of a Gaussian distribution for the beam steering angles in az/el.
     n_continuous_actions = 2
-    self.action_alpha = nn.Sequential(
+    self.action_mean = nn.Sequential(
         nn.Linear(512, n_continuous_actions),
-        nn.Softplus(),
     )
-    self.action_beta = nn.Sequential(
+
+    self.action_variance = nn.Sequential(
         nn.Linear(512, n_continuous_actions),
         nn.Softplus(),
     )
@@ -107,10 +109,11 @@ class PPOSurveillanceAgent(PPO):
   def forward(self, x: torch.Tensor):
     features = self.feature_net(x)
     # Sample the action from its distribution
-    alpha = self.action_alpha(features) + 1
-    beta = self.action_beta(features) + 1
-    dist = torch.distributions.Beta(alpha, beta)
+    means = self.action_mean(features)
+    variances = self.action_variance(features)
+    dist = torch.distributions.Normal(means, variances)
     actions = dist.sample()
+
     # Compute the value of the state
     values = self.critic(features).flatten()
     return actions, values
@@ -120,13 +123,12 @@ class PPOSurveillanceAgent(PPO):
                        actions: torch.Tensor):
     features = self.feature_net(observations)
     # Compute action sampling distribution
-    alpha = self.action_alpha(features) + 1
-    beta = self.action_beta(features) + 1
-    dist = torch.distributions.Beta(alpha, beta)
+    means = self.action_mean(features)
+    variances = self.action_variance(features)
+    dist = torch.distributions.Normal(means, variances)
     log_prob = dist.log_prob(actions)
     entropy = dist.entropy()
     return log_prob, entropy
-
 
   def configure_optimizers(self):
     optimizer = torch.optim.Adam(self.parameters(), lr=2.5e-4, eps=1e-5)
@@ -142,14 +144,13 @@ class PPOSurveillanceAgent(PPO):
           prog_bar=True, logger=True)
 
 
-
 # %% [markdown]
 # ## Environment setup
-
 # %%
 # In this experiment, targets move according to a constant velocity, white noise acceleration model.
 # http://www.control.isy.liu.se/student/graduate/targettracking/file/le2_handout.pdf
-transition_model = lambda state, dt: constant_velocity(state, q=10, dt=dt)
+def transition_model(state, dt): return constant_velocity(state, q=10, dt=dt)
+
 
 # Radar system object
 radar = PhasedArrayRadar(
@@ -172,14 +173,14 @@ radar = PhasedArrayRadar(
     az_fov=[-45, 45],
     el_fov=[-45, 45],
     # Detection settings
-    false_alarm_rate=1e-6,
-    include_false_alarms=False
+    false_alarm_rate=1e-7,
+    include_false_alarms=True
 )
 
 # Gaussian parameters used to initialize the states of new targets in the scene. Here, elements (0, 2, 4) of the state vector/covariance are the az/el/range of the target (angles in degrees), and (1, 3, 5) are the x/y/z velocities in m/s. If randomize_initial_state is set to True in the environment, the mean az/el are uniformly sampled across the radar field of view, and the variance is uniformly sampled from [0, max_random_az_covar] and [0, max_random_el_covar] for the az/el, respectively
 initial_state = GaussianState(
-    state_vector=[  -40,   0,  20,   0, 10e3, 0],
-    covar=np.diag([5, 100, 5, 100,  5e3, 100])
+    state_vector=[-20,   0,  20,   0, 10e3, 0],
+    covar=np.diag([9, 100, 9, 100,  5e3, 100])
 )
 
 # Radar parameters
@@ -204,19 +205,18 @@ env = gym.make('mpar_sim/SimpleParticleSurveillance-v0',
                n_pulses=n_pulses,
                transition_model=transition_model,
                initial_state=initial_state,
-               birth_rate=0.025,
-               death_probability=0.01,
-               initial_number_targets=25,
-               max_initial_number_targets=50,
+               birth_rate=0.01,
+               death_probability=0.005,
+               initial_number_targets=50,
                n_confirm_detections=3,
-               randomize_initial_state=False,
-               max_random_az_covar=0.1,
-               max_random_el_covar=0.1,
+               randomize_initial_state=True,
+               max_random_az_covar=9,
+               max_random_el_covar=9,
                render_mode='rgb_array',
                )
 
 # Define all environment wrappers
-max_episode_steps = 500
+max_episode_steps = 1000
 # Observation wrappers
 env = gym.wrappers.ResizeObservation(env, (64, 64))
 env = ImageToPytorch(env)
@@ -229,9 +229,8 @@ env = gym.vector.AsyncVectorEnv([lambda: env]*n_env)
 # n_env = 1
 # env = gym.vector.SyncVectorEnv([lambda: env])
 
-env = gym.wrappers.RescaleAction(env, 
-                                 np.zeros(env.action_space.shape), 
-                                 np.ones(env.action_space.shape))
+
+env = gym.wrappers.ClipAction(env)
 env = gym.wrappers.RecordEpisodeStatistics(env=env, deque_size=20)
 
 
@@ -239,61 +238,56 @@ env = gym.wrappers.RecordEpisodeStatistics(env=env, deque_size=20)
 # ## Training loop
 
 # %%
-# ppo_agent = PPOSurveillanceAgent(env,
-#                                  n_rollouts_per_epoch=1,
-#                                  n_steps_per_rollout=512,
-#                                  n_gradient_steps=5,
-#                                  batch_size=4096,
-#                                  gamma=0.99,
-#                                  gae_lambda=0.95,
-#                                  value_coef=1,
-#                                  entropy_coef=0.01,
-#                                  seed=seed,
-#                                  normalize_advantage=True,
-#                                  policy_clip_range=0.2,
-#                                  target_kl=None,
-#                                  # Radar parameters
-#                                  azimuth_beamwidth=az_bw,
-#                                  elevation_beamwidth=el_bw,
-#                                  bandwidth=bw,
-#                                  pulsewidth=pulsewidth,
-#                                  prf=prf,
-#                                  n_pulses=n_pulses,
-#                                  )
+ppo_agent = PPOSurveillanceAgent(env,
+                                 n_rollouts_per_epoch=1,
+                                 n_steps_per_rollout=512,
+                                 n_gradient_steps=3,
+                                 batch_size=4096,
+                                 gamma=0.99,
+                                 gae_lambda=0.95,
+                                 value_coef=0.5,
+                                 entropy_coef=0.01,
+                                 seed=seed,
+                                 normalize_advantage=True,
+                                 policy_clip_range=0.1,
+                                 target_kl=None,
+                                 # Radar parameters
+                                 azimuth_beamwidth=az_bw,
+                                 elevation_beamwidth=el_bw,
+                                 bandwidth=bw,
+                                 pulsewidth=pulsewidth,
+                                 prf=prf,
+                                 n_pulses=n_pulses,
+                                 )
+# checkpoint_filename = "/home/shane/src/mpar-sim/lightning_logs/version_136/checkpoints/epoch=375-step=4501.ckpt"
+# ppo_agent = PPOSurveillanceAgent.load_from_checkpoint(
+#     checkpoint_filename, env=env, seed=seed)
 
-# trainer = pl.Trainer(
-#     max_time="00:00:30:00",
-#     gradient_clip_val=0.5,
-#     accelerator='gpu',
-#     devices=1,
-# )
-# trainer.fit(ppo_agent)
+trainer = pl.Trainer(
+    max_time="00:02:00:00",
+    gradient_clip_val=0.5,
+    accelerator='gpu',
+    devices=1,
+)
+trainer.fit(ppo_agent)
 
 
 # %% [markdown]
 # ## Create agents to be used for comparison
 
 # %%
-# TODO: Here, the action space is mapped from [0,1] to the az/el limits. When I designed this object, I did not have that in mind, so this is kinda hacky.
 raster_agent = RasterScanAgent(
-    azimuth_scan_limits=np.array([0, 1]),
-    elevation_scan_limits=np.array([0, 1]),
+    azimuth_scan_limits=np.array([-45, 45]),
+    elevation_scan_limits=np.array([-45, 45]),
     azimuth_beam_spacing=0.75,
     elevation_beam_spacing=0.75,
-    azimuth_beamwidth=az_bw/(radar.az_fov[1] - radar.az_fov[0]),
-    elevation_beamwidth=el_bw/(radar.el_fov[1] - radar.el_fov[0]),
+    azimuth_beamwidth=az_bw,
+    elevation_beamwidth=el_bw,
     bandwidth=bw,
     pulsewidth=pulsewidth,
     prf=prf,
     n_pulses=n_pulses,
 )
-raster_agent.azimuth_beamwidth = az_bw
-raster_agent.elevation_beamwidth = el_bw
-
-checkpoint_filename = "/home/shane/src/mpar-sim/lightning_logs/version_93/checkpoints/epoch=156-step=3121.ckpt"
-ppo_agent = PPOSurveillanceAgent.load_from_checkpoint(
-    checkpoint_filename, env=env, seed=seed)
-ppo_agent.eval()
 
 
 # %% [markdown]
@@ -304,10 +298,12 @@ ppo_init_ratio = np.ones((max_episode_steps, n_env))
 ppo_tracks_init = np.zeros((max_episode_steps, n_env))
 raster_init_ratio = np.ones((max_episode_steps, n_env))
 raster_tracks_init = np.zeros((max_episode_steps, n_env))
-beam_coverage_map = np.zeros((64, 64))
+beam_coverage_map = np.zeros((32, 32))
 
-az_axis = np.linspace(radar.az_fov[0], radar.az_fov[1], beam_coverage_map.shape[1])
-el_axis = np.linspace(radar.el_fov[0], radar.el_fov[1], beam_coverage_map.shape[0])
+az_axis = np.linspace(
+    radar.az_fov[0], radar.az_fov[1], beam_coverage_map.shape[1])
+el_axis = np.linspace(
+    radar.el_fov[0], radar.el_fov[1], beam_coverage_map.shape[0])
 
 
 tic = time.time()
@@ -325,24 +321,23 @@ with torch.no_grad():
     # Repeat actions for all environments
     obs, reward, terminated, truncated, info = env.step(actions)
     dones = np.logical_or(dones, np.logical_or(terminated, truncated))
-    
+
     ppo_init_ratio[i, ~dones] = info['initiation_ratio'][~dones]
-    ppo_tracks_init[i:, :] = info['n_tracks_initiated'][:]
-    
+    ppo_tracks_init[i:, ~np.logical_or(
+        terminated, truncated)] = info['n_tracks_initiated'][~np.logical_or(terminated, truncated)]
+
     # Add 1 to the pixels illuminated by the current beam using np.digitize
-    az_deg = -45 + 90 * actions[0,0]
-    el_deg = -45 + 90 * actions[0,1]
-    az = np.digitize(az_deg, az_axis)
-    el = np.digitize(el_deg, el_axis[::-1])
-    # beam_coverage_map *= 0.99
-    beam_coverage_map[el, az] += 1
-    
+    actions[0, :] = wrap_to_interval(actions[0, :], -45, 45)
+    az = np.digitize(actions[0, 0], az_axis) - 1
+    el = np.digitize(actions[0, 1], el_axis[::-1]) - 1
+    beam_coverage_map[el-1:el+1, az-1:az+1] += 1
+
     i += 1
 toc = time.time()
 print("PPO agent done")
 print(f"Time elapsed: {toc-tic:.2f} seconds")
 
-# Test the raster agent
+# # Test the raster agent
 tic = time.time()
 
 obs, info = env.reset(seed=seed)
@@ -357,9 +352,10 @@ while not np.all(dones):
   obs, reward, terminated, truncated, info = env.step(actions)
   dones = np.logical_or(dones, np.logical_or(terminated, truncated))
   raster_init_ratio[i, ~dones] = info['initiation_ratio'][~dones]
-  raster_tracks_init[i:, :] = info['n_tracks_initiated'][:]
+  raster_tracks_init[i:, ~np.logical_or(
+      terminated, truncated)] = info['n_tracks_initiated'][~np.logical_or(terminated, truncated)]
   i += 1
-  
+
 toc = time.time()
 print("Raster agent done")
 print(f"Time elapsed: {toc-tic:.2f} seconds")
@@ -413,6 +409,3 @@ env.close()
 
 
 # %%
-
-
-

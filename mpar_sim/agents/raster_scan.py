@@ -67,6 +67,12 @@ class RasterScanAgent(Agent):
         azimuth_scan_limits[0], azimuth_scan_limits[1], d_az)
     el_beam_positions = np.arange(
         elevation_scan_limits[0], elevation_scan_limits[1], d_el)
+    # Ensure that the upper scan limits are included in the grid
+    if az_beam_positions[-1] != azimuth_scan_limits[1]:
+      az_beam_positions = np.append(az_beam_positions, azimuth_scan_limits[1])
+    if el_beam_positions[-1] != elevation_scan_limits[1]:
+      el_beam_positions = np.append(
+          el_beam_positions, elevation_scan_limits[1])
 
     # Create a grid that contains all possible beam positions
     az_grid, el_grid = np.meshgrid(az_beam_positions, el_beam_positions)
@@ -83,7 +89,7 @@ class RasterScanAgent(Agent):
     Select a new set of task parameters
 
     TODO: This should take an observation and return only one task for gym compatibility 
-    
+
     Parameters
     ----------
     current_time: datetime.datetime
