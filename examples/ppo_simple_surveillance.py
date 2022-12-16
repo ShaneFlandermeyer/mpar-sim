@@ -173,21 +173,21 @@ radar = PhasedArrayRadar(
     az_fov=[-45, 45],
     el_fov=[-45, 45],
     # Detection settings
-    false_alarm_rate=1e-7,
-    include_false_alarms=True
+    false_alarm_rate=1e-6,
+    include_false_alarms=False
 )
 
 # Gaussian parameters used to initialize the states of new targets in the scene. Here, elements (0, 2, 4) of the state vector/covariance are the az/el/range of the target (angles in degrees), and (1, 3, 5) are the x/y/z velocities in m/s. If randomize_initial_state is set to True in the environment, the mean az/el are uniformly sampled across the radar field of view, and the variance is uniformly sampled from [0, max_random_az_covar] and [0, max_random_el_covar] for the az/el, respectively
 initial_state = GaussianState(
     state_vector=[-20,   0,  20,   0, 10e3, 0],
-    covar=np.diag([9, 100, 9, 100,  5e3, 100])
+    covar=np.diag([3**2, 100**2, 3**2, 100**2,  1000**2, 100**2])
 )
 
 # Radar parameters
 # Specifying these up here because they should really be part of the action space, but that will require some refactoring of my lightning-rl repo
 # az_bw = el_bw = 3
-az_bw = 3
-el_bw = 3
+az_bw = 5
+el_bw = 5
 bw = 100e6
 pulsewidth = 10e-6
 prf = 5e3
@@ -210,8 +210,8 @@ env = gym.make('mpar_sim/SimpleParticleSurveillance-v0',
                initial_number_targets=50,
                n_confirm_detections=3,
                randomize_initial_state=True,
-               max_random_az_covar=9,
-               max_random_el_covar=9,
+               max_random_az_covar=50,
+               max_random_el_covar=50,
                render_mode='rgb_array',
                )
 
@@ -224,10 +224,10 @@ env = SqueezeImage(env)
 env = gym.wrappers.FrameStack(env, 4)
 env = gym.wrappers.TimeLimit(env, max_episode_steps=max_episode_steps)
 
-# n_env = 32
-# env = gym.vector.AsyncVectorEnv([lambda: env]*n_env)
-n_env = 1
-env = gym.vector.SyncVectorEnv([lambda: env])
+n_env = 32
+env = gym.vector.AsyncVectorEnv([lambda: env]*n_env)
+# n_env = 1
+# env = gym.vector.SyncVectorEnv([lambda: env])
 
 
 env = gym.wrappers.ClipAction(env)
@@ -263,13 +263,13 @@ ppo_agent = PPOSurveillanceAgent(env,
 # ppo_agent = PPOSurveillanceAgent.load_from_checkpoint(
 #     checkpoint_filename, env=env, seed=seed)
 
-# trainer = pl.Trainer(
-#     max_time="00:02:00:00",
-#     gradient_clip_val=0.5,
-#     accelerator='gpu',
-#     devices=1,
-# )
-# trainer.fit(ppo_agent)
+trainer = pl.Trainer(
+    max_time="00:03:00:00",
+    gradient_clip_val=0.5,
+    accelerator='gpu',
+    devices=1,
+)
+trainer.fit(ppo_agent)
 
 
 # %% [markdown]

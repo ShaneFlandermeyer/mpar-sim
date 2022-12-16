@@ -22,11 +22,13 @@ from mpar_sim.common.albersheim import albersheim_pd
 from mpar_sim.common.coordinate_transform import (
     cart2sph, rotx, roty, rotz, sph2cart)
 from mpar_sim.looks.look import Look
+from mpar_sim.looks.spoiled_look import SpoiledLook
 from mpar_sim.models.measurement.estimation import (angle_crlb, range_crlb,
                                                     velocity_crlb)
 from mpar_sim.models.measurement.nonlinear import RangeRangeRateBinningAliasing
 from stonesoup.models.clutter import ClutterModel
 from stonesoup.types.angle import Elevation, Bearing
+from mpar_sim.beam.common import aperture2beamwidth
 
 
 class PhasedArrayRadar(Sensor):
@@ -104,6 +106,14 @@ class PhasedArrayRadar(Sensor):
   def __init__(self, *args, **kwargs):
     super().__init__(*args, **kwargs)
     self.wavelength = constants.c / self.center_frequency
+    
+    # Compute the maximum possible beamwidth in az/el for the array geometry
+    aperture_width = self.n_elements_x * self.element_spacing * self.wavelength
+    aperture_height = self.n_elements_y * self.element_spacing * self.wavelength
+    beamwidths = aperture2beamwidth(
+        np.array([aperture_width, aperture_height]), self.wavelength)
+    self.max_az_beamwidth = beamwidths[0]
+    self.max_el_beamwidth = beamwidths[1]
 
   @measurement_model.getter
   def measurement_model(self):
@@ -162,16 +172,31 @@ class PhasedArrayRadar(Sensor):
     self.max_unambiguous_range = constants.c / (2 * self.prf)
     self.max_unambiguous_radial_speed = (self.wavelength / 2) * (self.prf / 2)
 
-    # Create a new beam from the parameter set
+    # Create beams from the parameter set
     az_broadening, el_broadening = beam_broadening_factor(
         look.azimuth_steering_angle,
         look.elevation_steering_angle)
-    effective_az_beamwidth = look.azimuth_beamwidth * az_broadening
-    effective_el_beamwidth = look.elevation_beamwidth * el_broadening
-    self.beam = self.beam_shape(
+    # TODO: Double check with Dr. Metcalf that this is correct 
+    tx_az_beamwidth = look.azimuth_beamwidth * az_broadening
+    tx_el_beamwidth = look.elevation_beamwidth * el_broadening
+    # If the transmit beam is spoiled, use the full aperture to form the receive beam. Otherwise, use the requested beamwidth for both transmit and receive
+    if isinstance(look, SpoiledLook):
+        rx_az_beamwidth = self.max_az_beamwidth * az_broadening
+        rx_el_beamwidth = self.max_el_beamwidth * el_broadening
+    else:
+        rx_az_beamwidth = tx_az_beamwidth
+        rx_el_beamwidth = tx_el_beamwidth
+    self.tx_beam = self.beam_shape(
         wavelength=self.wavelength,
-        azimuth_beamwidth=effective_az_beamwidth,
-        elevation_beamwidth=effective_el_beamwidth,
+        azimuth_beamwidth=tx_az_beamwidth,
+        elevation_beamwidth=tx_el_beamwidth,
+        azimuth_steering_angle=look.azimuth_steering_angle,
+        elevation_steering_angle=look.elevation_steering_angle,
+    )
+    self.rx_beam = self.beam_shape(
+        wavelength=self.wavelength,
+        azimuth_beamwidth=rx_az_beamwidth,
+        elevation_beamwidth=rx_el_beamwidth,
         azimuth_steering_angle=look.azimuth_steering_angle,
         elevation_steering_angle=look.elevation_steering_angle,
     )
@@ -183,7 +208,8 @@ class PhasedArrayRadar(Sensor):
     noise_power = constants.Boltzmann * self.system_temperature * \
         self.noise_figure * look.bandwidth * n_elements_total
     self.loop_gain = look.n_pulses * pulse_compression_gain * self.tx_power * \
-        self.beam.gain**2 * self.wavelength**2 / ((4*np.pi)**3 * noise_power)
+        self.tx_beam.gain * self.rx_beam.gain * \
+        self.wavelength**2 / ((4*np.pi)**3 * noise_power)
 
     self.measurement_model = RangeRangeRateBinningAliasing(
         range_res=self.range_resolution,
@@ -252,10 +278,11 @@ class PhasedArrayRadar(Sensor):
       [target_az, target_el, r] = cart2sph(*relative_pos)
 
       # Compute target's az/el relative to the beam center
-      relative_az = np.rad2deg(target_az) - self.beam.azimuth_steering_angle
-      relative_el = np.rad2deg(target_el) - self.beam.elevation_steering_angle
+      relative_az = np.rad2deg(target_az) - self.tx_beam.azimuth_steering_angle
+      relative_el = np.rad2deg(target_el) - \
+          self.tx_beam.elevation_steering_angle
       # Compute loss due to the target being off-centered in the beam
-      beam_shape_loss_db = self.beam.shape_loss(relative_az, relative_el)
+      beam_shape_loss_db = self.tx_beam.shape_loss(relative_az, relative_el)
 
       snr_db = 10*np.log10(self.loop_gain) + 10*np.log10(truth.rcs) - \
           40*np.log10(r) - beam_shape_loss_db
@@ -286,11 +313,11 @@ class PhasedArrayRadar(Sensor):
             bias_fraction=0.05)
         azimuth_variance = angle_crlb(
             snr=snr_lin,
-            resolution=self.beam.azimuth_beamwidth,
+            resolution=self.rx_beam.azimuth_beamwidth,
             bias_fraction=0.01)
         elevation_variance = angle_crlb(
             snr=snr_lin,
-            resolution=self.beam.elevation_beamwidth,
+            resolution=self.rx_beam.elevation_beamwidth,
             bias_fraction=0.01)
         measurement_model.noise_covar = np.diag(
             [elevation_variance,
@@ -317,12 +344,12 @@ class PhasedArrayRadar(Sensor):
       n_false_alarms = int(np.random.poisson(n_expected_false_alarms))
 
       # Generate random false alarm positions
-      el = np.random.uniform(low=-self.beam.elevation_beamwidth/2,
-                             high=self.beam.elevation_beamwidth/2,
-                             size=n_false_alarms) + self.beam.elevation_steering_angle
-      az = np.random.uniform(low=-self.beam.azimuth_beamwidth/2,
-                             high=self.beam.azimuth_beamwidth/2,
-                             size=n_false_alarms) + self.beam.azimuth_steering_angle
+      el = np.random.uniform(low=-self.tx_beam.elevation_beamwidth/2,
+                             high=self.tx_beam.elevation_beamwidth/2,
+                             size=n_false_alarms) + self.tx_beam.elevation_steering_angle
+      az = np.random.uniform(low=-self.tx_beam.azimuth_beamwidth/2,
+                             high=self.tx_beam.azimuth_beamwidth/2,
+                             size=n_false_alarms) + self.tx_beam.azimuth_steering_angle
       r = np.random.uniform(low=0,
                             high=self.max_unambiguous_range,
                             size=n_false_alarms)

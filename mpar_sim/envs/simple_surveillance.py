@@ -15,6 +15,7 @@ from stonesoup.types.detection import Clutter
 from mpar_sim.common.coordinate_transform import sph2cart
 from mpar_sim.defaults import default_gbest_pso, default_lbest_pso
 from mpar_sim.looks.look import Look
+from mpar_sim.looks.spoiled_look import SpoiledLook
 from mpar_sim.radar import PhasedArrayRadar
 from pyswarms.base.base_single import SwarmOptimizer
 
@@ -137,7 +138,7 @@ class SimpleParticleSurveillance(gym.Env):
   def step(self, action: np.ndarray):
 
     # TODO: Add a resource management component here
-    look = Look(
+    look = SpoiledLook(
         azimuth_steering_angle=action[0],
         elevation_steering_angle=action[1],
         azimuth_beamwidth=self.azimuth_beamwidth,
@@ -404,7 +405,7 @@ class SimpleParticleSurveillance(gym.Env):
     """
     state = state_vector or \
         self.initial_state.state_vector + \
-        self.initial_state.covar @ \
+        np.sqrt(self.initial_state.covar) @ \
         self.np_random.standard_normal(size=(self.initial_state.ndim, 1))
     # Convert state vector from spherical to cartesian
     x, y, z = sph2cart(*state[self.radar.position_mapping, :], degrees=True)
