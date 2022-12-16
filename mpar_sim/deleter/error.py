@@ -15,7 +15,8 @@ class AngularErrorDeleter(Deleter):
   Deletes tracks whose angular estimation error exceeds some threshold.
   """
 
-  error_thresh: float = Property(doc="Error threshold")
+  az_error_threshold: float = Property(doc="Azimuth Error threshold")
+  el_error_threshold: float = Property(doc="Elevation Error threshold")
   position_mapping: Tuple[int, int, int] = Property(
       default=(0, 2, 4),
       doc="Mapping between or positions and state "
@@ -55,6 +56,6 @@ class AngularErrorDeleter(Deleter):
       el_error = diagonals[0]
       az_error = diagonals[1]
 
-    if az_error > self.error_thresh or el_error > self.error_thresh:
+    if az_error > self.az_error_threshold or el_error > self.el_error_threshold:
       return True
     return False
