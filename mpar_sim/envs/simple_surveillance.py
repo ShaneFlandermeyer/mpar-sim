@@ -137,7 +137,6 @@ class SimpleParticleSurveillance(gym.Env):
 
   def step(self, action: np.ndarray):
 
-    # TODO: Add a resource management component here
     look = SpoiledLook(
         azimuth_steering_angle=action[0],
         elevation_steering_angle=action[1],
@@ -176,12 +175,6 @@ class SimpleParticleSurveillance(gym.Env):
         if self.detection_count[target_id] == self.n_confirm_detections:
           self.n_tracks_initiated += 1
           reward += 1
-          
-          # az = detection.state_vector[1].degrees
-          # el = detection.state_vector[0].degrees
-          # TODO: Consider updating this every step, even if a new detection has not been made
-          # self.swarm_optim.optimize(
-          #     self._distance_objective, detection_pos=np.array([az, el]))
 
       # Only update the swarm state for particles that have not been confirmed
       if isinstance(detection, Clutter) or self.detection_count[target_id] <= self.n_confirm_detections:
@@ -428,8 +421,8 @@ class SimpleParticleSurveillance(gym.Env):
     stale_targets = set()
     for path in self.target_paths:
       index = path[-1].metadata.get("index")
-      updated_state = self.transition_model(np.asarray(path[-1].state_vector),
-                                            dt=dt.total_seconds())
+      updated_state = self.transition_model.function(
+          path[-1], noise=True, time_interval=dt)
       path.append(GroundTruthState(
           updated_state, timestamp=self.time,
           metadata={"index": index}))

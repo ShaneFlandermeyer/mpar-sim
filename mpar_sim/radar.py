@@ -332,8 +332,6 @@ class PhasedArrayRadar(Sensor):
                                   groundtruth_path=truth)
         detections.add(detection)
 
-    # TODO: Add an else statement with missed detections here
-
     if self.include_false_alarms:
       # Generate uniformly distributed false alarms in the radar beam
       # Compute the number of false alarms

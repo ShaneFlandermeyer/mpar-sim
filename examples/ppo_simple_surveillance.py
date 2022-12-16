@@ -149,8 +149,10 @@ class PPOSurveillanceAgent(PPO):
 # %%
 # In this experiment, targets move according to a constant velocity, white noise acceleration model.
 # http://www.control.isy.liu.se/student/graduate/targettracking/file/le2_handout.pdf
-def transition_model(state, dt): return constant_velocity(state, q=10, dt=dt)
-
+transition_model = CombinedLinearGaussianTransitionModel([
+    ConstantVelocity(10),
+    ConstantVelocity(10),
+    ConstantVelocity(10)])
 
 # Radar system object
 radar = PhasedArrayRadar(
@@ -185,7 +187,6 @@ initial_state = GaussianState(
 
 # Radar parameters
 # Specifying these up here because they should really be part of the action space, but that will require some refactoring of my lightning-rl repo
-# az_bw = el_bw = 3
 az_bw = 5
 el_bw = 5
 bw = 100e6
@@ -259,12 +260,13 @@ ppo_agent = PPOSurveillanceAgent(env,
                                  prf=prf,
                                  n_pulses=n_pulses,
                                  )
-# checkpoint_filename = "/home/shane/src/mpar-sim/lightning_logs/version_136/checkpoints/epoch=375-step=4501.ckpt"
+
+# checkpoint_filename = "/home/shane/src/mpar-sim/lightning_logs/version_33/checkpoints/epoch=210-step=2532.ckpt"
 # ppo_agent = PPOSurveillanceAgent.load_from_checkpoint(
 #     checkpoint_filename, env=env, seed=seed)
 
 trainer = pl.Trainer(
-    max_time="00:03:00:00",
+    max_time="00:02:00:00",
     gradient_clip_val=0.5,
     accelerator='gpu',
     devices=1,
@@ -370,16 +372,8 @@ plt.plot(np.mean(raster_init_ratio[:-1, :], axis=1), linewidth=2)
 plt.plot(np.mean(ppo_init_ratio[:-1, :], axis=1), linewidth=2)
 plt.grid()
 plt.xlabel('Time step (dwells)', fontsize=14)
-plt.ylabel('Fraction of Targets Detected', fontsize=14)
+plt.ylabel('Track Initiation Fraction', fontsize=14)
 plt.legend(['Raster', 'RL'], fontsize=14)
-
-plt.figure()
-plt.plot(np.mean(raster_tracks_init[:-1, :], axis=1), linewidth=2)
-plt.plot(np.mean(ppo_tracks_init[:-1, :], axis=1), linewidth=2)
-plt.xlabel('Time step (dwells)', fontsize=14)
-plt.ylabel('Number of Tracks Initiated', fontsize=14)
-plt.legend(['Raster', 'RL'], fontsize=14)
-plt.grid()
 
 plt.figure()
 plt.imshow(beam_coverage_map,
