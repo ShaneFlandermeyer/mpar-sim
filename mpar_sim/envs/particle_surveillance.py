@@ -121,7 +121,6 @@ class ParticleSurveillance(gym.Env):
         high=np.array([self.radar.az_fov[1], self.radar.el_fov[1]]),
         shape=(2,),
         dtype=np.float32)
-    # TODO: Add the other look parameters to the action space.
     assert render_mode is None or render_mode in self.metadata["render_modes"]
     self.render_mode = render_mode
 
@@ -166,28 +165,33 @@ class ParticleSurveillance(gym.Env):
     for path in self.target_paths:
       path.states[-1].rcs = 10
 
-    detections = self.radar.measure(self.target_paths, noise=True, timestamp=self.time)
-    
-    # Don't try to initiate tracks for detections that are already associated with a track
-    hypotheses = self.initiator.data_associator.associate(
-        self.tracks, detections, self.time)
-    associated_detections = [hypothesis.measurement for hypothesis in hypotheses.values() if hypothesis.measurement is not None]
-    for track in self.tracks:
-      hypothesis = hypotheses[track]
-      if hypothesis.measurement:
-        associated_detections.append(hypothesis.measurement)
-    new_tracks, particle_detections = self.initiator.initiate(
-        detections - set(associated_detections), self.time)
-    
-    if new_tracks:
-      self.tracks.extend(list(new_tracks))
+    detections = self.radar.measure(
+        self.target_paths, noise=True, timestamp=self.time)
 
-    # Update the particle swarm if the detection is not the first detection the initiator has seen.
-    for detection in particle_detections:
-      az = detection.state_vector[1].degrees
-      el = detection.state_vector[0].degrees
-      self.swarm_optim.optimize(
-          self._distance_objective, detection_pos=np.array([az, el]))
+    reward = 0
+    if len(detections) > 0:
+      # Filter out detections that have been associated with an existing track
+      hypotheses = self.initiator.data_associator.associate(
+          self.tracks, detections, self.time)
+      associated_detections = set()
+      for track in self.tracks:
+        hypothesis = hypotheses[track]
+        if hypothesis.measurement:
+          associated_detections.add(hypothesis.measurement)
+      
+      # Update tentative tracks with new detections
+      new_tracks, particle_detections = self.initiator.initiate(
+          detections - associated_detections, self.time)
+      self.tracks |= new_tracks
+      
+      # Update the particle swarm to account for detections associated with tentative tracks
+      for detection in particle_detections:
+        az = detection.state_vector[1].degrees
+        el = detection.state_vector[0].degrees
+        self.swarm_optim.optimize(
+            self._distance_objective, detection_pos=np.array([az, el]))
+        
+      reward += len(new_tracks)
 
     # Mutate particles based on Engelbrecht equations (16.66-16.67)
     Pm = 0.005
@@ -228,7 +232,7 @@ class ParticleSurveillance(gym.Env):
     # Create outputs
     observation = self._get_obs()
     info = self._get_info()
-    reward = len(new_tracks)
+    
 
     # Terminate the episode when all targets have been detected at least n_detections_max times
     if len(self.tracks) >= self.n_tracks_per_episode:
@@ -275,7 +279,7 @@ class ParticleSurveillance(gym.Env):
     self.detection_history = []
     self.detection_count = dict()
 
-    self.tracks = []
+    self.tracks = set()
 
     observation = self._get_obs()
     info = self._get_info()
