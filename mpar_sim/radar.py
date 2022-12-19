@@ -1,6 +1,6 @@
 import copy
 from functools import lru_cache
-from typing import Callable, List, Set, Tuple, Union
+from typing import Callable, List, Optional, Set, Tuple, Union
 
 import numpy as np
 from scipy import constants
@@ -29,6 +29,7 @@ from mpar_sim.models.measurement.nonlinear import RangeRangeRateBinningAliasing
 from stonesoup.models.clutter import ClutterModel
 from stonesoup.types.angle import Elevation, Bearing
 from mpar_sim.beam.common import aperture2beamwidth
+from datetime import datetime
 
 
 class PhasedArrayRadar(Sensor):
@@ -106,7 +107,7 @@ class PhasedArrayRadar(Sensor):
   def __init__(self, *args, **kwargs):
     super().__init__(*args, **kwargs)
     self.wavelength = constants.c / self.center_frequency
-    
+
     # Compute the maximum possible beamwidth in az/el for the array geometry
     aperture_width = self.n_elements_x * self.element_spacing * self.wavelength
     aperture_height = self.n_elements_y * self.element_spacing * self.wavelength
@@ -176,16 +177,15 @@ class PhasedArrayRadar(Sensor):
     az_broadening, el_broadening = beam_broadening_factor(
         look.azimuth_steering_angle,
         look.elevation_steering_angle)
-    # TODO: Double check with Dr. Metcalf that this is correct 
     tx_az_beamwidth = look.azimuth_beamwidth * az_broadening
     tx_el_beamwidth = look.elevation_beamwidth * el_broadening
     # If the transmit beam is spoiled, use the full aperture to form the receive beam. Otherwise, use the requested beamwidth for both transmit and receive
     if isinstance(look, SpoiledLook):
-        rx_az_beamwidth = self.max_az_beamwidth * az_broadening
-        rx_el_beamwidth = self.max_el_beamwidth * el_broadening
+      rx_az_beamwidth = self.max_az_beamwidth * az_broadening
+      rx_el_beamwidth = self.max_el_beamwidth * el_broadening
     else:
-        rx_az_beamwidth = tx_az_beamwidth
-        rx_el_beamwidth = tx_el_beamwidth
+      rx_az_beamwidth = tx_az_beamwidth
+      rx_el_beamwidth = tx_el_beamwidth
     self.tx_beam = self.beam_shape(
         wavelength=self.wavelength,
         azimuth_beamwidth=tx_az_beamwidth,
@@ -246,6 +246,7 @@ class PhasedArrayRadar(Sensor):
   def measure(self,
               ground_truths: Set[GroundTruthState],
               noise: Union[np.ndarray, bool] = True,
+              timestamp: Optional[datetime] = None,
               **kwargs) -> set[TrueDetection, Clutter]:
     """
     Generates stochastic detections from a set of target ground truths
@@ -367,7 +368,7 @@ class PhasedArrayRadar(Sensor):
                                          [Bearing(np.deg2rad(az[i]))],
                                          [r[i]],
                                          [v[i]]]),
-                               timestamp=truth.timestamp,
+                               timestamp=truth.timestamp if truth else timestamp,
                                measurement_model=measurement_model))
 
     return detections

@@ -45,6 +45,7 @@ class ParticleSurveillance(gym.Env):
                # Particle swarm parameters
                swarm_optim: SwarmOptimizer = None,
                # Environment parameters
+               n_tracks_per_episode: int = 10,
                randomize_initial_state: bool = False,
                max_random_az_covar: float = 10,
                max_random_el_covar: float = 10,
@@ -97,7 +98,7 @@ class ParticleSurveillance(gym.Env):
     self.max_random_az_covar = max_random_az_covar
     self.max_random_el_covar = max_random_el_covar
     self.seed = seed
-    
+
     # Radar parameters
     self.azimuth_beamwidth = azimuth_beamwidth
     self.elevation_beamwidth = elevation_beamwidth
@@ -105,10 +106,11 @@ class ParticleSurveillance(gym.Env):
     self.pulsewidth = pulsewidth
     self.prf = prf
     self.n_pulses = n_pulses
-    
+
     # Tracking parameters
     self.initiator = initiator
     self.n_confirm_detections = initiator.min_points
+    self.n_tracks_per_episode = n_tracks_per_episode
 
     self.observation_space = spaces.Box(
         low=0, high=255, shape=(128, 128, 1), dtype=np.uint8)
@@ -164,43 +166,31 @@ class ParticleSurveillance(gym.Env):
     for path in self.target_paths:
       path.states[-1].rcs = 10
 
-    detections = self.radar.measure(self.target_paths, noise=True)
+    detections = self.radar.measure(self.target_paths, noise=True, timestamp=self.time)
+    
+    # Don't try to initiate tracks for detections that are already associated with a track
+    hypotheses = self.initiator.data_associator.associate(
+        self.tracks, detections, self.time)
+    associated_detections = [hypothesis.measurement for hypothesis in hypotheses.values() if hypothesis.measurement is not None]
+    for track in self.tracks:
+      hypothesis = hypotheses[track]
+      if hypothesis.measurement:
+        associated_detections.append(hypothesis.measurement)
+    new_tracks, particle_detections = self.initiator.initiate(
+        detections - set(associated_detections), self.time)
+    
+    if new_tracks:
+      self.tracks.extend(list(new_tracks))
 
-    reward = 0
-    # TODO: Re-work this section to use the initiator to determine reward/swarm updates
-    # Filter out measurements for targets that have already been assigned to a track. This should be a class member, and it might be possible to just use the detection_count dict.
-    associated_detections = set()
-    # for detections in detections:
-    #   if not isinstance(detection, Clut)
-    # Run the initiator on the unassociated measurements to get new tracks
-    new_tracks = self.initiator.initiate(detections - associated_detections,
-                                         self.time)
-    # Update list of targets that were successfully tracked
-    for track in new_tracks:
-      pass
-    # Give a reward that is just len(tracks)
-    reward += len(new_tracks)
     # Update the particle swarm if the detection is not the first detection the initiator has seen.
-      
-    # for detection in detections:
-    #   if not isinstance(detection, Clutter):
-    #     target_id = detection.groundtruth_path.id
-    #     if target_id not in self.detection_count.keys():
-    #       self.detection_count[target_id] = 0
-    #     self.detection_count[target_id] += 1
-    #     # Give a reward if a "track" is initiated.
-    #     if self.detection_count[target_id] == self.n_confirm_detections:
-    #       self.n_tracks_initiated += 1
-    #       reward += 1
-    #   # Only update the swarm state for particles that have not been confirmed
-    #   if isinstance(detection, Clutter) or self.detection_count[target_id] <= self.n_confirm_detections:
-    #     az = detection.state_vector[1].degrees
-    #     el = detection.state_vector[0].degrees
-    #     self.swarm_optim.optimize(
-    #         self._distance_objective, detection_pos=np.array([az, el]))
+    for detection in particle_detections:
+      az = detection.state_vector[1].degrees
+      el = detection.state_vector[0].degrees
+      self.swarm_optim.optimize(
+          self._distance_objective, detection_pos=np.array([az, el]))
 
     # Mutate particles based on Engelbrecht equations (16.66-16.67)
-    Pm = 0.001
+    Pm = 0.005
     mutate = self.np_random.uniform(
         0, 1, size=len(self.swarm_optim.swarm.position)) < Pm
     sigma = 0.1*(self.swarm_optim.bounds[1] -
@@ -238,14 +228,13 @@ class ParticleSurveillance(gym.Env):
     # Create outputs
     observation = self._get_obs()
     info = self._get_info()
+    reward = len(new_tracks)
 
     # Terminate the episode when all targets have been detected at least n_detections_max times
-    if len(self.detection_count) == len(self.target_paths) and \
-            all(count >= self.n_confirm_detections for count in self.detection_count.values()):
+    if len(self.tracks) >= self.n_tracks_per_episode:
       terminated = True
     else:
       terminated = False
-
     truncated = False
 
     if self.render_mode == "human":
@@ -279,12 +268,14 @@ class ParticleSurveillance(gym.Env):
     self._initialize_targets()
 
     self.swarm_optim.reset()
+    self.initiator.reset()
 
     # Reset metrics/helpful debug info
     self.target_history = []
     self.detection_history = []
     self.detection_count = dict()
-    self.n_tracks_initiated = 0
+
+    self.tracks = []
 
     observation = self._get_obs()
     info = self._get_info()
@@ -337,7 +328,7 @@ class ParticleSurveillance(gym.Env):
     return {
         "initiation_ratio": initiation_ratio,
         "swarm_positions": swarm_pos,
-        "n_tracks_initiated": self.n_tracks_initiated,
+        "tracks": self.tracks,
     }
 
   def _render_frame(self) -> Optional[np.ndarray]:
@@ -437,8 +428,8 @@ class ParticleSurveillance(gym.Env):
     stale_targets = set()
     for path in self.target_paths:
       index = path[-1].metadata.get("index")
-      updated_state = self.transition_model(np.asarray(path[-1].state_vector),
-                                            dt=dt.total_seconds())
+      updated_state = self.transition_model.function(path[-1],
+                                                     time_interval=dt)
       path.append(GroundTruthState(
           updated_state, timestamp=self.time,
           metadata={"index": index}))
