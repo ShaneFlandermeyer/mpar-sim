@@ -175,8 +175,8 @@ radar = PhasedArrayRadar(
     az_fov=[-45, 45],
     el_fov=[-45, 45],
     # Detection settings
-    false_alarm_rate=1e-6,
-    include_false_alarms=False
+    false_alarm_rate=1e-7,
+    include_false_alarms=True
 )
 
 # Gaussian parameters used to initialize the states of new targets in the scene. Here, elements (0, 2, 4) of the state vector/covariance are the az/el/range of the target (angles in degrees), and (1, 3, 5) are the x/y/z velocities in m/s. If randomize_initial_state is set to True in the environment, the mean az/el are uniformly sampled across the radar field of view, and the variance is uniformly sampled from [0, max_random_az_covar] and [0, max_random_el_covar] for the az/el, respectively
@@ -239,39 +239,39 @@ env = gym.wrappers.RecordEpisodeStatistics(env=env, deque_size=20)
 # ## Training loop
 
 # %%
-ppo_agent = PPOSurveillanceAgent(env,
-                                 n_rollouts_per_epoch=1,
-                                 n_steps_per_rollout=512,
-                                 n_gradient_steps=3,
-                                 batch_size=4096,
-                                 gamma=0.99,
-                                 gae_lambda=0.95,
-                                 value_coef=0.5,
-                                 entropy_coef=0.01,
-                                 seed=seed,
-                                 normalize_advantage=True,
-                                 policy_clip_range=0.1,
-                                 target_kl=None,
-                                 # Radar parameters
-                                 azimuth_beamwidth=az_bw,
-                                 elevation_beamwidth=el_bw,
-                                 bandwidth=bw,
-                                 pulsewidth=pulsewidth,
-                                 prf=prf,
-                                 n_pulses=n_pulses,
-                                 )
+# ppo_agent = PPOSurveillanceAgent(env,
+#                                  n_rollouts_per_epoch=1,
+#                                  n_steps_per_rollout=512,
+#                                  n_gradient_steps=3,
+#                                  batch_size=4096,
+#                                  gamma=0.99,
+#                                  gae_lambda=0.95,
+#                                  value_coef=0.5,
+#                                  entropy_coef=0.01,
+#                                  seed=seed,
+#                                  normalize_advantage=True,
+#                                  policy_clip_range=0.1,
+#                                  target_kl=None,
+#                                  # Radar parameters
+#                                  azimuth_beamwidth=az_bw,
+#                                  elevation_beamwidth=el_bw,
+#                                  bandwidth=bw,
+#                                  pulsewidth=pulsewidth,
+#                                  prf=prf,
+#                                  n_pulses=n_pulses,
+#                                  )
 
-# checkpoint_filename = "/home/shane/src/mpar-sim/lightning_logs/version_33/checkpoints/epoch=210-step=2532.ckpt"
-# ppo_agent = PPOSurveillanceAgent.load_from_checkpoint(
-#     checkpoint_filename, env=env, seed=seed)
+checkpoint_filename = "/home/shane/src/mpar-sim/lightning_logs/working_simple/checkpoints/epoch=299-step=3600.ckpt"
+ppo_agent = PPOSurveillanceAgent.load_from_checkpoint(
+    checkpoint_filename, env=env, seed=seed)
 
-trainer = pl.Trainer(
-    max_time="00:02:00:00",
-    gradient_clip_val=0.5,
-    accelerator='gpu',
-    devices=1,
-)
-trainer.fit(ppo_agent)
+# trainer = pl.Trainer(
+#     max_epochs=300,
+#     gradient_clip_val=0.5,
+#     accelerator='gpu',
+#     devices=1,
+# )
+# trainer.fit(ppo_agent)
 
 
 # %% [markdown]

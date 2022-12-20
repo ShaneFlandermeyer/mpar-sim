@@ -7,18 +7,32 @@ import numpy as np
 import pygame
 from gymnasium import spaces
 from ordered_set import OrderedSet
+from pyswarms.base.base_single import SwarmOptimizer
+from stonesoup.dataassociator.neighbour import (GNNWith2DAssignment,
+                                                NearestNeighbour)
+from stonesoup.hypothesiser.distance import DistanceHypothesiser
+from stonesoup.initiator.base import Initiator
+from stonesoup.measures import Euclidean, Mahalanobis
 from stonesoup.models.transition.base import TransitionModel
-from stonesoup.types.array import StateVector
-from stonesoup.types.groundtruth import GroundTruthPath, GroundTruthState
-from stonesoup.types.state import GaussianState
+from stonesoup.models.transition.linear import (
+    CombinedLinearGaussianTransitionModel, ConstantVelocity, SingerApproximate)
+from stonesoup.plotter import Dimension, Plotter
+from stonesoup.predictor.kalman import KalmanPredictor
+from stonesoup.types.array import CovarianceMatrix, StateVector
 from stonesoup.types.detection import Clutter
+from stonesoup.types.groundtruth import GroundTruthPath, GroundTruthState
+from stonesoup.types.hypothesis import SingleHypothesis
+from stonesoup.types.state import GaussianState, State
+from stonesoup.types.update import Update
+from stonesoup.updater.kalman import ExtendedKalmanUpdater
+
 from mpar_sim.common.coordinate_transform import sph2cart
 from mpar_sim.defaults import default_gbest_pso, default_lbest_pso
 from mpar_sim.looks.look import Look
 from mpar_sim.looks.spoiled_look import SpoiledLook
 from mpar_sim.radar import PhasedArrayRadar
-from pyswarms.base.base_single import SwarmOptimizer
-from stonesoup.initiator.base import Initiator
+from stonesoup.types.track import Track
+from stonesoup.types.update import GaussianStateUpdate, Update
 
 
 class ParticleSurveillance(gym.Env):
@@ -109,6 +123,7 @@ class ParticleSurveillance(gym.Env):
 
     # Tracking parameters
     self.initiator = initiator
+
     self.n_confirm_detections = initiator.min_points
     self.n_tracks_per_episode = n_tracks_per_episode
 
@@ -170,35 +185,60 @@ class ParticleSurveillance(gym.Env):
 
     reward = 0
     if len(detections) > 0:
+      initiator = self.initiator
       # Filter out detections that have been associated with an existing track
-      hypotheses = self.initiator.data_associator.associate(
-          self.tracks, detections, self.time)
+      all_tracks = self.tracks | self.tentative_tracks
+      associations = initiator.data_associator.associate(
+          all_tracks, detections, self.time)
       associated_detections = set()
-      for track in self.tracks:
-        hypothesis = hypotheses[track]
-        if hypothesis.measurement:
-          associated_detections.add(hypothesis.measurement)
-      
-      # Update tentative tracks with new detections
-      new_tracks, particle_detections = self.initiator.initiate(
-          detections - associated_detections, self.time)
+      new_tracks = set()
+      for track, association in associations.items():
+        if association.measurement:
+          state_post = initiator.updater.update(association)
+          track.append(state_post)
+          associated_detections.add(association.measurement)
+        else:
+          track.append(association.prediction)
+
+        if track in self.tentative_tracks and sum(1 for state in track if isinstance(state, Update)) >= self.initiator.min_points:
+          new_tracks.add(track)
+          self.tentative_tracks.remove(track)
+
+      self.tentative_tracks -= self.initiator.deleter.delete_tracks(
+          self.tentative_tracks)
+
+      # Initiate new tracks
+      for detection in detections - associated_detections:
+        measurement_model = detection.measurement_model
+        state_vector = measurement_model.inverse_function(detection)
+        model_matrix = measurement_model.jacobian(State(state_vector))
+        model_covar = measurement_model.covar()
+        inv_model_matrix = np.linalg.pinv(model_matrix)
+        C0 = inv_model_matrix @ model_covar @ inv_model_matrix.T
+        self.tentative_tracks.add(Track([GaussianStateUpdate(
+            state_vector,
+            C0,
+            SingleHypothesis(None, detection),
+            timestamp=self.time,
+        )]))
+
       self.tracks |= new_tracks
-      
+
       # Update the particle swarm to account for detections associated with tentative tracks
-      for detection in particle_detections:
+      for detection in detections - associated_detections:
         az = detection.state_vector[1].degrees
         el = detection.state_vector[0].degrees
         self.swarm_optim.optimize(
             self._distance_objective, detection_pos=np.array([az, el]))
-        
+
       reward += len(new_tracks)
 
     # Mutate particles based on Engelbrecht equations (16.66-16.67)
-    Pm = 0.005
+    Pm = 0.0025
     mutate = self.np_random.uniform(
         0, 1, size=len(self.swarm_optim.swarm.position)) < Pm
-    sigma = 0.1*(self.swarm_optim.bounds[1] -
-                 self.swarm_optim.bounds[0])[np.newaxis, :]
+    sigma = 0.25*(self.swarm_optim.bounds[1] -
+                  self.swarm_optim.bounds[0])[np.newaxis, :]
     sigma = np.repeat(sigma, np.count_nonzero(mutate), axis=0)
     self.swarm_optim.swarm.position[mutate] += self.np_random.normal(
         np.zeros_like(sigma), sigma)
@@ -232,13 +272,13 @@ class ParticleSurveillance(gym.Env):
     # Create outputs
     observation = self._get_obs()
     info = self._get_info()
-    
 
     # Terminate the episode when all targets have been detected at least n_detections_max times
-    if len(self.tracks) >= self.n_tracks_per_episode:
+    if len(self.tracks) >= self.n_tracks_per_episode or len(self.tracks) >= len(self.target_paths):
       terminated = True
     else:
       terminated = False
+      # print(len(self.tracks), len(self.tentative_tracks))
     truncated = False
 
     if self.render_mode == "human":
@@ -268,18 +308,16 @@ class ParticleSurveillance(gym.Env):
           0, self.max_random_az_covar)
       self.initial_state.covar[el_idx, el_idx] = self.np_random.uniform(
           0, self.max_random_el_covar)
-    # print(self.initial_state.state_vector)
     self._initialize_targets()
 
     self.swarm_optim.reset()
-    self.initiator.reset()
+    self.tentative_tracks = set()
+    self.tracks = set()
 
     # Reset metrics/helpful debug info
     self.target_history = []
     self.detection_history = []
     self.detection_count = dict()
-
-    self.tracks = set()
 
     observation = self._get_obs()
     info = self._get_info()
