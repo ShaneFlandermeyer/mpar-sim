@@ -262,7 +262,7 @@ class PhasedArrayRadar(Sensor):
         Detections made by the radar
     """
     detections = set()
-    measurement_model = copy.deepcopy(self.measurement_model)
+    measurement_model = self.measurement_model
 
     # Loop through the targets and generate detections
     for truth in ground_truths:
