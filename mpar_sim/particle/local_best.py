@@ -125,6 +125,7 @@ class IncrementalLocalBestPSO(SwarmOptimizer):
       center=1.0,
       init_pos=None,
       pbest_reset_interval=None,
+      static=False,
   ) -> None:
     super().__init__(
         n_particles=n_particles,
@@ -140,11 +141,13 @@ class IncrementalLocalBestPSO(SwarmOptimizer):
       oh_strategy = {}
     # Initialize logger
     self.rep = Reporter(logger=logging.getLogger(__name__))
+    # Assign k-neighbors and p-value as attributes
+    self.k, self.p = options["k"], options["p"]
     # Initialize the resettable attributes
     self.reset()
 
     # Initialize the topology
-    self.top = Ring(static=True)
+    self.top = Ring(static=static)
     self.bh = BoundaryHandler(strategy=bh_strategy)
     self.vh = VelocityHandler(strategy=vh_strategy)
     self.oh = OptionsHandler(strategy=oh_strategy)
@@ -174,7 +177,7 @@ class IncrementalLocalBestPSO(SwarmOptimizer):
     self.swarm.pbest_pos, self.swarm.pbest_cost = compute_pbest(self.swarm)
 
     self.swarm.best_pos, self.swarm.best_cost = self.top.compute_gbest(
-        self.swarm, k=int(self.n_particles/10), p=2)
+        self.swarm, k=self.k, p=self.p)
 
     # Save to history
     hist = self.ToHistory(

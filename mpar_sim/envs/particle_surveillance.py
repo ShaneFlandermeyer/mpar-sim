@@ -51,11 +51,7 @@ class ParticleSurveillance(gym.Env):
                prf: float,
                n_pulses: float,
                # Tracking parameters
-               #  initiator: Initiator,
-               updater: Updater,
-               associator: DataAssociator,
-               deleter: Deleter,
-               n_confirm_detections: int,
+               initiator: Initiator,
                # Target generation parameters
                transition_model: TransitionModel,
                initial_state: GaussianState,
@@ -128,11 +124,7 @@ class ParticleSurveillance(gym.Env):
     self.n_pulses = n_pulses
 
     # Tracking parameters
-    self.updater = updater
-    self.associator = associator
-    self.deleter = deleter
-
-    self.n_confirm_detections = n_confirm_detections
+    self.initiator = initiator
 
     self.observation_space = spaces.Box(
         low=0, high=255, shape=(128, 128, 1), dtype=np.uint8)
@@ -147,7 +139,7 @@ class ParticleSurveillance(gym.Env):
     self.render_mode = render_mode
 
     if swarm_optim is None:
-      self.swarm_optim = default_gbest_pso()
+      self.swarm_optim = default_lbest_pso()
 
     # Pre-compute azimuth/elevation axis values needed to digitize the particles for the observation output
     self.az_axis = np.linspace(self.swarm_optim.bounds[0][0],
@@ -191,50 +183,29 @@ class ParticleSurveillance(gym.Env):
         self.target_paths, noise=True, timestamp=self.time)
     reward = 0
     if len(detections) > 0:
-      # # Filter out detections that have been associated with an existing track
-      associations = self.associator.associate(
-          self.tracks | self.tentative_tracks, detections, self.time)
+      # Filter out detections that have been associated with an existing track
+      associations = self.initiator.data_associator.associate(
+          self.tracks, detections, self.time)
       associated_detections = set()
-      new_tracks = set()
-      for track, association in associations.items():
+      for track in self.tracks:
+        association = associations[track]
         if association.measurement:
           associated_detections.add(association.measurement)
-          # TODO: The update step appears to be a major bottleneck
-          state_post = self.updater.update(association)
-          track.append(state_post)
-          # Update the particle swarm for any detections that get associated with tentative tracks. This
-          if track in self.tentative_tracks:
-            az = association.measurement.state_vector[1].degrees
-            el = association.measurement.state_vector[0].degrees
-            self.swarm_optim.optimize(
-                self._distance_objective, detection_pos=np.array([az, el]))
-        else:
-          track.append(association.prediction)
-
-        if track in self.tentative_tracks and sum(1 for state in track if isinstance(state, Update)) >= self.n_confirm_detections:
-          new_tracks.add(track)
-          self.tentative_tracks.remove(track)
-
-      self.tentative_tracks -= self.deleter.delete_tracks(
-          self.tentative_tracks)
-
-      # # Initiate new tracks
-      for detection in detections - associated_detections:
-        measurement_model = detection.measurement_model
-        state_vector = measurement_model.inverse_function(detection)
-        model_matrix = measurement_model.jacobian(State(state_vector))
-        model_covar = measurement_model.covar()
-        inv_model_matrix = np.linalg.pinv(model_matrix)
-        C0 = inv_model_matrix @ model_covar @ inv_model_matrix.T
-        self.tentative_tracks.add(Track([GaussianStateUpdate(
-            state_vector,
-            C0,
-            SingleHypothesis(None, detection),
-            timestamp=self.time,
-        )]))
-
+          # TODO: Add track updates here
+          
+      
+      # Update tentative tracks with new detections
+      new_tracks, particle_detections = self.initiator.initiate(
+          detections - associated_detections, self.time)
       self.tracks |= new_tracks
-
+      
+      # Update the particle swarm to account for detections associated with tentative tracks
+      for detection in particle_detections:
+        az = detection.state_vector[1].degrees
+        el = detection.state_vector[0].degrees
+        self.swarm_optim.optimize(
+            self._distance_objective, detection_pos=np.array([az, el]))
+        
       reward += len(new_tracks)
 
     # Mutate particles based on Engelbrecht equations (16.66-16.67)
@@ -367,14 +338,15 @@ class ParticleSurveillance(gym.Env):
     - initation ratio: the fraction of targets in the scenario that have been initiated (i.e. detected at least n_confirm_detections times)
     - swarm_positions: the current positions of all the particles in the swarm
     """
-    n_initiated_targets = np.sum(
-        [count >= self.n_confirm_detections for count in self.detection_count.values()])
-    initiation_ratio = n_initiated_targets / len(self.target_paths)
-    swarm_pos = self.swarm_optim.swarm.position
+    # n_initiated_targets = np.sum(
+    #     [count >= self.n_confirm_detections for count in self.detection_count.values()])
+    # initiation_ratio = n_initiated_targets / len(self.target_paths)
+    # swarm_pos = self.swarm_optim.swarm.position
+    # TODO: This slows down the simulation SIGNIFICANTLY if the stuff in the dict is hard to pickle
     return {
-        "initiation_ratio": initiation_ratio,
-        "swarm_positions": swarm_pos,
-        "tracks": self.tracks,
+        # "initiation_ratio": initiation_ratio,
+        # "swarm_positions": swarm_pos,
+        # "tracks": self.tracks,
     }
 
   def _render_frame(self) -> Optional[np.ndarray]:

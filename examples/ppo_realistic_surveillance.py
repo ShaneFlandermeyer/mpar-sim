@@ -33,6 +33,7 @@ from stonesoup.types.state import GaussianState
 from stonesoup.updater.kalman import (ExtendedKalmanUpdater, KalmanUpdater,
                                       UnscentedKalmanUpdater)
 from torch import distributions, nn
+# from stonesoup.initiator.simple import MultiMeasurementInitiator
 
 import mpar_sim.envs
 from mpar_sim.agents.raster_scan import RasterScanAgent
@@ -183,7 +184,7 @@ radar = PhasedArrayRadar(
     el_fov=[-45, 45],
     # Detection settings
     false_alarm_rate=1e-6,
-    include_false_alarms=True
+    include_false_alarms=False
 )
 
 # Radar parameters
@@ -203,22 +204,27 @@ initial_state = GaussianState(
 
 # Set up tracker components
 predictor = ExtendedKalmanPredictor(transition_model)
-updater   = ExtendedKalmanUpdater(measurement_model=None)
+updater = ExtendedKalmanUpdater(measurement_model=None)
 hypothesizer = DistanceHypothesiser(
-    predictor, updater, Euclidean(mapping=(0, 1)))
-associator = NearestNeighbour(hypothesizer)
+    predictor, updater, Euclidean(mapping=(0, 1)), missed_distance=np.deg2rad(5))
+associator = GNNWith2DAssignment(hypothesizer)
 deleter = AngularErrorDeleter(
     az_error_threshold=0.35*np.deg2rad(az_bw),
     el_error_threshold=0.35*np.deg2rad(el_bw),
     position_mapping=radar.position_mapping)
+initiator = MultiMeasurementInitiator(
+    prior_state=GaussianState(
+        np.zeros((radar.ndim_state,)), np.diag(np.zeros((radar.ndim_state,)))),
+    deleter=deleter,
+    data_associator=associator,
+    updater=updater,
+    min_points=2,
+)
 
 # Create the environment
 env = gym.make('mpar_sim/ParticleSurveillance-v0',
                radar=radar,
-               updater=updater,
-               associator=associator,
-               deleter=deleter,
-               n_confirm_detections=3,
+               initiator=initiator,
                # Radar parameters
                azimuth_beamwidth=az_bw,
                elevation_beamwidth=el_bw,
@@ -230,36 +236,15 @@ env = gym.make('mpar_sim/ParticleSurveillance-v0',
                initial_state=initial_state,
                birth_rate=0.01,
                death_probability=0,
-               initial_number_targets=10,
+               initial_number_targets=25,
                randomize_initial_state=True,
                max_random_az_covar=50,
                max_random_el_covar=50,
                render_mode='rgb_array',
                )
 
-# env = gym.make('mpar_sim/SimpleParticleSurveillance-v0',
-#                radar=radar,
-#                # Radar parameters
-#                azimuth_beamwidth=az_bw,
-#                elevation_beamwidth=el_bw,
-#                bandwidth=bw,
-#                pulsewidth=pulsewidth,
-#                prf=prf,
-#                n_pulses=n_pulses,
-#                transition_model=transition_model,
-#                initial_state=initial_state,
-#                birth_rate=0.01,
-#                death_probability=0.005,
-#                initial_number_targets=50,
-#                n_confirm_detections=3,
-#                randomize_initial_state=True,
-#                max_random_az_covar=50,
-#                max_random_el_covar=50,
-#                render_mode='rgb_array',
-#                )
-
 # Define all environment wrappers
-max_episode_steps = 50
+max_episode_steps = 250
 # Observation wrappers
 env = gym.wrappers.ResizeObservation(env, (64, 64))
 env = ImageToPytorch(env)
@@ -270,7 +255,7 @@ env = gym.wrappers.TimeLimit(env, max_episode_steps=max_episode_steps)
 n_env = 32
 env = gym.vector.AsyncVectorEnv([lambda: env]*n_env)
 
-# n_env = 1
+# n_env = 2
 # env = gym.vector.SyncVectorEnv([lambda: env]*n_env)
 
 
@@ -351,35 +336,35 @@ el_axis = np.linspace(
     radar.el_fov[0], radar.el_fov[1], beam_coverage_map.shape[0])
 
 # # Test the PPO agent
-tic = time.time()
-obs, info = env.reset(seed=seed)
-dones = np.zeros(n_env, dtype=bool)
-i = 0
-with torch.no_grad():
-  while not np.all(dones):
-    obs_tensor = torch.as_tensor(obs).to(
-        device=ppo_agent.device, dtype=torch.float32)
-    action_tensor = ppo_agent.forward(obs_tensor)[0]
-    actions = action_tensor.cpu().numpy()
-    # Repeat actions for all environments
-    obs, reward, terminated, truncated, info = env.step(actions)
-    dones = np.logical_or(dones, np.logical_or(terminated, truncated))
-    
-    for j in range(n_env):
-        if not dones[j]:
-            ppo_init_ratio[i, j] = len(info['tracks'][j])
+# tic = time.time()
+# obs, info = env.reset(seed=seed)
+# dones = np.zeros(n_env, dtype=bool)
+# i = 0
+# with torch.no_grad():
+#   while not np.all(dones):
+#     obs_tensor = torch.as_tensor(obs).to(
+#         device=ppo_agent.device, dtype=torch.float32)
+#     action_tensor = ppo_agent.forward(obs_tensor)[0]
+#     actions = action_tensor.cpu().numpy()
+#     # Repeat actions for all environments
+#     obs, reward, terminated, truncated, info = env.step(actions)
+#     dones = np.logical_or(dones, np.logical_or(terminated, truncated))
 
-    # Add 1 to the pixels illuminated by the current beam using np.digitize
-    actions[0, :] = wrap_to_interval(actions[0, :], -45, 45)
-    az = np.digitize(actions[0, 0], az_axis) - 1
-    el = np.digitize(actions[0, 1], el_axis[::-1]) - 1
-    beam_coverage_map[el-1:el+1, az-1:az+1] += 1
-    print(f"Step {i}: {len(info['tracks'][0])}")
+#     for j in range(n_env):
+#         if not dones[j]:
+#             ppo_init_ratio[i, j] = len(info['tracks'][j])
 
-    i += 1
-toc = time.time()
-print("PPO agent done")
-print(f"Time elapsed: {toc-tic:.2f} seconds")
+#     # Add 1 to the pixels illuminated by the current beam using np.digitize
+#     actions[0, :] = wrap_to_interval(actions[0, :], -45, 45)
+#     az = np.digitize(actions[0, 0], az_axis) - 1
+#     el = np.digitize(actions[0, 1], el_axis[::-1]) - 1
+#     beam_coverage_map[el-1:el+1, az-1:az+1] += 1
+#     print(f"Step {i}: {len(info['tracks'][0])}")
+
+#     i += 1
+# toc = time.time()
+# print("PPO agent done")
+# print(f"Time elapsed: {toc-tic:.2f} seconds")
 
 # # Test the raster agent
 tic = time.time()
@@ -395,10 +380,10 @@ while not np.all(dones):
   # Repeat actions for all environments
   obs, reward, terminated, truncated, info = env.step(actions)
   dones = np.logical_or(dones, np.logical_or(terminated, truncated))
-  for j in range(n_env):
-        if not dones[j]:
-            raster_init_ratio[i, j] = len(info['tracks'][j])
-  print(f"Step {i}: {len(info['tracks'][0])}")
+#   for j in range(n_env):
+#         if not dones[j]:
+#             raster_init_ratio[i, j] = len(info['tracks'][j])
+  print(f"Step {i}")
   i += 1
 
 toc = time.time()

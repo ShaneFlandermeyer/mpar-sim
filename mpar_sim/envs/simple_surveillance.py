@@ -121,7 +121,7 @@ class SimpleParticleSurveillance(gym.Env):
     self.render_mode = render_mode
 
     if swarm_optim is None:
-      self.swarm_optim = default_gbest_pso()
+      self.swarm_optim = default_lbest_pso()
 
     # Pre-compute azimuth/elevation axis values needed to digitize the particles for the observation output
     self.az_axis = np.linspace(self.swarm_optim.bounds[0][0],
@@ -184,7 +184,7 @@ class SimpleParticleSurveillance(gym.Env):
             self._distance_objective, detection_pos=np.array([az, el]))
 
     # Mutate particles based on Engelbrecht equations (16.66-16.67)
-    Pm = 0.0025
+    Pm = 0.002
     mutate = self.np_random.uniform(
         0, 1, size=len(self.swarm_optim.swarm.position)) < Pm
     sigma = 0.25*(self.swarm_optim.bounds[1] -
