@@ -190,8 +190,11 @@ class ParticleSurveillance(gym.Env):
       for track in self.tracks:
         association = associations[track]
         if association.measurement:
+          post = self.initiator.updater.update(association)
+          track.append(post)
           associated_detections.add(association.measurement)
-          # TODO: Add track updates here
+        else:
+          track.append(association.prediction)
           
       
       # Update tentative tracks with new detections

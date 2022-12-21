@@ -203,7 +203,7 @@ initial_state = GaussianState(
 )
 
 # Set up tracker components
-predictor = ExtendedKalmanPredictor(transition_model)
+predictor = KalmanPredictor(transition_model)
 updater = ExtendedKalmanUpdater(measurement_model=None)
 hypothesizer = DistanceHypothesiser(
     predictor, updater, Euclidean(mapping=(0, 1)), missed_distance=np.deg2rad(5))
@@ -289,7 +289,7 @@ ppo_agent = PPOSurveillanceAgent(env,
                                  n_pulses=n_pulses,
                                  )
 
-# checkpoint_filename = "/home/shane/onedrive/working_simple/checkpoints/epoch=299-step=3600.ckpt"
+# checkpoint_filename = "/home/shane/src/mpar-sim/lightning_logs/version_257/checkpoints/epoch=14-step=180.ckpt"
 # ppo_agent = PPOSurveillanceAgent.load_from_checkpoint(
 #     checkpoint_filename, env=env, seed=seed)
 trainer = pl.Trainer(
