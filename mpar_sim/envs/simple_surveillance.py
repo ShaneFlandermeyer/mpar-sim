@@ -317,10 +317,10 @@ class SimpleParticleSurveillance(gym.Env):
     n_initiated_targets = np.sum(
         [count >= self.n_confirm_detections for count in self.detection_count.values()])
     initiation_ratio = n_initiated_targets / len(self.target_paths)
-    swarm_pos = self.swarm_optim.swarm.position
+    # swarm_pos = self.swarm_optim.swarm.position
     return {
         "initiation_ratio": initiation_ratio,
-        "swarm_positions": swarm_pos,
+        # "swarm_positions": swarm_pos,
         "n_tracks_initiated": self.n_tracks_initiated,
     }
 

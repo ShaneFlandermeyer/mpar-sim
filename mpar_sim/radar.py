@@ -20,7 +20,7 @@ from mpar_sim.beam.beam import RectangularBeam
 from mpar_sim.beam.common import beam_broadening_factor
 from mpar_sim.common.albersheim import albersheim_pd
 from mpar_sim.common.coordinate_transform import (
-    cart2sph, rotx, roty, rotz, sph2cart)
+    cart2sph, rotx, roty, rotz, rpy2rotmat, sph2cart)
 from mpar_sim.looks.look import Look
 from mpar_sim.looks.spoiled_look import SpoiledLook
 from mpar_sim.models.measurement.estimation import (angle_crlb, range_crlb,
@@ -122,22 +122,6 @@ class PhasedArrayRadar(Sensor):
     measurement_model.translation_offset = self.position.copy()
     measurement_model.rotation_offset = self.rotation_offset.copy()
     return measurement_model
-
-  @property
-  def _rotation_matrix(self):
-    """
-    3D rotation matrix for converting target pointing vectors to the sensor frame
-
-    Returns
-    -------
-    np.ndarray
-      (3,3) 3D rotation matrix
-    """
-    theta_x = -np.deg2rad(self.rotation_offset[0, 0])  # Roll
-    theta_y = -np.deg2rad(self.rotation_offset[1, 0])  # Pitch/elevation
-    theta_z = -np.deg2rad(self.rotation_offset[2, 0])  # Yaw/azimuth
-
-    return rotz(theta_z) @ roty(theta_y) @ rotx(theta_x)
 
   def load_look(self, look: Look):
     """
@@ -263,7 +247,11 @@ class PhasedArrayRadar(Sensor):
     """
     detections = set()
     measurement_model = self.measurement_model
-
+    # Compute the rotation matrix that maps the global coordinate frame into the radar frame
+    roll = -np.deg2rad(self.rotation_offset[0, 0])
+    pitch = -np.deg2rad(self.rotation_offset[1, 0])
+    yaw = -np.deg2rad(self.rotation_offset[2, 0])
+    self._rotation_matrix = rpy2rotmat(roll, pitch, yaw)
     # Loop through the targets and generate detections
     for truth in ground_truths:
       # Skip targets that are not detectable
