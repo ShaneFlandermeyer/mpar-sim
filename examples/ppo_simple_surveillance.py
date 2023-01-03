@@ -22,7 +22,8 @@ from pyswarms.utils.plotters import (plot_contour, plot_cost_history,
                                      plot_surface)
 from pyswarms.utils.plotters.formatters import Designer, Mesher
 from stonesoup.models.transition.linear import (
-    CombinedLinearGaussianTransitionModel, ConstantVelocity, SingerApproximate)
+    CombinedLinearGaussianTransitionModel, SingerApproximate)
+from mpar_sim.models.motion.linear import ConstantVelocity
 from stonesoup.plotter import Dimension, Plotter
 from stonesoup.types.array import CovarianceMatrix, StateVector
 from stonesoup.types.state import GaussianState
@@ -35,7 +36,6 @@ from mpar_sim.common.wrap_to_interval import wrap_to_interval
 from mpar_sim.defaults import (default_gbest_pso, default_lbest_pso,
                                default_radar, default_raster_scan_agent,
                                default_scheduler)
-from mpar_sim.models.motion.constant_velocity import constant_velocity
 from mpar_sim.radar import PhasedArrayRadar
 from mpar_sim.wrappers.image_to_pytorch import ImageToPytorch
 from mpar_sim.wrappers.squeeze_image import SqueezeImage
@@ -49,6 +49,17 @@ seed = np.random.randint(0, 2**32 - 1)
 warnings.filterwarnings("ignore")
 plt.rcParams["font.weight"] = "bold"
 plt.rcParams["axes.labelweight"] = "bold"
+
+# %% [markdown]
+# ## Environment creation
+
+# %%
+
+
+def make_env(env_id):
+  # TODO: Implement this
+  pass
+
 
 # %% [markdown]
 # ## RL agent defintion
@@ -107,31 +118,30 @@ class PPOSurveillanceAgent(PPO):
     self.save_hyperparameters()
 
   def forward(self, x: torch.Tensor):
-    features = self.feature_net(x)
+    feature = self.feature_net(x / 255.0)
     # Sample the action from its distribution
-    means = self.action_mean(features)
-    variances = self.action_variance(features)
-    dist = torch.distributions.Normal(means, variances)
-    actions = dist.sample()
+    mean = self.action_mean(feature)
+    variance = self.action_variance(feature)
 
     # Compute the value of the state
-    values = self.critic(features).flatten()
-    return actions, values
+    value = self.critic(feature).flatten()
+    return mean, variance, value
+
+  def act(self, observations: torch.Tensor):
+    mean, variance, value = self.forward(observations)
+    action_dist = torch.distributions.Normal(mean, variance)
+    action = action_dist.sample()
+    return action, value, action_dist.log_prob(action), action_dist.entropy()
 
   def evaluate_actions(self,
                        observations: torch.Tensor,
                        actions: torch.Tensor):
-    features = self.feature_net(observations)
-    # Compute action sampling distribution
-    means = self.action_mean(features)
-    variances = self.action_variance(features)
-    dist = torch.distributions.Normal(means, variances)
-    log_prob = dist.log_prob(actions)
-    entropy = dist.entropy()
-    return log_prob, entropy
+    mean, variance, value = self.forward(observations)
+    action_dist = torch.distributions.Normal(mean, variance)
+    return action_dist.log_prob(actions), action_dist.entropy(), value
 
   def configure_optimizers(self):
-    optimizer = torch.optim.Adam(self.parameters(), lr=2.5e-4, eps=1e-5)
+    optimizer = torch.optim.Adam(self.parameters(), lr=5e-4, eps=1e-5)
     return optimizer
 
   def on_train_epoch_end(self) -> None:
@@ -149,10 +159,7 @@ class PPOSurveillanceAgent(PPO):
 # %%
 # In this experiment, targets move according to a constant velocity, white noise acceleration model.
 # http://www.control.isy.liu.se/student/graduate/targettracking/file/le2_handout.pdf
-transition_model = CombinedLinearGaussianTransitionModel([
-    ConstantVelocity(10),
-    ConstantVelocity(10),
-    ConstantVelocity(10)])
+transition_model = ConstantVelocity(ndim_pos=3, noise_diff_coeff=10)
 
 # Radar system object
 radar = PhasedArrayRadar(
@@ -175,8 +182,8 @@ radar = PhasedArrayRadar(
     az_fov=[-45, 45],
     el_fov=[-45, 45],
     # Detection settings
-    false_alarm_rate=1e-7,
-    include_false_alarms=True
+    false_alarm_rate=1e-6,
+    include_false_alarms=False
 )
 
 # Gaussian parameters used to initialize the states of new targets in the scene. Here, elements (0, 2, 4) of the state vector/covariance are the az/el/range of the target (angles in degrees), and (1, 3, 5) are the x/y/z velocities in m/s. If randomize_initial_state is set to True in the environment, the mean az/el are uniformly sampled across the radar field of view, and the variance is uniformly sampled from [0, max_random_az_covar] and [0, max_random_el_covar] for the az/el, respectively
@@ -195,6 +202,7 @@ prf = 5e3
 n_pulses = 32
 
 # Create the environment
+env_id = 'mpar_sim/SimpleParticleSurveillance-v0'
 env = gym.make('mpar_sim/SimpleParticleSurveillance-v0',
                radar=radar,
                # Radar parameters
@@ -208,7 +216,7 @@ env = gym.make('mpar_sim/SimpleParticleSurveillance-v0',
                initial_state=initial_state,
                birth_rate=0.01,
                death_probability=0.005,
-               initial_number_targets=50,
+               initial_number_targets=25,
                n_confirm_detections=3,
                randomize_initial_state=True,
                max_random_az_covar=50,
@@ -217,7 +225,7 @@ env = gym.make('mpar_sim/SimpleParticleSurveillance-v0',
                )
 
 # Define all environment wrappers
-max_episode_steps = 1000
+max_episode_steps = 500
 # Observation wrappers
 env = gym.wrappers.ResizeObservation(env, (64, 64))
 env = ImageToPytorch(env)
@@ -227,8 +235,6 @@ env = gym.wrappers.TimeLimit(env, max_episode_steps=max_episode_steps)
 
 n_env = 32
 env = gym.vector.AsyncVectorEnv([lambda: env]*n_env)
-# n_env = 1
-# env = gym.vector.SyncVectorEnv([lambda: env])
 
 
 env = gym.wrappers.ClipAction(env)
@@ -239,39 +245,39 @@ env = gym.wrappers.RecordEpisodeStatistics(env=env, deque_size=20)
 # ## Training loop
 
 # %%
-# ppo_agent = PPOSurveillanceAgent(env,
-#                                  n_rollouts_per_epoch=1,
-#                                  n_steps_per_rollout=512,
-#                                  n_gradient_steps=3,
-#                                  batch_size=4096,
-#                                  gamma=0.99,
-#                                  gae_lambda=0.95,
-#                                  value_coef=0.5,
-#                                  entropy_coef=0.01,
-#                                  seed=seed,
-#                                  normalize_advantage=True,
-#                                  policy_clip_range=0.1,
-#                                  target_kl=None,
-#                                  # Radar parameters
-#                                  azimuth_beamwidth=az_bw,
-#                                  elevation_beamwidth=el_bw,
-#                                  bandwidth=bw,
-#                                  pulsewidth=pulsewidth,
-#                                  prf=prf,
-#                                  n_pulses=n_pulses,
-#                                  )
+ppo_agent = PPOSurveillanceAgent(env,
+                                 n_rollouts_per_epoch=1,
+                                 n_steps_per_rollout=512,
+                                 n_gradient_steps=4,
+                                 batch_size=4096,
+                                 gamma=0.99,
+                                 gae_lambda=0.95,
+                                 value_coef=0.5,
+                                 entropy_coef=0.01,
+                                 seed=seed,
+                                 normalize_advantage=True,
+                                 policy_clip_range=0.1,
+                                 target_kl=None,
+                                 # Radar parameters
+                                 azimuth_beamwidth=az_bw,
+                                 elevation_beamwidth=el_bw,
+                                 bandwidth=bw,
+                                 pulsewidth=pulsewidth,
+                                 prf=prf,
+                                 n_pulses=n_pulses,
+                                 )
 
-checkpoint_filename = "/home/shane/src/mpar-sim/lightning_logs/working_simple/checkpoints/epoch=299-step=3600.ckpt"
-ppo_agent = PPOSurveillanceAgent.load_from_checkpoint(
-    checkpoint_filename, env=env, seed=seed)
+# checkpoint_filename = "/home/shane/src/mpar-sim/lightning_logs/working_simple/checkpoints/epoch=299-step=3600.ckpt"
+# ppo_agent = PPOSurveillanceAgent.load_from_checkpoint(
+#     checkpoint_filename, env=env, seed=seed)
 
-# trainer = pl.Trainer(
-#     max_epochs=300,
-#     gradient_clip_val=0.5,
-#     accelerator='gpu',
-#     devices=1,
-# )
-# trainer.fit(ppo_agent)
+trainer = pl.Trainer(
+    max_epochs=300,
+    gradient_clip_val=0.5,
+    accelerator='gpu',
+    devices=1,
+)
+trainer.fit(ppo_agent)
 
 
 # %% [markdown]

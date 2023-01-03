@@ -8,7 +8,7 @@ import pygame
 from gymnasium import spaces
 from ordered_set import OrderedSet
 from stonesoup.models.transition.base import TransitionModel
-from stonesoup.types.array import StateVector
+from stonesoup.types.array import StateVector, StateVectors
 from stonesoup.types.groundtruth import GroundTruthPath, GroundTruthState
 from stonesoup.types.state import GaussianState
 from stonesoup.types.detection import Clutter
@@ -188,7 +188,7 @@ class SimpleParticleSurveillance(gym.Env):
     mutate = self.np_random.uniform(
         0, 1, size=len(self.swarm_optim.swarm.position)) < Pm
     sigma = 0.25*(self.swarm_optim.bounds[1] -
-                 self.swarm_optim.bounds[0])[np.newaxis, :]
+                  self.swarm_optim.bounds[0])[np.newaxis, :]
     sigma = np.repeat(sigma, np.count_nonzero(mutate), axis=0)
     self.swarm_optim.swarm.position[mutate] += self.np_random.normal(
         np.zeros_like(sigma), sigma)
@@ -418,18 +418,28 @@ class SimpleParticleSurveillance(gym.Env):
     """
     Move targets forward in time, removing targets that have left the radar's FOV
     """
+    # Combine targets into one StateVectors object to vectorize transition update
+    # NOTE: Asssumes all targets have the same transition model
+    states = [path[-1].state_vector for path in self.target_paths]
+    if len(states) > 0:
+      states = StateVectors(states)
+    else:
+      return
+    new_states = self.transition_model.function(
+        states, noise=True, time_interval=dt)
+
     stale_targets = set()
+    i = 0
     for path in self.target_paths:
       index = path[-1].metadata.get("index")
-      updated_state = self.transition_model.function(
-          path[-1], noise=True, time_interval=dt)
       path.append(GroundTruthState(
-          updated_state, timestamp=self.time,
+          new_states[:, i], timestamp=self.time,
           metadata={"index": index}))
       if not self.radar.is_detectable(path[-1]):
         stale_targets.add(path)
         if path.id in self.detection_count.keys():
           del self.detection_count[path.id]
+      i += 1
 
     self.target_paths.difference_update(stale_targets)
 
