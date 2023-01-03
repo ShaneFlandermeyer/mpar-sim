@@ -25,13 +25,6 @@ class SimpleParticleSurveillance(gym.Env):
 
   def __init__(self,
                radar: PhasedArrayRadar,
-               # Radar parameters
-               azimuth_beamwidth: float,
-               elevation_beamwidth: float,
-               bandwidth: float,
-               pulsewidth: float,
-               prf: float,
-               n_pulses: float,
                # Target generation parameters
                transition_model: TransitionModel,
                initial_state: GaussianState,
@@ -99,22 +92,16 @@ class SimpleParticleSurveillance(gym.Env):
     self.max_random_az_covar = max_random_az_covar
     self.max_random_el_covar = max_random_el_covar
     self.seed = seed
-    # Radar parameters
-    self.azimuth_beamwidth = azimuth_beamwidth
-    self.elevation_beamwidth = elevation_beamwidth
-    self.bandwidth = bandwidth
-    self.pulsewidth = pulsewidth
-    self.prf = prf
-    self.n_pulses = n_pulses
 
     self.observation_space = spaces.Box(
         low=0, high=255, shape=(128, 128, 1), dtype=np.uint8)
 
-    # Currently, actions are limited to beam steering angles in azimuth and elevation
     self.action_space = spaces.Box(
-        low=np.array([self.radar.az_fov[0], self.radar.el_fov[0]]),
-        high=np.array([self.radar.az_fov[1], self.radar.el_fov[1]]),
-        shape=(2,),
+        low=np.array(
+            [self.radar.az_fov[0], self.radar.el_fov[0], 0, 0, 0, 0, 0, 0]),
+        high=np.array([self.radar.az_fov[1], self.radar.el_fov[1],
+                      np.Inf, np.Inf, np.Inf, np.Inf, np.Inf, np.Inf]),
+        shape=(8,),
         dtype=np.float32)
     # TODO: Add the other look parameters to the action space.
     assert render_mode is None or render_mode in self.metadata["render_modes"]
@@ -140,12 +127,12 @@ class SimpleParticleSurveillance(gym.Env):
     look = SpoiledLook(
         azimuth_steering_angle=action[0],
         elevation_steering_angle=action[1],
-        azimuth_beamwidth=self.azimuth_beamwidth,
-        elevation_beamwidth=self.elevation_beamwidth,
-        bandwidth=self.bandwidth,
-        pulsewidth=self.pulsewidth,
-        prf=self.prf,
-        n_pulses=self.n_pulses,
+        azimuth_beamwidth=action[2],
+        elevation_beamwidth=action[3],
+        bandwidth=action[4],
+        pulsewidth=action[5],
+        prf=action[6],
+        n_pulses=action[7],
         tx_power=self.radar.n_elements_x *
         self.radar.n_elements_y*self.radar.element_tx_power,
         start_time=self.time,
@@ -317,10 +304,8 @@ class SimpleParticleSurveillance(gym.Env):
     n_initiated_targets = np.sum(
         [count >= self.n_confirm_detections for count in self.detection_count.values()])
     initiation_ratio = n_initiated_targets / len(self.target_paths)
-    # swarm_pos = self.swarm_optim.swarm.position
     return {
         "initiation_ratio": initiation_ratio,
-        # "swarm_positions": swarm_pos,
         "n_tracks_initiated": self.n_tracks_initiated,
     }
 

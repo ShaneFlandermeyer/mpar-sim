@@ -29,8 +29,8 @@ class Look():
     self.bandwidth = bandwidth
     self.pulsewidth = pulsewidth
     self.prf = prf
-    self.n_pulses = n_pulses
-    self.dwell_time = n_pulses / prf
+    self.n_pulses = int(n_pulses)
+    self.dwell_time = float(n_pulses / prf)
     
     # Scheduler parameters
     self.start_time = start_time

@@ -101,13 +101,13 @@ class PPOSurveillanceAgent(PPO):
     )
 
     # The actor head parameterizes the mean and variance of a Gaussian distribution for the beam steering angles in az/el.
-    n_continuous_actions = 2
+    self.n_stochastic_actions = 2
     self.action_mean = nn.Sequential(
-        nn.Linear(512, n_continuous_actions),
+        nn.Linear(512, self.n_stochastic_actions),
     )
 
     self.action_variance = nn.Sequential(
-        nn.Linear(512, n_continuous_actions),
+        nn.Linear(512, self.n_stochastic_actions),
         nn.Softplus(),
     )
 
@@ -130,12 +130,35 @@ class PPOSurveillanceAgent(PPO):
   def act(self, observations: torch.Tensor):
     mean, variance, value = self.forward(observations)
     action_dist = torch.distributions.Normal(mean, variance)
-    action = action_dist.sample()
-    return action, value, action_dist.log_prob(action), action_dist.entropy()
+    stochastic_actions = action_dist.sample()
+    deterministic_actions = (
+        # Azimuth beamwidth
+        torch.full((observations.shape[0], 1), self.azimuth_beamwidth).to(
+            stochastic_actions.device),
+        # Elevation beamwidth
+        torch.full((observations.shape[0], 1), self.elevation_beamwidth).to(
+            stochastic_actions.device),
+        # Bandwidth
+        torch.full((observations.shape[0], 1), self.bandwidth).to(
+            stochastic_actions.device),
+        # Pulsewidth
+        torch.full((observations.shape[0], 1), self.pulsewidth).to(
+            stochastic_actions.device),
+        # PRF
+        torch.full((observations.shape[0], 1), self.prf).to(
+            stochastic_actions.device),
+        # Number of pulses
+        torch.full((observations.shape[0], 1), self.n_pulses).to(
+            stochastic_actions.device),
+    )
+    action = torch.cat((stochastic_actions,) + deterministic_actions, 1)
+    return action, value, action_dist.log_prob(stochastic_actions), action_dist.entropy()
 
   def evaluate_actions(self,
                        observations: torch.Tensor,
                        actions: torch.Tensor):
+    # Only evaluate stochastic actions
+    actions = actions[:, :self.n_stochastic_actions]
     mean, variance, value = self.forward(observations)
     action_dist = torch.distributions.Normal(mean, variance)
     return action_dist.log_prob(actions), action_dist.entropy(), value
@@ -203,15 +226,8 @@ n_pulses = 32
 
 # Create the environment
 env_id = 'mpar_sim/SimpleParticleSurveillance-v0'
-env = gym.make('mpar_sim/SimpleParticleSurveillance-v0',
+env = gym.make(env_id,
                radar=radar,
-               # Radar parameters
-               azimuth_beamwidth=az_bw,
-               elevation_beamwidth=el_bw,
-               bandwidth=bw,
-               pulsewidth=pulsewidth,
-               prf=prf,
-               n_pulses=n_pulses,
                transition_model=transition_model,
                initial_state=initial_state,
                birth_rate=0.01,
@@ -354,7 +370,7 @@ i = 0
 while not np.all(dones):
   look = raster_agent.act(obs)
   actions = np.array([[look.azimuth_steering_angle,
-                       look.elevation_steering_angle]])
+                     look.elevation_steering_angle]])
   actions = np.repeat(actions, n_env, axis=0)
   # Repeat actions for all environments
   obs, reward, terminated, truncated, info = env.step(actions)
