@@ -39,6 +39,7 @@ from mpar_sim.defaults import (default_gbest_pso, default_lbest_pso,
 from mpar_sim.radar import PhasedArrayRadar
 from mpar_sim.wrappers.image_to_pytorch import ImageToPytorch
 from mpar_sim.wrappers.squeeze_image import SqueezeImage
+from lightning_rl.common.layer_init import ortho_init
 
 
 # %% [markdown]
@@ -77,8 +78,8 @@ def make_env(env_id,
                    )
 
     # Wrappers
-    env = gym.wrappers.ResizeObservation(env, (64, 64))
-    env = ImageToPytorch(env)
+    env = gym.wrappers.ResizeObservation(env, (84, 84))
+    # env = ImageToPytorch(env)
     env = SqueezeImage(env)
     env = gym.wrappers.FrameStack(env, 4)
     env = gym.wrappers.TimeLimit(env, max_episode_steps=max_episode_steps)
@@ -116,32 +117,28 @@ class PPOSurveillanceAgent(PPO):
     self.n_pulses = n_pulses
 
     self.feature_net = nn.Sequential(
-        nn.Conv2d(
-            self.observation_space.shape[0], 32, kernel_size=8, stride=4),
+        ortho_init(nn.Conv2d(
+            self.observation_space.shape[0], 32, kernel_size=8, stride=4)),
         nn.ReLU(),
-        nn.Conv2d(32, 64, kernel_size=4, stride=2),
+        ortho_init(nn.Conv2d(32, 64, kernel_size=4, stride=2)),
         nn.ReLU(),
-        nn.Conv2d(64, 64, kernel_size=3, stride=1),
+        ortho_init(nn.Conv2d(64, 64, kernel_size=3, stride=1)),
         nn.ReLU(),
         nn.Flatten(start_dim=1, end_dim=-1),
-        nn.LazyLinear(512),
+        ortho_init(nn.Linear(64*7*7, 512)),
         nn.ReLU(),
     )
 
     # The actor head parameterizes the mean and variance of a Gaussian distribution for the beam steering angles in az/el.
     self.n_stochastic_actions = 2
-    self.action_mean = nn.Sequential(
-        nn.Linear(512, self.n_stochastic_actions),
-    )
+    self.action_mean = ortho_init(nn.Linear(512, self.n_stochastic_actions),std=0.01)
 
     self.action_variance = nn.Sequential(
-        nn.Linear(512, self.n_stochastic_actions),
+        ortho_init(nn.Linear(512, self.n_stochastic_actions),std=1.0),
         nn.Softplus(),
     )
 
-    self.critic = nn.Sequential(
-        nn.Linear(512, 1),
-    )
+    self.critic = ortho_init(nn.Linear(512, 1), std=1.0)
 
     self.save_hyperparameters()
 
@@ -195,15 +192,6 @@ class PPOSurveillanceAgent(PPO):
     optimizer = torch.optim.Adam(self.parameters(), lr=5e-4, eps=1e-5)
     return optimizer
 
-  def on_train_epoch_end(self) -> None:
-    if self.env.return_queue and self.env.length_queue:
-      self.log_dict({
-          'train/mean_episode_reward': np.mean(self.env.return_queue),
-          'train/mean_episode_length': np.mean(self.env.length_queue),
-          'train/total_step_count': float(self.total_step_count),
-      },
-          prog_bar=True, logger=True)
-
 
 # %% [markdown]
 # ## Environment setup
@@ -243,7 +231,7 @@ initial_state = GaussianState(
 
 # Create the environment
 env_id = 'mpar_sim/SimpleParticleSurveillance-v0'
-n_env = 32
+n_env = 25
 max_episode_steps = 500
 env = gym.vector.AsyncVectorEnv(
     [make_env(env_id, radar, transition_model, initial_state, max_episode_steps) for _ in range(n_env)])
@@ -263,8 +251,8 @@ n_pulses = 32
 
 ppo_agent = PPOSurveillanceAgent(env,
                                  n_rollouts_per_epoch=1,
-                                 n_steps_per_rollout=512,
-                                 n_gradient_steps=4,
+                                 n_steps_per_rollout=256,
+                                 n_gradient_steps=8,
                                  batch_size=4096,
                                  gamma=0.99,
                                  gae_lambda=0.95,
@@ -272,7 +260,7 @@ ppo_agent = PPOSurveillanceAgent(env,
                                  entropy_coef=0.01,
                                  seed=seed,
                                  normalize_advantage=True,
-                                 policy_clip_range=0.1,
+                                 policy_clip_range=0.2,
                                  target_kl=None,
                                  # Radar parameters
                                  azimuth_beamwidth=az_bw,
