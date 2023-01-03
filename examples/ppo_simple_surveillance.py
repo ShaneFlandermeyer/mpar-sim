@@ -56,9 +56,37 @@ plt.rcParams["axes.labelweight"] = "bold"
 # %%
 
 
-def make_env(env_id):
-  # TODO: Implement this
-  pass
+def make_env(env_id,
+             radar,
+             transition_model,
+             initial_state,
+             max_episode_steps=500):
+  def thunk():
+    env = gym.make(env_id,
+                   radar=radar,
+                   transition_model=transition_model,
+                   initial_state=initial_state,
+                   birth_rate=0.01,
+                   death_probability=0.005,
+                   initial_number_targets=25,
+                   n_confirm_detections=3,
+                   randomize_initial_state=True,
+                   max_random_az_covar=50,
+                   max_random_el_covar=50,
+                   render_mode='rgb_array',
+                   )
+
+    # Wrappers
+    env = gym.wrappers.ResizeObservation(env, (64, 64))
+    env = ImageToPytorch(env)
+    env = SqueezeImage(env)
+    env = gym.wrappers.FrameStack(env, 4)
+    env = gym.wrappers.TimeLimit(env, max_episode_steps=max_episode_steps)
+    env = gym.wrappers.ClipAction(env)
+
+    return env
+
+  return thunk
 
 
 # %% [markdown]
@@ -183,7 +211,6 @@ class PPOSurveillanceAgent(PPO):
 # In this experiment, targets move according to a constant velocity, white noise acceleration model.
 # http://www.control.isy.liu.se/student/graduate/targettracking/file/le2_handout.pdf
 transition_model = ConstantVelocity(ndim_pos=3, noise_diff_coeff=10)
-
 # Radar system object
 radar = PhasedArrayRadar(
     ndim_state=6,
@@ -208,52 +235,18 @@ radar = PhasedArrayRadar(
     false_alarm_rate=1e-6,
     include_false_alarms=False
 )
-
 # Gaussian parameters used to initialize the states of new targets in the scene. Here, elements (0, 2, 4) of the state vector/covariance are the az/el/range of the target (angles in degrees), and (1, 3, 5) are the x/y/z velocities in m/s. If randomize_initial_state is set to True in the environment, the mean az/el are uniformly sampled across the radar field of view, and the variance is uniformly sampled from [0, max_random_az_covar] and [0, max_random_el_covar] for the az/el, respectively
 initial_state = GaussianState(
     state_vector=[-20,   0,  20,   0, 10e3, 0],
     covar=np.diag([3**2, 100**2, 3**2, 100**2,  1000**2, 100**2])
 )
 
-# Radar parameters
-# Specifying these up here because they should really be part of the action space, but that will require some refactoring of my lightning-rl repo
-az_bw = 5
-el_bw = 5
-bw = 100e6
-pulsewidth = 10e-6
-prf = 5e3
-n_pulses = 32
-
 # Create the environment
 env_id = 'mpar_sim/SimpleParticleSurveillance-v0'
-env = gym.make(env_id,
-               radar=radar,
-               transition_model=transition_model,
-               initial_state=initial_state,
-               birth_rate=0.01,
-               death_probability=0.005,
-               initial_number_targets=25,
-               n_confirm_detections=3,
-               randomize_initial_state=True,
-               max_random_az_covar=50,
-               max_random_el_covar=50,
-               render_mode='rgb_array',
-               )
-
-# Define all environment wrappers
-max_episode_steps = 500
-# Observation wrappers
-env = gym.wrappers.ResizeObservation(env, (64, 64))
-env = ImageToPytorch(env)
-env = SqueezeImage(env)
-env = gym.wrappers.FrameStack(env, 4)
-env = gym.wrappers.TimeLimit(env, max_episode_steps=max_episode_steps)
-
 n_env = 32
-env = gym.vector.AsyncVectorEnv([lambda: env]*n_env)
-
-
-env = gym.wrappers.ClipAction(env)
+max_episode_steps = 500
+env = gym.vector.AsyncVectorEnv(
+    [make_env(env_id, radar, transition_model, initial_state, max_episode_steps) for _ in range(n_env)])
 env = gym.wrappers.RecordEpisodeStatistics(env=env, deque_size=20)
 
 
@@ -261,6 +254,13 @@ env = gym.wrappers.RecordEpisodeStatistics(env=env, deque_size=20)
 # ## Training loop
 
 # %%
+az_bw = 5
+el_bw = 5
+bw = 100e6
+pulsewidth = 10e-6
+prf = 5e3
+n_pulses = 32
+
 ppo_agent = PPOSurveillanceAgent(env,
                                  n_rollouts_per_epoch=1,
                                  n_steps_per_rollout=512,
