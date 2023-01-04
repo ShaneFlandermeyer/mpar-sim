@@ -4,32 +4,28 @@ from typing import Callable, List, Optional, Set, Tuple, Union
 
 import numpy as np
 from scipy import constants
-from scipy.stats import poisson, uniform
 from stonesoup.base import Property
 from stonesoup.models.measurement import MeasurementModel
-from stonesoup.models.measurement.nonlinear import RangeRangeRateBinning
 from stonesoup.sensor.radar.radar import RadarElevationBearingRangeRate
 from stonesoup.sensor.sensor import Sensor
-from stonesoup.types.array import CovarianceMatrix, StateVector
-from stonesoup.types.detection import TrueDetection, MissedDetection
+from stonesoup.types.array import StateVector
+from stonesoup.types.detection import TrueDetection
 from stonesoup.types.groundtruth import GroundTruthState
 from stonesoup.types.state import StateVector
 from stonesoup.types.detection import Clutter
 
 from mpar_sim.beam.beam import RectangularBeam
 from mpar_sim.beam.common import beam_broadening_factor
-from mpar_sim.common.albersheim import albersheim_pd
 from mpar_sim.common.coordinate_transform import (
-    cart2sph, rotx, roty, rotz, rpy2rotmat, sph2cart)
+    cart2sph, rotx, roty, rotz)
 from mpar_sim.looks.look import Look
 from mpar_sim.looks.spoiled_look import SpoiledLook
 from mpar_sim.models.measurement.estimation import (angle_crlb, range_crlb,
                                                     velocity_crlb)
 from mpar_sim.models.measurement.nonlinear import RangeRangeRateBinningAliasing
-from stonesoup.models.clutter import ClutterModel
-from stonesoup.types.angle import Elevation, Bearing
 from mpar_sim.beam.common import aperture2beamwidth
 from datetime import datetime
+from stonesoup.base import clearable_cached_property
 
 
 class PhasedArrayRadar(Sensor):
@@ -119,8 +115,8 @@ class PhasedArrayRadar(Sensor):
   @measurement_model.getter
   def measurement_model(self):
     measurement_model = copy.deepcopy(self._property_measurement_model)
-    measurement_model.translation_offset = self.position.copy()
-    measurement_model.rotation_offset = self.rotation_offset.copy()
+    measurement_model.translation_offset = np.array(self.position)
+    measurement_model.rotation_offset = np.array(self.rotation_offset)
     return measurement_model
 
   def load_look(self, look: Look):
@@ -203,7 +199,7 @@ class PhasedArrayRadar(Sensor):
         ndim_state=self.ndim_state,
         mapping=self.position_mapping,
         velocity_mapping=self.velocity_mapping,
-        noise_covar=CovarianceMatrix(np.diag([0.1, 0.1, 0.1, 0.1])))
+        noise_covar=np.diag([0.1, 0.1, 0.1, 0.1]))
 
   @lru_cache
   def is_detectable(self, 
@@ -226,6 +222,14 @@ class PhasedArrayRadar(Sensor):
     return (self.az_fov[0] <= target_az <= self.az_fov[1]) and \
            (self.el_fov[0] <= target_el <= self.el_fov[1]) and \
            (target_range <= self.max_range)
+           
+  @clearable_cached_property('rotation_offset')
+  def _rotation_matrix(self) -> np.ndarray:
+    """3D axis rotation matrix"""
+    theta_x = -self.rotation_offset[0, 0]  # roll
+    theta_y = self.rotation_offset[1, 0]  # pitch#elevation
+    theta_z = -self.rotation_offset[2, 0]  # yaw#azimuth
+    return rotz(theta_z) @ roty(theta_y) @ rotx(theta_x)
 
   def measure(self,
               ground_truths: Set[GroundTruthState],
@@ -248,10 +252,7 @@ class PhasedArrayRadar(Sensor):
     detections = set()
     measurement_model = self.measurement_model
     # Compute the rotation matrix that maps the global coordinate frame into the radar frame
-    roll = -np.deg2rad(self.rotation_offset[0, 0])
-    pitch = -np.deg2rad(self.rotation_offset[1, 0])
-    yaw = -np.deg2rad(self.rotation_offset[2, 0])
-    self._rotation_matrix = rpy2rotmat(roll, pitch, yaw)
+    
     # Loop through the targets and generate detections
     for truth in ground_truths:
       # Get the position of the target in the radar coordinate frame
@@ -352,8 +353,8 @@ class PhasedArrayRadar(Sensor):
 
       # Add false alarms to the detection report
       for i in range(n_false_alarms):
-        detections.add(Clutter(np.array([[Elevation(np.deg2rad(el[i]))],
-                                         [Bearing(np.deg2rad(az[i]))],
+        detections.add(Clutter(np.array([[np.deg2rad(el[i])],
+                                         [np.deg2rad(az[i])],
                                          [r[i]],
                                          [v[i]]]),
                                timestamp=truth.timestamp if truth else timestamp,

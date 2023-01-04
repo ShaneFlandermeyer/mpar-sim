@@ -2,14 +2,14 @@ import datetime
 from typing import Union
 import numpy as np
 from stonesoup.types.state import State, StateVector, StateVectors
-from stonesoup.models.transition.linear import LinearGaussianTransitionModel
-from stonesoup.models.base import Property
-from stonesoup.types.array import CovarianceMatrix
+# from stonesoup.models.transition.linear import LinearGaussianTransitionModel
+# from stonesoup.models.base import Property
+# from stonesoup.types.array import CovarianceMatrix
 
 from mpar_sim.common.matrix import block_diag
 
 
-class ConstantVelocity(LinearGaussianTransitionModel):
+class ConstantVelocity():
   r"""This is a class implementation of a discrete, time-variant 1D
     Linear-Gaussian Constant Velocity Transition Model.
 
@@ -55,41 +55,45 @@ class ConstantVelocity(LinearGaussianTransitionModel):
                         \frac{dt^2}{2} & dt
                 \end{bmatrix} q
     """
-  ndim_pos: int = Property(
-      doc="The number of position dimensions of the model",
-      default=3)
-  noise_diff_coeff: Union[float, np.ndarray] = Property(
-      doc="The velocity noise diffusion coefficient :math:`q`")
 
-  @property
-  def ndim_state(self):
-    return self.ndim_pos*2
+  def __init__(self, ndim_pos=3, noise_diff_coeff=1):
+    self.ndim_pos = ndim_pos
+    self.noise_diff_coeff = noise_diff_coeff
+
+    self.ndim_state = self.ndim_pos*2
+    self.ndim = self.ndim_state
 
   def function(self,
                state: Union[State, StateVector, StateVectors],
                noise: Union[bool, np.ndarray] = False,
-               **kwargs) -> Union[StateVector, StateVectors]:
-    if isinstance(state, State):
-      state = state.state_vector
-
+               time_interval: datetime.timedelta = 0) -> np.ndarray:
     if noise:
-      noise = self.rvs(num_samples=state.shape[1], **kwargs)
+      noise = self.rvs(num_samples=state.shape[1], time_interval=time_interval)
     else:
       noise = 0
 
-    return self.matrix(**kwargs) @ state + noise
+    return self.matrix(time_interval) @ state + noise
 
-  def matrix(self, time_interval: datetime.timedelta, **kwargs):
+  def matrix(self, time_interval: datetime.timedelta):
     dt = time_interval.total_seconds()
     F = np.array([[1, dt],
                   [0, 1]])
     F = block_diag(F, nreps=self.ndim_pos)
     return F
 
-  def covar(self, time_interval, **kwargs):
+  def covar(self, time_interval: datetime.timedelta):
     dt = time_interval.total_seconds()
     # TODO: Extend this to handle different noise_diff_coeff for each dimension
     covar = np.array([[dt**3/3, dt**2/2],
                       [dt**2/2, dt]]) * self.noise_diff_coeff
     covar = block_diag(covar, nreps=self.ndim_pos)
-    return CovarianceMatrix(covar)
+    return covar
+
+  def rvs(self,
+          num_samples: int = 1,
+          time_interval: datetime.timedelta = 0) -> np.ndarray:
+    covar = self.covar(time_interval)
+    noise = np.random.multivariate_normal(
+        np.zeros(self.ndim), covar, num_samples)
+    noise = np.atleast_2d(noise).T
+    return noise

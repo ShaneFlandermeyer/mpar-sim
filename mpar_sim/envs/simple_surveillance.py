@@ -133,6 +133,7 @@ class SimpleParticleSurveillance(gym.Env):
         pulsewidth=action[5],
         prf=action[6],
         n_pulses=action[7],
+        # TODO: For a spoiled look, this depends on the number of elements used to form the tx beam
         tx_power=self.radar.n_elements_x *
         self.radar.n_elements_y*self.radar.element_tx_power,
         start_time=self.time,
@@ -165,8 +166,8 @@ class SimpleParticleSurveillance(gym.Env):
 
       # Only update the swarm state for particles that have not been confirmed
       if isinstance(detection, Clutter) or self.detection_count[target_id] <= self.n_confirm_detections:
-        az = detection.state_vector[1].degrees
-        el = detection.state_vector[0].degrees
+        az = detection.state_vector[1]
+        el = detection.state_vector[0]
         self.swarm_optim.optimize(
             self._distance_objective, detection_pos=np.array([az, el]))
 
