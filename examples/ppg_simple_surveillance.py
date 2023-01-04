@@ -5,39 +5,24 @@
 # ## Imports
 
 # %%
-import copy
 import time
-from typing import Tuple
 import warnings
 
-import cv2
 import gymnasium as gym
 import matplotlib.pyplot as plt
 import numpy as np
 import pytorch_lightning as pl
 import torch
-from lightning_rl.models.on_policy_models import PPO
-from pyswarms.utils.functions import single_obj as fx
-from pyswarms.utils.plotters import (plot_contour, plot_cost_history,
-                                     plot_surface)
-from pyswarms.utils.plotters.formatters import Designer, Mesher
-from stonesoup.models.transition.linear import (
-    CombinedLinearGaussianTransitionModel, SingerApproximate)
+from lightning_rl.models.on_policy_models.ppg import PPG
 from mpar_sim.models.motion.linear import ConstantVelocity
-from stonesoup.plotter import Dimension, Plotter
-from stonesoup.types.array import CovarianceMatrix, StateVector
 from stonesoup.types.state import GaussianState
-from torch import distributions, nn
+from torch import nn
 
 import mpar_sim.envs
 from mpar_sim.agents.raster_scan import RasterScanAgent
-from mpar_sim.beam.beam import GaussianBeam, RectangularBeam, SincBeam
+from mpar_sim.beam.beam import SincBeam
 from mpar_sim.common.wrap_to_interval import wrap_to_interval
-from mpar_sim.defaults import (default_gbest_pso, default_lbest_pso,
-                               default_radar, default_raster_scan_agent,
-                               default_scheduler)
 from mpar_sim.radar import PhasedArrayRadar
-from mpar_sim.wrappers.image_to_pytorch import ImageToPytorch
 from mpar_sim.wrappers.squeeze_image import SqueezeImage
 from lightning_rl.common.layer_init import ortho_init
 
@@ -69,7 +54,7 @@ def make_env(env_id,
                    initial_state=initial_state,
                    birth_rate=0.01,
                    death_probability=0.005,
-                   initial_number_targets=25,
+                   initial_number_targets=50,
                    n_confirm_detections=3,
                    randomize_initial_state=True,
                    max_random_az_covar=50,
@@ -79,7 +64,6 @@ def make_env(env_id,
 
     # Wrappers
     env = gym.wrappers.ResizeObservation(env, (84, 84))
-    # env = ImageToPytorch(env)
     env = SqueezeImage(env)
     env = gym.wrappers.FrameStack(env, 4)
     env = gym.wrappers.TimeLimit(env, max_episode_steps=max_episode_steps)
@@ -96,7 +80,7 @@ def make_env(env_id,
 # %%
 
 
-class PPOSurveillanceAgent(PPO):
+class PPGSurveillanceAgent(PPG):
   def __init__(self,
                env: gym.Env,
                # Look parameters
@@ -129,17 +113,17 @@ class PPOSurveillanceAgent(PPO):
         nn.ReLU(),
     )
 
-    # The actor head parameterizes the mean and std of a Gaussian distribution for the beam steering angles in az/el.
+    # The actor head parameterizes the mean and variance of a Gaussian distribution for the beam steering angles in az/el.
     self.n_stochastic_actions = 2
-    self.action_mean = ortho_init(nn.Linear(512, self.n_stochastic_actions),std=0.01)
-
+    # self.actor = ortho_init(nn.Linear(512, self.n_stochastic_actions), std=0.01)
+    self.action_mean = ortho_init(
+        nn.Linear(512, self.n_stochastic_actions), std=0.01)
     self.action_std = nn.Sequential(
-        ortho_init(nn.Linear(512, self.n_stochastic_actions),std=1.0),
+        ortho_init(nn.Linear(512, self.n_stochastic_actions), std=1.0),
         nn.Softplus(),
     )
-
-    self.critic = ortho_init(nn.Linear(512, 1), std=1.0)
-
+    self.aux_critic = ortho_init(nn.Linear(512, 1), std=1)
+    self.critic = ortho_init(nn.Linear(512, 1), std=1)
     self.save_hyperparameters()
 
   def forward(self, x: torch.Tensor):
@@ -150,10 +134,12 @@ class PPOSurveillanceAgent(PPO):
 
     # Compute the value of the state
     value = self.critic(feature).flatten()
-    return mean, std, value
+    aux_value = self.aux_critic(feature).flatten()
+    return (mean, std), aux_value, value
 
   def act(self, observations: torch.Tensor):
-    mean, std, value = self.forward(observations)
+    action_logits, value, aux_value = self.forward(observations)
+    mean, std = action_logits
     action_dist = torch.distributions.Normal(mean, std)
     stochastic_actions = action_dist.sample()
     deterministic_actions = (
@@ -177,14 +163,35 @@ class PPOSurveillanceAgent(PPO):
             stochastic_actions.device),
     )
     action = torch.cat((stochastic_actions,) + deterministic_actions, 1)
-    return action, value, action_dist.log_prob(stochastic_actions), action_dist.entropy()
+    return action, value, action_dist.log_prob(stochastic_actions), action_dist.entropy(), action_dist, aux_value
+
+  def logits_to_action_dist(self, logits: torch.Tensor) -> torch.distributions.Distribution:
+    """
+    Return the action distribution from the output logits. This is needed to compute the KL divergence term in the joint loss on page 3 of the PPG paper (Cobbe2020).
+
+    Parameters
+    ----------
+    logits : torch.Tensor
+        Logits from the output of the actor network
+
+    Returns
+    -------
+    torch.distributions.Distribution
+        Action distribution
+    """
+    mean = logits[:, 0, :]
+    std = logits[:, 1, :]
+    action_dist = torch.distributions.Normal(mean, std)
+    return action_dist
+
 
   def evaluate_actions(self,
                        observations: torch.Tensor,
                        actions: torch.Tensor):
     # Only evaluate stochastic actions
     actions = actions[:, :self.n_stochastic_actions]
-    mean, std, value = self.forward(observations)
+    action_logits, aux_value, value = self.forward(observations)
+    mean, std = action_logits
     action_dist = torch.distributions.Normal(mean, std)
     return action_dist.log_prob(actions), action_dist.entropy(), value
 
@@ -231,7 +238,7 @@ initial_state = GaussianState(
 
 # Create the environment
 env_id = 'mpar_sim/SimpleParticleSurveillance-v0'
-n_env = 25
+n_env = 16
 max_episode_steps = 500
 env = gym.vector.AsyncVectorEnv(
     [make_env(env_id, radar, transition_model, initial_state, max_episode_steps) for _ in range(n_env)])
@@ -249,11 +256,10 @@ pulsewidth = 10e-6
 prf = 5e3
 n_pulses = 32
 
-ppo_agent = PPOSurveillanceAgent(env,
+ppg_agent = PPGSurveillanceAgent(env,
                                  n_rollouts_per_epoch=1,
                                  n_steps_per_rollout=256,
-                                 n_gradient_steps=8,
-                                 batch_size=4096,
+                                 shared_arch=True,
                                  gamma=0.99,
                                  gae_lambda=0.95,
                                  value_coef=0.5,
@@ -261,7 +267,14 @@ ppo_agent = PPOSurveillanceAgent(env,
                                  seed=seed,
                                  normalize_advantage=True,
                                  policy_clip_range=0.2,
-                                 target_kl=None,
+                                 policy_minibatch_size=256,
+                                 # PPG parameters
+                                 aux_minibatch_size=16,
+                                 n_policy_steps=16,
+                                 n_policy_epochs=3,
+                                 n_value_epochs=3,
+                                 n_aux_epochs=9,
+                                 beta_clone=1.0,
                                  # Radar parameters
                                  azimuth_beamwidth=az_bw,
                                  elevation_beamwidth=el_bw,
@@ -276,12 +289,12 @@ ppo_agent = PPOSurveillanceAgent(env,
 #     checkpoint_filename, env=env, seed=seed)
 
 trainer = pl.Trainer(
-    max_epochs=300,
+    max_epochs=30,
     gradient_clip_val=0.5,
     accelerator='gpu',
     devices=1,
 )
-trainer.fit(ppo_agent)
+trainer.fit(ppg_agent)
 
 
 # %% [markdown]
@@ -327,8 +340,8 @@ i = 0
 with torch.no_grad():
   while not np.all(dones):
     obs_tensor = torch.as_tensor(obs).to(
-        device=ppo_agent.device, dtype=torch.float32)
-    action_tensor = ppo_agent.forward(obs_tensor)[0]
+        device=ppg_agent.device, dtype=torch.float32)
+    action_tensor = ppg_agent.forward(obs_tensor)[0]
     actions = action_tensor.cpu().numpy()
     # Repeat actions for all environments
     obs, reward, terminated, truncated, info = env.step(actions)

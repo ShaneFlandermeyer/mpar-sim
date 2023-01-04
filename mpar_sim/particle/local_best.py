@@ -126,6 +126,7 @@ class IncrementalLocalBestPSO(SwarmOptimizer):
       init_pos=None,
       pbest_reset_interval=None,
       static=False,
+      save_history=False
   ) -> None:
     super().__init__(
         n_particles=n_particles,
@@ -154,6 +155,7 @@ class IncrementalLocalBestPSO(SwarmOptimizer):
     self.name = __name__
 
     # Reset memory-based items
+    self.save_history = save_history
     self.pbest_reset_interval = pbest_reset_interval
     self.swarm.pbest_cost = np.full(self.swarm_size[0], np.inf)
     self.iter_count = 0
@@ -180,14 +182,15 @@ class IncrementalLocalBestPSO(SwarmOptimizer):
         self.swarm, k=self.k, p=self.p)
 
     # Save to history
-    hist = self.ToHistory(
-        best_cost=self.swarm.best_cost,
-        mean_pbest_cost=np.mean(self.swarm.pbest_cost),
-        mean_neighbor_cost=self.swarm.best_cost,
-        position=self.swarm.position,
-        velocity=self.swarm.velocity,
-    )
-    self._populate_history(hist)
+    if self.save_history:
+        hist = self.ToHistory(
+            best_cost=self.swarm.best_cost,
+            mean_pbest_cost=np.mean(self.swarm.pbest_cost),
+            mean_neighbor_cost=self.swarm.best_cost,
+            position=self.swarm.position,
+            velocity=self.swarm.velocity,
+        )
+        self._populate_history(hist)
 
     # Perform options update
     if iters is not None:
