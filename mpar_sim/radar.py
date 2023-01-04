@@ -206,26 +206,26 @@ class PhasedArrayRadar(Sensor):
         noise_covar=CovarianceMatrix(np.diag([0.1, 0.1, 0.1, 0.1])))
 
   @lru_cache
-  def is_detectable(self, state: GroundTruthState) -> bool:
+  def is_detectable(self, 
+                    target_az: float, target_el: float, target_range: float) -> bool:
     """
     Returns true if the target is within the radar's field of view (in range, azimuth, and elevation) and false otherwise
     Parameters
     ----------
-    state : GroundTruthState
-        Target state
+    target_az: float
+        Azimuth angle of the target in degrees
+    target_el: float
+        Elevation angle of the target in degrees
+    target_range: float
+        Range of the target in meters
     Returns
     -------
     bool
         Whether the target can be detected by the radar
     """
-    pos_xyz = state.state_vector[self.position_mapping, :]
-    az, el, range = cart2sph(*pos_xyz, degrees=True)
-    # Check if state falls within sensor's FOV
-    relative_az = az - self.rotation_offset[2]
-    relative_el = el - self.rotation_offset[1]
-    return (self.az_fov[0] <= relative_az <= self.az_fov[1]) and \
-           (self.el_fov[0] <= relative_el <= self.el_fov[1]) and \
-           (range <= self.max_range)
+    return (self.az_fov[0] <= target_az <= self.az_fov[1]) and \
+           (self.el_fov[0] <= target_el <= self.el_fov[1]) and \
+           (target_range <= self.max_range)
 
   def measure(self,
               ground_truths: Set[GroundTruthState],
@@ -254,10 +254,6 @@ class PhasedArrayRadar(Sensor):
     self._rotation_matrix = rpy2rotmat(roll, pitch, yaw)
     # Loop through the targets and generate detections
     for truth in ground_truths:
-      # Skip targets that are not detectable
-      if not self.is_detectable(truth):
-        continue
-
       # Get the position of the target in the radar coordinate frame
       relative_pos = truth.state_vector[self.position_mapping,
                                         :] - self.position
@@ -265,6 +261,10 @@ class PhasedArrayRadar(Sensor):
 
       # Convert target position to spherical coordinates
       [target_az, target_el, r] = cart2sph(*relative_pos)
+      
+      # Skip targets that are not detectable
+      if not self.is_detectable(target_az, target_el, r):
+          continue
 
       # Compute target's az/el relative to the beam center
       relative_az = np.rad2deg(target_az) - self.tx_beam.azimuth_steering_angle

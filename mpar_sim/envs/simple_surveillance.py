@@ -413,20 +413,14 @@ class SimpleParticleSurveillance(gym.Env):
     new_states = self.transition_model.function(
         states, noise=True, time_interval=dt)
 
-    stale_targets = set()
-    i = 0
+    itarget = 0
     for path in self.target_paths:
       index = path[-1].metadata.get("index")
       path.append(GroundTruthState(
-          new_states[:, i], timestamp=self.time,
+          new_states[:, itarget], timestamp=self.time,
           metadata={"index": index}))
-      if not self.radar.is_detectable(path[-1]):
-        stale_targets.add(path)
-        if path.id in self.detection_count.keys():
-          del self.detection_count[path.id]
-      i += 1
+      itarget += 1
 
-    self.target_paths.difference_update(stale_targets)
 
   ############################################################################
   # Particle swarm methods
