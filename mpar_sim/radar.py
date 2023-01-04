@@ -1,29 +1,24 @@
-import copy
+from datetime import datetime
 from functools import lru_cache
 from typing import Callable, List, Optional, Set, Tuple, Union
 
 import numpy as np
 from scipy import constants
-from stonesoup.base import Property
+from stonesoup.base import Property, clearable_cached_property
 from stonesoup.models.measurement import MeasurementModel
 from stonesoup.sensor.radar.radar import RadarElevationBearingRangeRate
 from stonesoup.sensor.sensor import Sensor
-from stonesoup.types.detection import TrueDetection
+from stonesoup.types.detection import Clutter, TrueDetection
 from stonesoup.types.groundtruth import GroundTruthState
-from stonesoup.types.detection import Clutter
 
 from mpar_sim.beam.beam import RectangularBeam
-from mpar_sim.beam.common import beam_broadening_factor
-from mpar_sim.common.coordinate_transform import (
-    cart2sph, rotx, roty, rotz)
+from mpar_sim.beam.common import aperture2beamwidth, beam_broadening_factor
+from mpar_sim.common.coordinate_transform import cart2sph, rotx, roty, rotz
 from mpar_sim.looks.look import Look
 from mpar_sim.looks.spoiled_look import SpoiledLook
 from mpar_sim.models.measurement.estimation import (angle_crlb, range_crlb,
                                                     velocity_crlb)
 from mpar_sim.models.measurement.nonlinear import RangeRangeRateBinningAliasing
-from mpar_sim.beam.common import aperture2beamwidth
-from datetime import datetime
-from stonesoup.base import clearable_cached_property
 
 
 class PhasedArrayRadar(Sensor):
@@ -50,7 +45,7 @@ class PhasedArrayRadar(Sensor):
       doc="The measurement model used to generate "
       "measurements. By default, this object measures range, range rate, azimuth, and elevation with no noise.")
   rotation_offset: np.ndarray = Property(
-      default=np.zeros((3,1)),
+      default=np.zeros((3, 1)),
       doc="A 3x1 array of angles (rad), specifying the radar orientation in terms of the "
       "counter-clockwise rotation around the :math:`x,y,z` axis. i.e Roll, Pitch and Yaw. "
       "Default is ``np.zeros((3,1))``")
@@ -200,7 +195,7 @@ class PhasedArrayRadar(Sensor):
         noise_covar=np.diag([0.1, 0.1, 0.1, 0.1]))
 
   @lru_cache
-  def is_detectable(self, 
+  def is_detectable(self,
                     target_az: float, target_el: float, target_range: float) -> bool:
     """
     Returns true if the target is within the radar's field of view (in range, azimuth, and elevation) and false otherwise
@@ -220,7 +215,7 @@ class PhasedArrayRadar(Sensor):
     return (self.az_fov[0] <= target_az <= self.az_fov[1]) and \
            (self.el_fov[0] <= target_el <= self.el_fov[1]) and \
            (target_range <= self.max_range)
-           
+
   @clearable_cached_property('rotation_offset')
   def _rotation_matrix(self) -> np.ndarray:
     """3D axis rotation matrix"""
@@ -250,20 +245,20 @@ class PhasedArrayRadar(Sensor):
     detections = set()
     measurement_model = self.measurement_model
     # Compute the rotation matrix that maps the global coordinate frame into the radar frame
-    
+
     # Loop through the targets and generate detections
     for truth in ground_truths:
       # Get the position of the target in the radar coordinate frame
-      relative_pos = truth.state_vector[self.position_mapping,
-                                        :] - self.position
+      relative_pos = truth[-1].state_vector[self.position_mapping,
+                                            :] - self.position
       relative_pos = self._rotation_matrix @ relative_pos
 
       # Convert target position to spherical coordinates
       [target_az, target_el, r] = cart2sph(*relative_pos)
-      
+
       # Skip targets that are not detectable
       if not self.is_detectable(target_az, target_el, r):
-          continue
+        continue
 
       # Compute target's az/el relative to the beam center
       relative_az = np.rad2deg(target_az) - self.tx_beam.azimuth_steering_angle
@@ -272,7 +267,7 @@ class PhasedArrayRadar(Sensor):
       # Compute loss due to the target being off-centered in the beam
       beam_shape_loss_db = self.tx_beam.shape_loss(relative_az, relative_el)
 
-      snr_db = 10*np.log10(self.loop_gain) + 10*np.log10(truth.rcs) - \
+      snr_db = 10*np.log10(self.loop_gain) + 10*np.log10(truth[-1].rcs) - \
           40*np.log10(r) - beam_shape_loss_db
       snr_lin = 10**(snr_db/10)
 
@@ -313,9 +308,9 @@ class PhasedArrayRadar(Sensor):
              range_variance,
              velocity_variance])
 
-        measurements = measurement_model.function(truth, noise=noise)
+        measurements = measurement_model.function(truth[-1], noise=noise)
         detection = TrueDetection(measurements,
-                                  timestamp=truth.timestamp,
+                                  timestamp=truth[-1].timestamp,
                                   measurement_model=measurement_model,
                                   groundtruth_path=truth)
         detections.add(detection)

@@ -8,8 +8,10 @@ import pygame
 from gymnasium import spaces
 from ordered_set import OrderedSet
 from pyswarms.base.base_single import SwarmOptimizer
+from stonesoup.dataassociator.base import DataAssociator
 from stonesoup.dataassociator.neighbour import (GNNWith2DAssignment,
                                                 NearestNeighbour)
+from stonesoup.deleter.base import Deleter
 from stonesoup.hypothesiser.distance import DistanceHypothesiser
 from stonesoup.initiator.base import Initiator
 from stonesoup.measures import Euclidean, Mahalanobis
@@ -18,12 +20,14 @@ from stonesoup.models.transition.linear import (
     CombinedLinearGaussianTransitionModel, ConstantVelocity, SingerApproximate)
 from stonesoup.plotter import Dimension, Plotter
 from stonesoup.predictor.kalman import KalmanPredictor
-from stonesoup.types.array import CovarianceMatrix, StateVector
+from stonesoup.types.array import CovarianceMatrix, StateVector, StateVectors
 from stonesoup.types.detection import Clutter
 from stonesoup.types.groundtruth import GroundTruthPath, GroundTruthState
 from stonesoup.types.hypothesis import SingleHypothesis
 from stonesoup.types.state import GaussianState, State
-from stonesoup.types.update import Update
+from stonesoup.types.track import Track
+from stonesoup.types.update import GaussianStateUpdate, Update
+from stonesoup.updater.base import Updater
 from stonesoup.updater.kalman import ExtendedKalmanUpdater
 
 from mpar_sim.common.coordinate_transform import sph2cart
@@ -31,11 +35,6 @@ from mpar_sim.defaults import default_gbest_pso, default_lbest_pso
 from mpar_sim.looks.look import Look
 from mpar_sim.looks.spoiled_look import SpoiledLook
 from mpar_sim.radar import PhasedArrayRadar
-from stonesoup.types.track import Track
-from stonesoup.types.update import GaussianStateUpdate, Update
-from stonesoup.updater.base import Updater
-from stonesoup.dataassociator.base import DataAssociator
-from stonesoup.deleter.base import Deleter
 
 
 class ParticleSurveillance(gym.Env):
@@ -43,13 +42,6 @@ class ParticleSurveillance(gym.Env):
 
   def __init__(self,
                radar: PhasedArrayRadar,
-               # Radar parameters
-               azimuth_beamwidth: float,
-               elevation_beamwidth: float,
-               bandwidth: float,
-               pulsewidth: float,
-               prf: float,
-               n_pulses: float,
                # Tracking parameters
                initiator: Initiator,
                # Target generation parameters
@@ -115,14 +107,6 @@ class ParticleSurveillance(gym.Env):
     self.max_random_el_covar = max_random_el_covar
     self.seed = seed
 
-    # Radar parameters
-    self.azimuth_beamwidth = azimuth_beamwidth
-    self.elevation_beamwidth = elevation_beamwidth
-    self.bandwidth = bandwidth
-    self.pulsewidth = pulsewidth
-    self.prf = prf
-    self.n_pulses = n_pulses
-
     # Tracking parameters
     self.initiator = initiator
 
@@ -131,9 +115,11 @@ class ParticleSurveillance(gym.Env):
 
     # Currently, actions are limited to beam steering angles in azimuth and elevation
     self.action_space = spaces.Box(
-        low=np.array([self.radar.az_fov[0], self.radar.el_fov[0]]),
-        high=np.array([self.radar.az_fov[1], self.radar.el_fov[1]]),
-        shape=(2,),
+        low=np.array(
+            [self.radar.az_fov[0], self.radar.el_fov[0], 0, 0, 0, 0, 0, 0]),
+        high=np.array([self.radar.az_fov[1], self.radar.el_fov[1],
+                      np.Inf, np.Inf, np.Inf, np.Inf, np.Inf, np.Inf]),
+        shape=(8,),
         dtype=np.float32)
     assert render_mode is None or render_mode in self.metadata["render_modes"]
     self.render_mode = render_mode
@@ -158,13 +144,13 @@ class ParticleSurveillance(gym.Env):
     look = SpoiledLook(
         azimuth_steering_angle=action[0],
         elevation_steering_angle=action[1],
-        azimuth_beamwidth=self.azimuth_beamwidth,
-        elevation_beamwidth=self.elevation_beamwidth,
-        bandwidth=self.bandwidth,
-        pulsewidth=self.pulsewidth,
-        prf=self.prf,
-        n_pulses=self.n_pulses,
-        # TODO: For a spoiled look, this would depend on the beamwidth
+        azimuth_beamwidth=action[2],
+        elevation_beamwidth=action[3],
+        bandwidth=action[4],
+        pulsewidth=action[5],
+        prf=action[6],
+        n_pulses=action[7],
+        # TODO: For a spoiled look, this depends on the number of elements used to form the tx beam
         tx_power=self.radar.n_elements_x *
         self.radar.n_elements_y*self.radar.element_tx_power,
         start_time=self.time,
@@ -195,20 +181,19 @@ class ParticleSurveillance(gym.Env):
           associated_detections.add(association.measurement)
         else:
           track.append(association.prediction)
-          
-      
+
       # Update tentative tracks with new detections
       new_tracks, particle_detections = self.initiator.initiate(
           detections - associated_detections, self.time)
       self.tracks |= new_tracks
-      
+
       # Update the particle swarm to account for detections associated with tentative tracks
       for detection in particle_detections:
         az = detection.state_vector[1].degrees
         el = detection.state_vector[0].degrees
         self.swarm_optim.optimize(
             self._distance_objective, detection_pos=np.array([az, el]))
-        
+
       reward += len(new_tracks)
 
     # Mutate particles based on Engelbrecht equations (16.66-16.67)
@@ -341,16 +326,7 @@ class ParticleSurveillance(gym.Env):
     - initation ratio: the fraction of targets in the scenario that have been initiated (i.e. detected at least n_confirm_detections times)
     - swarm_positions: the current positions of all the particles in the swarm
     """
-    # n_initiated_targets = np.sum(
-    #     [count >= self.n_confirm_detections for count in self.detection_count.values()])
-    # initiation_ratio = n_initiated_targets / len(self.target_paths)
-    # swarm_pos = self.swarm_optim.swarm.position
-    # TODO: This slows down the simulation SIGNIFICANTLY if the stuff in the dict is hard to pickle
-    return {
-        # "initiation_ratio": initiation_ratio,
-        # "swarm_positions": swarm_pos,
-        # "tracks": self.tracks,
-    }
+    return {}
 
   def _render_frame(self) -> Optional[np.ndarray]:
     """
@@ -446,20 +422,21 @@ class ParticleSurveillance(gym.Env):
     """
     Move targets forward in time, removing targets that have left the radar's FOV
     """
-    stale_targets = set()
-    for path in self.target_paths:
-      index = path[-1].metadata.get("index")
-      updated_state = self.transition_model.function(path[-1],
-                                                     time_interval=dt)
-      path.append(GroundTruthState(
-          updated_state, timestamp=self.time,
-          metadata={"index": index}))
-      if not self.radar.is_detectable(path[-1]):
-        stale_targets.add(path)
-        if path.id in self.detection_count.keys():
-          del self.detection_count[path.id]
+    # Combine targets into one StateVectors object to vectorize transition update
+    # NOTE: Asssumes all targets have the same transition model
+    states = [path[-1].state_vector for path in self.target_paths]
+    if len(states) > 0:
+      states = StateVectors(states)
+    else:
+      return
+    new_states = self.transition_model.function(
+        states, noise=True, time_interval=dt)
 
-    self.target_paths.difference_update(stale_targets)
+    for itarget, path in enumerate(self.target_paths):
+      index = path[-1].metadata.get("index")
+      path.append(GroundTruthState(
+          new_states[:, itarget], timestamp=self.time,
+          metadata={"index": index}))
 
   ############################################################################
   # Particle swarm methods

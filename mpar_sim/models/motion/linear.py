@@ -1,10 +1,7 @@
 import datetime
 from typing import Union
+
 import numpy as np
-from stonesoup.types.state import State, StateVector, StateVectors
-# from stonesoup.models.transition.linear import LinearGaussianTransitionModel
-# from stonesoup.models.base import Property
-# from stonesoup.types.array import CovarianceMatrix
 
 from mpar_sim.common.matrix import block_diag
 
@@ -64,7 +61,7 @@ class ConstantVelocity():
     self.ndim = self.ndim_state
 
   def function(self,
-               state: Union[State, StateVector, StateVectors],
+               state: np.ndarray,
                noise: Union[bool, np.ndarray] = False,
                time_interval: datetime.timedelta = 0) -> np.ndarray:
     if noise:

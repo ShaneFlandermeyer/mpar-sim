@@ -6,11 +6,11 @@ import gymnasium as gym
 import numpy as np
 import pygame
 from gymnasium import spaces
-from ordered_set import OrderedSet
 from pyswarms.base.base_single import SwarmOptimizer
 from stonesoup.models.transition.base import TransitionModel
 from stonesoup.types.detection import Clutter
-from stonesoup.types.groundtruth import GroundTruthPath, GroundTruthState
+# from stonesoup.types.groundtruth import GroundTruthPath, GroundTruthState
+from mpar_sim.types.groundtruth import GroundTruthPath, GroundTruthState
 from stonesoup.types.state import GaussianState
 
 from mpar_sim.common.coordinate_transform import sph2cart
@@ -184,13 +184,11 @@ class SimpleParticleSurveillance(gym.Env):
     # For the single-beam case, this will always execute
     if timestep > datetime.timedelta(seconds=0):
       # Randomly drop targets
-      deleted_targets = [path for path in self.target_paths if self.np_random.uniform(
-          0, 1) <= self.death_probability]
-      # Delete the targets from the detection count
-      for path in deleted_targets:
-        if path.id in self.detection_count.keys():
-          del self.detection_count[path.id]
-      self.target_paths.difference_update(deleted_targets)
+      for path in self.target_paths.copy():
+        if self.np_random.uniform(0, 1) <= self.death_probability:
+          self.target_paths.remove(path)
+          if path.id in self.detection_count.keys():
+            del self.detection_count[path.id]
 
       # Move targets forward in time
       self._move_targets(timestep)
@@ -198,12 +196,12 @@ class SimpleParticleSurveillance(gym.Env):
       # Randomly create new targets
       for _ in range(self.np_random.poisson(self.birth_rate)):
         target = self._new_target(self.time)
-        self.target_paths.add(target)
+        self.target_paths.append(target)
 
       self.time += timestep
 
     # Update useful info
-    self.target_history |= self.target_paths
+    self.target_history |= set(self.target_paths)
     self.detection_history.append(detections)
 
     # Create outputs
@@ -252,7 +250,7 @@ class SimpleParticleSurveillance(gym.Env):
     self.swarm_optim.reset()
 
     # Reset metrics/helpful debug info
-    self.target_history = []
+    self.target_history = set()
     self.detection_history = []
     self.detection_count = dict()
     self.n_tracks_initiated = 0
@@ -353,15 +351,15 @@ class SimpleParticleSurveillance(gym.Env):
     """
     if self.preexisting_states or self.initial_number_targets:
       # Use preexisting_states to make some ground truth paths
-      preexisting_paths = OrderedSet(
-          self._new_target(self.time, state_vector=state) for state in self.preexisting_states)
+      preexisting_paths = [self._new_target(
+          self.time, state_vector=state) for state in self.preexisting_states]
 
       # Simulate more groundtruth paths for the number of initial targets
-      initial_simulated_paths = OrderedSet(
-          self._new_target(self.time) for _ in range(self.initial_number_targets))
-      self.target_paths = preexisting_paths | initial_simulated_paths
+      initial_simulated_paths = [self._new_target(
+          self.time) for _ in range(self.initial_number_targets)]
+      self.target_paths = preexisting_paths + initial_simulated_paths
     else:
-      self.target_paths = OrderedSet()
+      self.target_paths = []
 
   def _new_target(self,
                   time: datetime.datetime,
@@ -381,20 +379,20 @@ class SimpleParticleSurveillance(gym.Env):
     GroundTruthPath
         A new ground truth path starting at the target's initial state
     """
-    state = state_vector or \
+    state_vec = state_vector or \
         self.initial_state.state_vector.view(np.ndarray) + \
         np.sqrt(self.initial_state.covar.view(np.ndarray)) @ \
         self.np_random.standard_normal(size=(self.initial_state.ndim, 1))
     # Convert state vector from spherical to cartesian
-    x, y, z = sph2cart(*state[self.radar.position_mapping, :], degrees=True)
-    state[self.radar.position_mapping, :] = np.array([x, y, z])
-
-    target_path = GroundTruthPath()
-    target_path.append(GroundTruthState(
-        state_vector=state,
+    x, y, z = sph2cart(
+        *state_vec[self.radar.position_mapping, :], degrees=True)
+    state_vec[self.radar.position_mapping, :] = np.array([x, y, z])
+    state = GroundTruthState(
+        state_vector=state_vec,
         timestamp=time,
-        metadata={"index": self.index})
-    )
+        metadata={})
+
+    target_path = GroundTruthPath(states=[state])
     # Increment target index
     self.index += 1
     return target_path
@@ -405,7 +403,8 @@ class SimpleParticleSurveillance(gym.Env):
     """
     # Combine targets into one StateVectors object to vectorize transition update
     # NOTE: Asssumes all targets have the same transition model
-    states = np.hstack([path[-1].state_vector for path in self.target_paths])
+    states = np.hstack(
+        [path[-1].state_vector for path in self.target_paths])
     if len(states) == 0:
       return
     new_states = self.transition_model.function(
@@ -414,7 +413,8 @@ class SimpleParticleSurveillance(gym.Env):
     for itarget, path in enumerate(self.target_paths):
       index = path[-1].metadata.get("index")
       path.append(GroundTruthState(
-          new_states[:, itarget], timestamp=self.time,
+          new_states[:, itarget][:, np.newaxis],
+          timestamp=self.time,
           metadata={"index": index}))
 
   ############################################################################

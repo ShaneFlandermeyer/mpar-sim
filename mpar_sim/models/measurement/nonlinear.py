@@ -136,8 +136,6 @@ class RangeRangeRateBinningAliasing():
             The model function evaluated given the provided time interval.
 
     """
-    # TODO: Remove this once StateVector is removed
-    state.state_vector = np.asarray(state.state_vector)
     if isinstance(noise, bool) or noise is None:
       if noise:
         meas_noise = self.rvs(
