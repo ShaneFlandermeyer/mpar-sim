@@ -8,10 +8,8 @@ from stonesoup.base import Property
 from stonesoup.models.measurement import MeasurementModel
 from stonesoup.sensor.radar.radar import RadarElevationBearingRangeRate
 from stonesoup.sensor.sensor import Sensor
-from stonesoup.types.array import StateVector
 from stonesoup.types.detection import TrueDetection
 from stonesoup.types.groundtruth import GroundTruthState
-from stonesoup.types.state import StateVector
 from stonesoup.types.detection import Clutter
 
 from mpar_sim.beam.beam import RectangularBeam
@@ -51,11 +49,11 @@ class PhasedArrayRadar(Sensor):
           noise_covar=np.array([0, 0, 0, 0])),
       doc="The measurement model used to generate "
       "measurements. By default, this object measures range, range rate, azimuth, and elevation with no noise.")
-  rotation_offset: StateVector = Property(
-      default=StateVector([0, 0, 0]),
+  rotation_offset: np.ndarray = Property(
+      default=np.zeros((3,1)),
       doc="A 3x1 array of angles (rad), specifying the radar orientation in terms of the "
       "counter-clockwise rotation around the :math:`x,y,z` axis. i.e Roll, Pitch and Yaw. "
-      "Default is ``StateVector([0, 0, 0])``")
+      "Default is ``np.zeros((3,1))``")
   # Array parameters
   n_elements_x: int = Property(
       default=16,
@@ -114,7 +112,7 @@ class PhasedArrayRadar(Sensor):
 
   @measurement_model.getter
   def measurement_model(self):
-    measurement_model = copy.deepcopy(self._property_measurement_model)
+    measurement_model = self._property_measurement_model
     measurement_model.translation_offset = np.array(self.position)
     measurement_model.rotation_offset = np.array(self.rotation_offset)
     return measurement_model
