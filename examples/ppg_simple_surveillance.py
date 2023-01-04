@@ -239,7 +239,7 @@ initial_state = GaussianState(
 # Create the environment
 env_id = 'mpar_sim/SimpleParticleSurveillance-v0'
 n_env = 16
-max_episode_steps = 500
+max_episode_steps = 250
 env = gym.vector.AsyncVectorEnv(
     [make_env(env_id, radar, transition_model, initial_state, max_episode_steps) for _ in range(n_env)])
 env = gym.wrappers.RecordEpisodeStatistics(env=env, deque_size=20)
@@ -256,9 +256,18 @@ pulsewidth = 10e-6
 prf = 5e3
 n_pulses = 32
 
+n_steps_per_rollout = 256
+n_policy_steps = 16
+n_policy_minibatch = 16
+n_aux_minibatch = 32
+
+
+policy_minibatch_size = n_steps_per_rollout*n_env//n_policy_minibatch
+aux_minibatch_size = n_policy_steps*n_env//n_aux_minibatch
+
 ppg_agent = PPGSurveillanceAgent(env,
                                  n_rollouts_per_epoch=1,
-                                 n_steps_per_rollout=256,
+                                 n_steps_per_rollout=n_steps_per_rollout,
                                  shared_arch=True,
                                  gamma=0.99,
                                  gae_lambda=0.95,
@@ -267,10 +276,10 @@ ppg_agent = PPGSurveillanceAgent(env,
                                  seed=seed,
                                  normalize_advantage=True,
                                  policy_clip_range=0.2,
-                                 policy_minibatch_size=256,
+                                 policy_minibatch_size=policy_minibatch_size,
                                  # PPG parameters
-                                 aux_minibatch_size=16,
-                                 n_policy_steps=16,
+                                 aux_minibatch_size=aux_minibatch_size,
+                                 n_policy_steps=n_policy_steps,
                                  n_policy_epochs=3,
                                  n_value_epochs=3,
                                  n_aux_epochs=9,

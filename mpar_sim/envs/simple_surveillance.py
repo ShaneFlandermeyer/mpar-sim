@@ -413,13 +413,11 @@ class SimpleParticleSurveillance(gym.Env):
     new_states = self.transition_model.function(
         states, noise=True, time_interval=dt)
 
-    itarget = 0
-    for path in self.target_paths:
+    for itarget, path in enumerate(self.target_paths):
       index = path[-1].metadata.get("index")
       path.append(GroundTruthState(
           new_states[:, itarget], timestamp=self.time,
           metadata={"index": index}))
-      itarget += 1
 
 
   ############################################################################
