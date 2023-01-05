@@ -43,11 +43,41 @@ plt.rcParams["axes.labelweight"] = "bold"
 
 
 def make_env(env_id,
-             radar,
-             motion_model,
-             initial_state,
              max_episode_steps=500):
   def thunk():
+    # In this experiment, targets move according to a constant velocity, white noise acceleration model.
+    # http://www.control.isy.liu.se/student/graduate/targettracking/file/le2_handout.pdf
+    motion_model = ConstantVelocity(ndim_pos=3, noise_diff_coeff=10)
+    # Radar system object
+    radar = PhasedArrayRadar(
+        ndim_state=6,
+        position_mapping=(0, 2, 4),
+        velocity_mapping=(1, 3, 5),
+        position=np.array([[0], [0], [0]]),
+        rotation_offset=np.array([[0], [0], [0]]),
+        # Array parameters
+        n_elements_x=32,
+        n_elements_y=32,
+        element_spacing=0.5,  # Wavelengths
+        element_tx_power=10,
+        # System parameters
+        center_frequency=3e9,
+        system_temperature=290,
+        noise_figure=4,
+        # Scan settings
+        beam_shape=SincBeam,
+        az_fov=[-45, 45],
+        el_fov=[-45, 45],
+        # Detection settings
+        false_alarm_rate=1e-6,
+        include_false_alarms=False
+    )
+    # Gaussian parameters used to initialize the states of new targets in the scene. Here, elements (0, 2, 4) of the state vector/covariance are the az/el/range of the target (angles in degrees), and (1, 3, 5) are the x/y/z velocities in m/s. If randomize_initial_state is set to True in the environment, the mean az/el are uniformly sampled across the radar field of view, and the variance is uniformly sampled from [0, max_random_az_covar] and [0, max_random_el_covar] for the az/el, respectively
+    initial_state = GaussianState(
+        state_vector=[-20,   0,  20,   0, 10e3, 0],
+        covar=np.diag([5**2, 100**2, 5**2, 100**2,  1000**2, 100**2])
+    )
+
     env = gym.make(env_id,
                    radar=radar,
                    motion_model=motion_model,
@@ -184,7 +214,6 @@ class PPGSurveillanceAgent(PPG):
     action_dist = torch.distributions.Normal(mean, std)
     return action_dist
 
-
   def evaluate_actions(self,
                        observations: torch.Tensor,
                        actions: torch.Tensor):
@@ -203,45 +232,13 @@ class PPGSurveillanceAgent(PPG):
 # %% [markdown]
 # ## Environment setup
 # %%
-# In this experiment, targets move according to a constant velocity, white noise acceleration model.
-# http://www.control.isy.liu.se/student/graduate/targettracking/file/le2_handout.pdf
-motion_model = ConstantVelocity(ndim_pos=3, noise_diff_coeff=10)
-# Radar system object
-radar = PhasedArrayRadar(
-    ndim_state=6,
-    position_mapping=(0, 2, 4),
-    velocity_mapping=(1, 3, 5),
-    position=np.array([[0], [0], [0]]),
-    rotation_offset=np.array([[0], [0], [0]]),
-    # Array parameters
-    n_elements_x=32,
-    n_elements_y=32,
-    element_spacing=0.5,  # Wavelengths
-    element_tx_power=10,
-    # System parameters
-    center_frequency=3e9,
-    system_temperature=290,
-    noise_figure=4,
-    # Scan settings
-    beam_shape=SincBeam,
-    az_fov=[-45, 45],
-    el_fov=[-45, 45],
-    # Detection settings
-    false_alarm_rate=1e-6,
-    include_false_alarms=False
-)
-# Gaussian parameters used to initialize the states of new targets in the scene. Here, elements (0, 2, 4) of the state vector/covariance are the az/el/range of the target (angles in degrees), and (1, 3, 5) are the x/y/z velocities in m/s. If randomize_initial_state is set to True in the environment, the mean az/el are uniformly sampled across the radar field of view, and the variance is uniformly sampled from [0, max_random_az_covar] and [0, max_random_el_covar] for the az/el, respectively
-initial_state = GaussianState(
-    state_vector=[-20,   0,  20,   0, 10e3, 0],
-    covar=np.diag([3**2, 100**2, 3**2, 100**2,  1000**2, 100**2])
-)
 
 # Create the environment
 env_id = 'mpar_sim/SimpleParticleSurveillance-v0'
 n_env = 16
-max_episode_steps = 250
+max_episode_steps = 500
 env = gym.vector.AsyncVectorEnv(
-    [make_env(env_id, radar, motion_model, initial_state, max_episode_steps) for _ in range(n_env)])
+    [make_env(env_id,  max_episode_steps) for _ in range(n_env)])
 env = gym.wrappers.RecordEpisodeStatistics(env=env, deque_size=20)
 
 
@@ -256,12 +253,12 @@ pulsewidth = 10e-6
 prf = 5e3
 n_pulses = 32
 
+# Compute policy/aux minibatch sizes
+# The aux batch can get pretty large. My little baby 8 gb 3070 can't handle any larger than this
 n_steps_per_rollout = 256
-n_policy_steps = 16
+n_policy_steps = 32
 n_policy_minibatch = 16
-n_aux_minibatch = 32
-
-
+n_aux_minibatch = 64
 policy_minibatch_size = n_steps_per_rollout*n_env//n_policy_minibatch
 aux_minibatch_size = n_policy_steps*n_env//n_aux_minibatch
 
@@ -271,7 +268,7 @@ ppg_agent = PPGSurveillanceAgent(env,
                                  shared_arch=True,
                                  gamma=0.99,
                                  gae_lambda=0.95,
-                                 value_coef=0.5,
+                                 value_coef=1,
                                  entropy_coef=0.01,
                                  seed=seed,
                                  normalize_advantage=True,
@@ -280,8 +277,8 @@ ppg_agent = PPGSurveillanceAgent(env,
                                  # PPG parameters
                                  aux_minibatch_size=aux_minibatch_size,
                                  n_policy_steps=n_policy_steps,
-                                 n_policy_epochs=3,
-                                 n_value_epochs=3,
+                                 n_policy_epochs=1,
+                                 n_value_epochs=1,
                                  n_aux_epochs=9,
                                  beta_clone=1.0,
                                  # Radar parameters
@@ -293,12 +290,12 @@ ppg_agent = PPGSurveillanceAgent(env,
                                  n_pulses=n_pulses,
                                  )
 
-# checkpoint_filename = "/home/shane/src/mpar-sim/lightning_logs/working_simple/checkpoints/epoch=299-step=3600.ckpt"
-# ppo_agent = PPOSurveillanceAgent.load_from_checkpoint(
+# checkpoint_filename = "/home/shane/src/mpar-sim/lightning_logs/version_457/checkpoints/epoch=7-step=8704.ckpt"
+# ppg_agent = PPGSurveillanceAgent.load_from_checkpoint(
 #     checkpoint_filename, env=env, seed=seed)
 
 trainer = pl.Trainer(
-    max_epochs=30,
+    max_epochs=50,
     gradient_clip_val=0.5,
     accelerator='gpu',
     devices=1,
@@ -334,42 +331,40 @@ raster_init_ratio = np.ones((max_episode_steps, n_env))
 raster_tracks_init = np.zeros((max_episode_steps, n_env))
 beam_coverage_map = np.zeros((32, 32))
 
-az_axis = np.linspace(
-    radar.az_fov[0], radar.az_fov[1], beam_coverage_map.shape[1])
-el_axis = np.linspace(
-    radar.el_fov[0], radar.el_fov[1], beam_coverage_map.shape[0])
+az_axis = np.linspace(-45, 45, beam_coverage_map.shape[1])
+el_axis = np.linspace(-45, 45, beam_coverage_map.shape[0])
 
 
-tic = time.time()
-# Test the PPO agent
+# tic = time.time()
+# # Test the PPO agent
 
-obs, info = env.reset(seed=seed)
-dones = np.zeros(n_env, dtype=bool)
-i = 0
-with torch.no_grad():
-  while not np.all(dones):
-    obs_tensor = torch.as_tensor(obs).to(
-        device=ppg_agent.device, dtype=torch.float32)
-    action_tensor = ppg_agent.forward(obs_tensor)[0]
-    actions = action_tensor.cpu().numpy()
-    # Repeat actions for all environments
-    obs, reward, terminated, truncated, info = env.step(actions)
-    dones = np.logical_or(dones, np.logical_or(terminated, truncated))
+# obs, info = env.reset(seed=seed)
+# dones = np.zeros(n_env, dtype=bool)
+# i = 0
+# with torch.no_grad():
+#   while not np.all(dones):
+#     obs_tensor = torch.as_tensor(obs).to(
+#         device=ppg_agent.device, dtype=torch.float32)
+#     action_tensor = ppg_agent.act(obs_tensor)[0]
+#     actions = action_tensor.cpu().numpy()
+#     # Repeat actions for all environments
+#     obs, reward, terminated, truncated, info = env.step(actions)
+#     dones = np.logical_or(dones, np.logical_or(terminated, truncated))
 
-    ppo_init_ratio[i, ~dones] = info['initiation_ratio'][~dones]
-    ppo_tracks_init[i:, ~np.logical_or(
-        terminated, truncated)] = info['n_tracks_initiated'][~np.logical_or(terminated, truncated)]
+#     ppo_init_ratio[i, ~dones] = info['initiation_ratio'][~dones]
+#     ppo_tracks_init[i:, ~np.logical_or(
+#         terminated, truncated)] = info['n_tracks_initiated'][~np.logical_or(terminated, truncated)]
 
-    # Add 1 to the pixels illuminated by the current beam using np.digitize
-    actions[0, :] = wrap_to_interval(actions[0, :], -45, 45)
-    az = np.digitize(actions[0, 0], az_axis) - 1
-    el = np.digitize(actions[0, 1], el_axis[::-1]) - 1
-    beam_coverage_map[el-1:el+1, az-1:az+1] += 1
+#     # Add 1 to the pixels illuminated by the current beam using np.digitize
+#     actions[0, :] = wrap_to_interval(actions[0, :], -45, 45)
+#     az = np.digitize(actions[0, 0], az_axis) - 1
+#     el = np.digitize(actions[0, 1], el_axis[::-1]) - 1
+#     beam_coverage_map[el-1:el+1, az-1:az+1] += 1
 
-    i += 1
-toc = time.time()
-print("PPO agent done")
-print(f"Time elapsed: {toc-tic:.2f} seconds")
+#     i += 1
+# toc = time.time()
+# print("PPO agent done")
+# print(f"Time elapsed: {toc-tic:.2f} seconds")
 
 # # Test the raster agent
 tic = time.time()
@@ -380,7 +375,13 @@ i = 0
 while not np.all(dones):
   look = raster_agent.act(obs)
   actions = np.array([[look.azimuth_steering_angle,
-                     look.elevation_steering_angle]])
+                     look.elevation_steering_angle,
+                     look.azimuth_beamwidth,
+                     look.elevation_beamwidth,
+                     look.bandwidth,
+                     look.pulsewidth,
+                     look.prf,
+                     look.n_pulses]])
   actions = np.repeat(actions, n_env, axis=0)
   # Repeat actions for all environments
   obs, reward, terminated, truncated, info = env.step(actions)

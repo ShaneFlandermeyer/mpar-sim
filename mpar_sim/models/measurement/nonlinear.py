@@ -147,7 +147,7 @@ class RangeRangeRateBinningAliasing(MeasurementModel):
     # Rotate coordinates based upon the sensor_velocity
     xyz_rot = self.rotation_matrix @ xyz_pos
     # Convert to Spherical
-    rho, az, el = cart2sph(xyz_rot[0, :], xyz_rot[1, :], xyz_rot[2, :])
+    az, el, rho = cart2sph(xyz_rot[0, :], xyz_rot[1, :], xyz_rot[2, :], degrees=True)
     # Determine the net velocity component in the engagement
     xyz_vel = state.state_vector[self.velocity_mapping, :] - self.velocity
     # Use polar to calculate range rate
@@ -170,7 +170,7 @@ class RangeRangeRateBinningAliasing(MeasurementModel):
   def inverse_function(self, detection) -> np.ndarray:
     theta, phi, rho, rho_rate = detection.state_vector
 
-    x, y, z = sph2cart(rho, phi, theta)
+    x, y, z = sph2cart(rho, phi, theta, degrees=True)
     # because only rho_rate is known, only the components in
     # x,y and z of the range rate can be found.
     x_rate = np.cos(phi) * np.cos(theta) * rho_rate

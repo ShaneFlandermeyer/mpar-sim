@@ -170,7 +170,7 @@ class SimpleParticleSurveillance(gym.Env):
             self._distance_objective, detection_pos=np.array([az, el]))
 
     # Mutate particles based on Engelbrecht equations (16.66-16.67)
-    Pm = 0.002
+    Pm = 0.0025
     mutate = self.np_random.uniform(
         0, 1, size=len(self.swarm_optim.swarm.position)) < Pm
     sigma = 0.25*(self.swarm_optim.bounds[1] -
@@ -389,7 +389,7 @@ class SimpleParticleSurveillance(gym.Env):
     state = GroundTruthState(
         state_vector=state_vec,
         timestamp=time,
-        metadata={})
+        metadata={'index': self.index})
 
     target_path = GroundTruthPath(states=[state])
     # Increment target index
@@ -402,19 +402,19 @@ class SimpleParticleSurveillance(gym.Env):
     """
     # Combine targets into one StateVectors object to vectorize transition update
     # NOTE: Asssumes all targets have the same transition model
+    if len(self.target_paths) == 0:
+      return
     states = np.hstack(
         [path[-1].state_vector for path in self.target_paths])
-    if len(states) == 0:
-      return
     new_states = self.transition_model.function(
         states, noise=True, time_interval=dt)
 
     for itarget, path in enumerate(self.target_paths):
-      index = path[-1].metadata.get("index")
+      meta = path[-1].metadata
       path.append(GroundTruthState(
           new_states[:, itarget][:, np.newaxis],
           timestamp=self.time,
-          metadata={"index": index}))
+          metadata=meta))
 
   ############################################################################
   # Particle swarm methods
