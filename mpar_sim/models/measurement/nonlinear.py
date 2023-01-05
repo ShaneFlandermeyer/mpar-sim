@@ -8,8 +8,11 @@ from mpar_sim.common.coordinate_transform import cart2sph, rotx, roty, rotz, sph
 from mpar_sim.common.matrix import jacobian
 from mpar_sim.models.measurement.base import MeasurementModel
 
+class NonlinearMeasurementModel(MeasurementModel):
+  """Base class for nonlinear measurement models"""
 
-class RangeRangeRateBinningAliasing(MeasurementModel):
+
+class RangeRangeRateBinningAliasing(NonlinearMeasurementModel):
   r"""This is a class implementation of a time-invariant measurement model, \
     where measurements are assumed to be in the form of elevation \
     (:math:`\theta`),  bearing (:math:`\phi`), range (:math:`r`) and

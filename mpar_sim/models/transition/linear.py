@@ -6,8 +6,11 @@ import numpy as np
 from mpar_sim.common.matrix import block_diag
 from mpar_sim.models.transition.base import TransitionModel
 
+class LinearTransitionModel(TransitionModel):
+  """Base class for linear transition models."""
 
-class ConstantVelocity(TransitionModel):
+
+class ConstantVelocity(LinearTransitionModel):
   r"""This is a class implementation of a discrete, time-variant 1D
     Linear-Gaussian Constant Velocity Transition Model.
 

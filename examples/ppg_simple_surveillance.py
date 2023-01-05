@@ -235,7 +235,7 @@ class PPGSurveillanceAgent(PPG):
 
 # Create the environment
 env_id = 'mpar_sim/SimpleParticleSurveillance-v0'
-n_env = 32
+n_env = 16
 max_episode_steps = 500
 env = gym.vector.AsyncVectorEnv(
     [make_env(env_id,  max_episode_steps) for _ in range(n_env)])
@@ -277,8 +277,8 @@ ppg_agent = PPGSurveillanceAgent(env,
                                  # PPG parameters
                                  aux_minibatch_size=aux_minibatch_size,
                                  n_policy_steps=n_policy_steps,
-                                 n_policy_epochs=1,
-                                 n_value_epochs=1,
+                                 n_policy_epochs=2,
+                                 n_value_epochs=2,
                                  n_aux_epochs=9,
                                  beta_clone=1.0,
                                  # Radar parameters
