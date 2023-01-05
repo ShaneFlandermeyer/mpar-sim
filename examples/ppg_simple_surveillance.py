@@ -14,7 +14,7 @@ import numpy as np
 import pytorch_lightning as pl
 import torch
 from lightning_rl.models.on_policy_models.ppg import PPG
-from mpar_sim.models.motion.linear import ConstantVelocity
+from mpar_sim.models.transition.linear import ConstantVelocity
 from stonesoup.types.state import GaussianState
 from torch import nn
 
@@ -47,7 +47,7 @@ def make_env(env_id,
   def thunk():
     # In this experiment, targets move according to a constant velocity, white noise acceleration model.
     # http://www.control.isy.liu.se/student/graduate/targettracking/file/le2_handout.pdf
-    motion_model = ConstantVelocity(ndim_pos=3, noise_diff_coeff=10)
+    transition_model = ConstantVelocity(ndim_pos=3, noise_diff_coeff=10)
     # Radar system object
     radar = PhasedArrayRadar(
         ndim_state=6,
@@ -80,7 +80,7 @@ def make_env(env_id,
 
     env = gym.make(env_id,
                    radar=radar,
-                   motion_model=motion_model,
+                   transition_model=transition_model,
                    initial_state=initial_state,
                    birth_rate=0.01,
                    death_probability=0.005,
@@ -235,7 +235,7 @@ class PPGSurveillanceAgent(PPG):
 
 # Create the environment
 env_id = 'mpar_sim/SimpleParticleSurveillance-v0'
-n_env = 16
+n_env = 32
 max_episode_steps = 500
 env = gym.vector.AsyncVectorEnv(
     [make_env(env_id,  max_episode_steps) for _ in range(n_env)])

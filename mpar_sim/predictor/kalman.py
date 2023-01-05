@@ -1,45 +1,44 @@
 import datetime
 from typing import Tuple
+
 import numpy as np
 
+from mpar_sim.models.transition.base import TransitionModel
 
-class KalmanPredictor():
-  def __init__(self,
-               transition_model,
-               ) -> None:
-    self.transition_model = transition_model
 
-  def predict(self,
-              prior: np.ndarray,
-              timestamp: datetime.datetime = None) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Return the predicted state vector and covariance for the given prior at the given time.
+def kalman_predict(prior: np.ndarray,
+                   transition_model: TransitionModel,
+                   timestamp: datetime.datetime) -> Tuple[np.ndarray, np.ndarray]:
+  """
+  Kalman predict step.
+  
+  Equations: https://github.com/rlabbe/Kalman-and-Bayesian-Filters-in-Python/blob/master/06-Multivariate-Kalman-Filters.ipynb
 
-    Parameters
-    ----------
-    prior : _type_
-        _description_
-    timestamp : _type_, optional
-        _description_, by default None
+  Parameters
+  ----------
+  prior : np.ndarray
+      Prior state vector
+  transition_model : TransitionModel
+      Transition model
+  timestamp : datetime.datetime
+      Predict the state to this time
 
-    Returns
-    -------
-    _type_
-        _description_
-    """
-    # Compute the time interval between the prior and the timestamp
-    if timestamp is None or prior.timestamp is None:
-      dt = None
-    else:
-      dt = timestamp - prior.timestamp
+  Returns
+  -------
+  Tuple[np.ndarray, np.ndarray]
+      - Predicted state vector
+      - Predicted covariance matrix
+  """
+  if timestamp is None or prior.timestamp is None:
+    dt = None
+  else:
+    dt = timestamp - prior.timestamp
 
-    # Predict the mean
-    x = self.transition_model.function(prior, time_interval=dt)
-
-    # Predict the covariance
-    P_prior = prior.covar
-    F = self.transition_model.matrix(time_interval=dt)
-    Q = self.transition_model.covar(time_interval=dt)
-    P = F @ P_prior @ F.T + Q
-
-    return x, P
+  # Predict the mean
+  x = transition_model.function(prior, time_interval=dt)
+  # Predict the covariance
+  P_prior = prior.covar
+  F = transition_model.matrix(time_interval=dt)
+  Q = transition_model.covar(time_interval=dt)
+  P = F @ P_prior @ F.T + Q
+  return x, P

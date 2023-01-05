@@ -12,7 +12,7 @@ from stonesoup.types.state import GaussianState
 from mpar_sim.common.coordinate_transform import sph2cart
 from mpar_sim.defaults import default_gbest_pso, default_lbest_pso
 from mpar_sim.looks.spoiled_look import SpoiledLook
-from mpar_sim.models.motion.base import MotionModel
+from mpar_sim.models.transition.base import TransitionModel
 from mpar_sim.radar import PhasedArrayRadar
 from mpar_sim.types.detection import Clutter
 from mpar_sim.types.groundtruth import GroundTruthPath, GroundTruthState
@@ -24,7 +24,7 @@ class SimpleParticleSurveillance(gym.Env):
   def __init__(self,
                radar: PhasedArrayRadar,
                # Target generation parameters
-               motion_model: MotionModel,
+               transition_model: TransitionModel,
                initial_state: GaussianState,
                birth_rate: float = 1.0,
                death_probability: float = 0.01,
@@ -79,7 +79,7 @@ class SimpleParticleSurveillance(gym.Env):
     """
     # Define environment-specific parameters
     self.radar = radar
-    self.transition_model = motion_model
+    self.transition_model = transition_model
     self.initial_state = initial_state
     self.birth_rate = birth_rate
     self.death_probability = death_probability
