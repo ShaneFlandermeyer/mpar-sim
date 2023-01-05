@@ -246,8 +246,8 @@ env = gym.wrappers.RecordEpisodeStatistics(env=env, deque_size=20)
 # ## Training loop
 
 # %%
-az_bw = 5
-el_bw = 5
+az_bw = 2
+el_bw = 2
 bw = 100e6
 pulsewidth = 10e-6
 prf = 5e3

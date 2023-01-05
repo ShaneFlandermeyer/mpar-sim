@@ -63,8 +63,9 @@ class ConstantVelocity(TransitionModel):
 
   def function(self,
                state: np.ndarray,
+               time_interval: datetime.timedelta = 0,
                noise: Union[bool, np.ndarray] = False,
-               time_interval: datetime.timedelta = 0) -> np.ndarray:
+               ) -> np.ndarray:
     if noise:
       noise = self.rvs(num_samples=state.shape[1], time_interval=time_interval)
     else:
