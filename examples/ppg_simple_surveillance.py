@@ -44,13 +44,13 @@ plt.rcParams["axes.labelweight"] = "bold"
 
 def make_env(env_id,
              radar,
-             transition_model,
+             motion_model,
              initial_state,
              max_episode_steps=500):
   def thunk():
     env = gym.make(env_id,
                    radar=radar,
-                   transition_model=transition_model,
+                   motion_model=motion_model,
                    initial_state=initial_state,
                    birth_rate=0.01,
                    death_probability=0.005,
@@ -205,7 +205,7 @@ class PPGSurveillanceAgent(PPG):
 # %%
 # In this experiment, targets move according to a constant velocity, white noise acceleration model.
 # http://www.control.isy.liu.se/student/graduate/targettracking/file/le2_handout.pdf
-transition_model = ConstantVelocity(ndim_pos=3, noise_diff_coeff=10)
+motion_model = ConstantVelocity(ndim_pos=3, noise_diff_coeff=10)
 # Radar system object
 radar = PhasedArrayRadar(
     ndim_state=6,
@@ -241,7 +241,7 @@ env_id = 'mpar_sim/SimpleParticleSurveillance-v0'
 n_env = 16
 max_episode_steps = 250
 env = gym.vector.AsyncVectorEnv(
-    [make_env(env_id, radar, transition_model, initial_state, max_episode_steps) for _ in range(n_env)])
+    [make_env(env_id, radar, motion_model, initial_state, max_episode_steps) for _ in range(n_env)])
 env = gym.wrappers.RecordEpisodeStatistics(env=env, deque_size=20)
 
 

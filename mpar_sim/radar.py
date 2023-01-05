@@ -4,98 +4,75 @@ from typing import Callable, List, Optional, Set, Tuple, Union
 
 import numpy as np
 from scipy import constants
-from stonesoup.base import Property, clearable_cached_property
-from stonesoup.models.measurement import MeasurementModel
-from stonesoup.sensor.radar.radar import RadarElevationBearingRangeRate
-from stonesoup.sensor.sensor import Sensor
-from stonesoup.types.detection import Clutter, TrueDetection
-from stonesoup.types.groundtruth import GroundTruthState
+from stonesoup.base import clearable_cached_property
 
 from mpar_sim.beam.beam import RectangularBeam
 from mpar_sim.beam.common import aperture2beamwidth, beam_broadening_factor
 from mpar_sim.common.coordinate_transform import cart2sph, rotx, roty, rotz
 from mpar_sim.looks.look import Look
 from mpar_sim.looks.spoiled_look import SpoiledLook
+from mpar_sim.models.measurement.base import MeasurementModel
 from mpar_sim.models.measurement.estimation import (angle_crlb, range_crlb,
                                                     velocity_crlb)
 from mpar_sim.models.measurement.nonlinear import RangeRangeRateBinningAliasing
+from mpar_sim.types.detection import Clutter, TrueDetection
+from mpar_sim.types.groundtruth import GroundTruthState
 
 
-class PhasedArrayRadar(Sensor):
+class PhasedArrayRadar():
   """An active electronically scanned array (AESA) radar sensor"""
 
-  # Motion and orientation parameters
-  ndim_state: int = Property(
-      default=6,
-      doc="Number of state dimensions for the target.")
-  position_mapping: Tuple[int, int, int] = Property(
-      default=(0, 2, 4),
-      doc="Mapping between or positions and state "
-          "dimensions. [x,y,z]")
-  velocity_mapping: Tuple[int, int, int] = Property(
-      default=(1, 3, 5),
-      doc="Mapping between velocity components and state "
-      "dimensions. [vx,vy,vz]")
-  measurement_model: MeasurementModel = Property(
-      default=RadarElevationBearingRangeRate(
-          ndim_state=6,
-          position_mapping=(0, 2, 4),
-          velocity_mapping=(1, 4, 5),
-          noise_covar=np.array([0, 0, 0, 0])),
-      doc="The measurement model used to generate "
-      "measurements. By default, this object measures range, range rate, azimuth, and elevation with no noise.")
-  rotation_offset: np.ndarray = Property(
-      default=np.zeros((3, 1)),
-      doc="A 3x1 array of angles (rad), specifying the radar orientation in terms of the "
-      "counter-clockwise rotation around the :math:`x,y,z` axis. i.e Roll, Pitch and Yaw. "
-      "Default is ``np.zeros((3,1))``")
-  # Array parameters
-  n_elements_x: int = Property(
-      default=16,
-      doc="The number of horizontal array elements")
-  n_elements_y: int = Property(
-      default=16,
-      doc="The number of vertical array elements")
-  element_spacing: float = Property(
-      default=0.5,
-      doc="The spacing between array elements (m)")
-  element_tx_power: float = Property(
-      default=10,
-      doc="Tx power of each element (W)")
-  # System parameters
-  center_frequency: float = Property(
-      default=3e9,
-      doc="Transmit frequency of the array")
-  system_temperature: float = Property(
-      default=290,
-      doc="System noise temperature (K)")
-  noise_figure: float = Property(
-      default=4,
-      doc="Receiver noise figure (dB)")
-  # Scan settings
-  beam_shape: Callable = Property(
-      default=RectangularBeam,
-      doc="Object describing the shape of the beam.")
-  # Detections settings
-  false_alarm_rate: float = Property(
-      default=1e-6,
-      doc="Probability of false alarm")
-  include_false_alarms: bool = Property(
-      default=True,
-      doc="Whether to include false alarms in the detections")
-  max_range: float = Property(
-      default=np.inf,
-      doc="Maximum detection range of the radar (m). If a target is beyond this range, it will never be detected.")
-  az_fov: Union[List, np.ndarray] = Property(
-      default=np.array([-90, 90]),
-      doc="Azimuth slice within which the radar can detect targets (deg). The first element in the array is the lower bound, the second is the upper bound.")
-  el_fov: Union[List, np.ndarray] = Property(
-      default=np.array([-90, 90]),
-      doc="Elevation slice within which the radar can detect targets (deg). The first element in the array is the lower bound, the second is the upper bound.")
 
-  def __init__(self, *args, **kwargs):
-    super().__init__(*args, **kwargs)
+  def __init__(self,
+               # Motion and orientation parameters
+               ndim_state: int = 6,
+               position: np.ndarray = np.zeros((3, 1)),
+               velocity: np.ndarray = np.zeros((3, 1)),
+               position_mapping: Tuple[int, int, int] = (0, 2, 4),
+               velocity_mapping: Tuple[int, int, int] = (1, 3, 5),
+               measurement_model: MeasurementModel = None,
+               rotation_offset: np.ndarray = np.zeros((3, 1)),
+               timestamp: datetime = None,
+               # Phased array parameters
+               n_elements_x: int = 16,
+               n_elements_y: int = 16,
+               element_spacing: float = 0.5,
+               element_tx_power: float = 10,
+               # System parameters
+               center_frequency: float = 3e9,
+               system_temperature: float = 290,
+               noise_figure: float = 4,
+               # Scan settings
+               beam_shape: Callable = RectangularBeam,
+               # Detection settings
+               false_alarm_rate: float = 1e-6,
+               include_false_alarms: bool = True,
+               max_range: float = np.inf,
+               az_fov: Union[List, np.ndarray] = np.array([-90, 90]),
+               el_fov: Union[List, np.ndarray] = np.array([-90, 90]),
+               ) -> None:
+    self.ndim_state = ndim_state
+    self.position = position
+    self.velocity = velocity
+    self.position_mapping = position_mapping
+    self.velocity_mapping = velocity_mapping
+    self.measurement_model = measurement_model
+    self.rotation_offset = rotation_offset
+    self.timestamp = timestamp
+    self.n_elements_x = n_elements_x
+    self.n_elements_y = n_elements_y
+    self.element_spacing = element_spacing
+    self.element_tx_power = element_tx_power
+    self.center_frequency = center_frequency
     self.wavelength = constants.c / self.center_frequency
+    self.system_temperature = system_temperature
+    self.noise_figure = noise_figure
+    self.beam_shape = beam_shape
+    self.false_alarm_rate = false_alarm_rate
+    self.include_false_alarms = include_false_alarms
+    self.max_range = max_range
+    self.az_fov = az_fov
+    self.el_fov = el_fov
 
     # Compute the maximum possible beamwidth in az/el for the array geometry
     aperture_width = self.n_elements_x * self.element_spacing * self.wavelength
@@ -104,13 +81,6 @@ class PhasedArrayRadar(Sensor):
         np.array([aperture_width, aperture_height]), self.wavelength)
     self.max_az_beamwidth = beamwidths[0]
     self.max_el_beamwidth = beamwidths[1]
-
-  @measurement_model.getter
-  def measurement_model(self):
-    measurement_model = self._property_measurement_model
-    measurement_model.translation_offset = np.array(self.position)
-    measurement_model.rotation_offset = np.array(self.rotation_offset)
-    return measurement_model
 
   def load_look(self, look: Look):
     """
@@ -244,6 +214,8 @@ class PhasedArrayRadar(Sensor):
     """
     detections = set()
     measurement_model = self.measurement_model
+    measurement_model.translation_offset = np.array(self.position)
+    measurement_model.rotation_offset = np.array(self.rotation_offset)
     # Compute the rotation matrix that maps the global coordinate frame into the radar frame
 
     # Loop through the targets and generate detections
@@ -254,7 +226,7 @@ class PhasedArrayRadar(Sensor):
       relative_pos = self._rotation_matrix @ relative_pos
 
       # Convert target position to spherical coordinates
-      [target_az, target_el, r] = cart2sph(*relative_pos)
+      [target_az, target_el, r] = cart2sph(*relative_pos[:,0])
 
       # Skip targets that are not detectable
       if not self.is_detectable(target_az, target_el, r):
@@ -308,8 +280,8 @@ class PhasedArrayRadar(Sensor):
              range_variance,
              velocity_variance])
 
-        measurements = measurement_model.function(truth[-1], noise=noise)
-        detection = TrueDetection(measurements,
+        measurement = measurement_model.function(truth[-1], noise=noise)
+        detection = TrueDetection(state_vector=measurement,
                                   timestamp=truth[-1].timestamp,
                                   measurement_model=measurement_model,
                                   groundtruth_path=truth)
@@ -346,10 +318,11 @@ class PhasedArrayRadar(Sensor):
 
       # Add false alarms to the detection report
       for i in range(n_false_alarms):
-        detections.add(Clutter(np.array([[np.deg2rad(el[i])],
-                                         [np.deg2rad(az[i])],
-                                         [r[i]],
-                                         [v[i]]]),
+        state_vector = np.array([[np.deg2rad(el[i])],
+                                 [np.deg2rad(az[i])],
+                                 [r[i]],
+                                 [v[i]]])
+        detections.add(Clutter(state_vector=state_vector,
                                timestamp=truth.timestamp if truth else timestamp,
                                measurement_model=measurement_model))
 

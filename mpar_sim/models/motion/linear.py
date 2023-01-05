@@ -4,9 +4,10 @@ from typing import Union
 import numpy as np
 
 from mpar_sim.common.matrix import block_diag
+from mpar_sim.models.motion.base import MotionModel
 
 
-class ConstantVelocity():
+class ConstantVelocity(MotionModel):
   r"""This is a class implementation of a discrete, time-variant 1D
     Linear-Gaussian Constant Velocity Transition Model.
 

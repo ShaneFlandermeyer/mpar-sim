@@ -1,14 +1,14 @@
 
 import numpy as np
-from scipy.linalg import inv
+# TODO: Replicate this and remove the dependency on stonesoup
 from stonesoup.base import clearable_cached_property
-from stonesoup.types.array import StateVector
 
 from mpar_sim.common import wrap_to_interval
 from mpar_sim.common.coordinate_transform import cart2sph, rotx, roty, rotz, sph2cart
+from mpar_sim.models.measurement.base import MeasurementModel
 
 
-class RangeRangeRateBinningAliasing():
+class RangeRangeRateBinningAliasing(MeasurementModel):
   r"""This is a class implementation of a time-invariant measurement model, \
     where measurements are assumed to be in the form of elevation \
     (:math:`\theta`),  bearing (:math:`\phi`), range (:math:`r`) and
@@ -116,12 +116,12 @@ class RangeRangeRateBinningAliasing():
     # This is constant
     self.ndim_meas = self.ndim = 4
 
-  def function(self, state, noise=False, **kwargs):
+  def function(self, state: np.ndarray, noise: bool = False,):
     r"""Model function :math:`h(\vec{x}_t,\vec{v}_t)`
 
         Parameters
         ----------
-        state: :class:`~.StateVector`
+        state: :class:`~.np.ndarray`
             An input state vector for the target
 
         noise: :class:`numpy.ndarray` or bool
@@ -136,45 +136,38 @@ class RangeRangeRateBinningAliasing():
             The model function evaluated given the provided time interval.
 
     """
-    if isinstance(noise, bool) or noise is None:
-      if noise:
-        meas_noise = self.rvs(
-            num_samples=state.state_vector.shape[1], **kwargs)
-      else:
-        meas_noise = 0
+    if noise:
+      meas_noise = self.rvs(
+          num_samples=state.state_vector.shape[1])
+    else:
+      meas_noise = 0
 
-      # Account for origin offset in position to enable range and angles to be determined
-      xyz_pos = state.state_vector[self.mapping, :] - self.translation_offset
+    # Account for origin offset in position to enable range and angles to be determined
+    xyz_pos = state.state_vector[self.mapping, :] - self.translation_offset
+    # Rotate coordinates based upon the sensor_velocity
+    xyz_rot = self.rotation_matrix @ xyz_pos
+    # Convert to Spherical
+    rho, az, el = cart2sph(xyz_rot[0, :], xyz_rot[1, :], xyz_rot[2, :])
+    # Determine the net velocity component in the engagement
+    xyz_vel = state.state_vector[self.velocity_mapping, :] - self.velocity
+    # Use polar to calculate range rate
+    rr = np.einsum('ij,ij->j', xyz_pos, xyz_vel) / \
+        np.linalg.norm(xyz_pos, axis=0)
 
-      # Rotate coordinates based upon the sensor_velocity
-      xyz_rot = self.rotation_matrix @ xyz_pos
+    out = np.array([el, az, rho, rr]) + meas_noise
+    if noise:
+      # Add aliasing to the range/range rate if it exceeds the unambiguous limits
+      out[2] = wrap_to_interval(out[2], 0, self.max_unambiguous_range)
+      out[3] = wrap_to_interval(
+          out[3], -self.max_unambiguous_range_rate, self.max_unambiguous_range_rate)
+      # Bin the range and range rate to the center of the cell
+      out[2] = np.floor(out[2] / self.range_res) * \
+          self.range_res + self.range_res/2
+      out[3] = np.floor(out[3] / self.range_rate_res) * \
+          self.range_rate_res + self.range_rate_res/2
+    return out
 
-      # Convert to Spherical
-      rho, az, el = cart2sph(xyz_rot[0, :], xyz_rot[1, :], xyz_rot[2, :])
-
-      # Determine the net velocity component in the engagement
-      xyz_vel = state.state_vector[self.velocity_mapping, :] - self.velocity
-
-      # Use polar to calculate range rate
-      rr = np.einsum('ij,ij->j', xyz_pos, xyz_vel) / \
-          np.linalg.norm(xyz_pos, axis=0)
-          
-      out = np.array([el, az, rho, rr]) + meas_noise
-
-      if noise:
-        # Add aliasing to the range/range rate if it exceeds the unambiguous limits
-        out[2] = wrap_to_interval(out[2], 0, self.max_unambiguous_range)
-        out[3] = wrap_to_interval(
-            out[3], -self.max_unambiguous_range_rate, self.max_unambiguous_range_rate)
-        # Bin the range and range rate to the center of the cell
-        out[2] = np.floor(out[2] / self.range_res) * \
-            self.range_res + self.range_res/2
-        out[3] = np.floor(out[3] / self.range_rate_res) * \
-            self.range_rate_res + self.range_rate_res/2
-
-      return out
-
-  def inverse_function(self, detection, **kwargs) -> StateVector:
+  def inverse_function(self, detection) -> np.ndarray:
     theta, phi, rho, rho_rate = detection.state_vector
 
     x, y, z = sph2cart(rho, phi, theta)
@@ -184,7 +177,7 @@ class RangeRangeRateBinningAliasing():
     y_rate = np.cos(phi) * np.sin(theta) * rho_rate
     z_rate = np.sin(phi) * rho_rate
 
-    inv_rotation_matrix = inv(self.rotation_matrix)
+    inv_rotation_matrix = np.linalg.inv(self.rotation_matrix)
 
     out_vector = np.zeros((self.ndim_state, 1))
     out_vector[self.mapping, 0] = x, y, z
