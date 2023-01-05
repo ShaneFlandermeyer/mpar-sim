@@ -5,6 +5,7 @@ from stonesoup.base import clearable_cached_property
 
 from mpar_sim.common import wrap_to_interval
 from mpar_sim.common.coordinate_transform import cart2sph, rotx, roty, rotz, sph2cart
+from mpar_sim.common.matrix import jacobian
 from mpar_sim.models.measurement.base import MeasurementModel
 
 
@@ -192,6 +193,12 @@ class RangeRangeRateBinningAliasing(MeasurementModel):
         self.translation_offset
 
     return out_vector
+  
+  def covar(self):
+    return self.noise_covar
+  
+  def jacobian(self, state) -> np.ndarray:
+    return jacobian(self.function, state)
 
   def rvs(self,
           num_samples: int = 1) -> np.ndarray:
