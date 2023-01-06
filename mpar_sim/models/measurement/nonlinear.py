@@ -120,7 +120,7 @@ class RangeRangeRateBinningAliasing(NonlinearMeasurementModel):
     # This is constant
     self.ndim_meas = self.ndim = 4
 
-  def function(self, state: np.ndarray, noise: bool = False,):
+  def function(self, state: np.ndarray, noise: bool = False):
     r"""Model function :math:`h(\vec{x}_t,\vec{v}_t)`
 
         Parameters

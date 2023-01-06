@@ -75,11 +75,16 @@ class RectangularBeam(Beam):
     """
     Compute the loss due to the shape of the beam. For a rectangular element, there is no loss within the beam and infinite loss outside it.
 
-    Args:
-        az (Union[float, np.ndarray]): Target azimuth angles
-        el (Union[float, np.ndarray]): Target elevation angles
-    Returns:
-        Union[float, np.ndarray]: Beam shape loss (dB)
+    Parameters
+    ----------
+    az : Union[float, np.ndarray]
+        Azimuth angles 
+    el : Union[float, np.ndarray]
+        Elevation angles
+    Returns
+    -------
+    Union[float, np.ndarray]
+        Beam shape loss (dB)
     """
     loss = np.zeros_like(az)
     loss[np.logical_or(np.abs(az) > self.azimuth_beamwidth/2,
@@ -120,11 +125,16 @@ class GaussianBeam(Beam):
 
     See https://www.mathworks.com/help/radar/ref/beamloss.html
 
-    Args:
-        az (Union[float, np.ndarray]): Target azimuth angles
-        el (Union[float, np.ndarray]): Target elevation angles
-    Returns:
-        Union[float, np.ndarray]: Beam shape loss (dB)
+    Parameters
+    ----------
+    az : Union[float, np.ndarray]
+        Azimuth angles 
+    el : Union[float, np.ndarray]
+        Elevation angles
+    Returns
+    -------
+    Union[float, np.ndarray]
+        Beam shape loss (dB)
     """
     az_pattern_gain = np.exp(-4*np.log(2) *
                      (az / self.azimuth_beamwidth)**2)
@@ -145,7 +155,7 @@ class SincBeam(Beam):
 
   def shape_loss(self,
                  az: Union[float, np.ndarray],
-                 el: Union[float, np.ndarray]):
+                 el: Union[float, np.ndarray]) -> Union[float, np.ndarray]:
     """
     Compute the off-boresight pattern loss.
     Parameters
@@ -156,12 +166,11 @@ class SincBeam(Beam):
         Elevation angles
     Returns
     -------
-    _type_
-        _description_
+    Union[float, np.ndarray]
+        Beam shape loss (dB)
     """
     dnorm = beamwidth2aperture(
         np.array([self.azimuth_beamwidth, self.elevation_beamwidth]), self.wavelength) / self.wavelength
-    az_pattern_gain = np.sinc(dnorm[0] * np.sin(np.deg2rad(az)))
-    el_pattern_gain = np.sinc(dnorm[1] * np.sin(np.deg2rad(el)))
-    gain = (az_pattern_gain*el_pattern_gain)**2
+    pattern_gains = np.sinc(dnorm * np.sin(np.deg2rad([az, el])))
+    gain = np.prod(pattern_gains)**2
     return -10*np.log10(gain)

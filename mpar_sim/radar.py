@@ -323,7 +323,7 @@ class PhasedArrayRadar():
                                  [r[i]],
                                  [v[i]]])
         detections.add(Clutter(state_vector=state_vector,
-                               timestamp=truth.timestamp if truth else timestamp,
+                               timestamp=truth[-1].timestamp if truth else timestamp,
                                measurement_model=measurement_model))
 
     return detections
