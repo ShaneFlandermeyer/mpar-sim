@@ -74,26 +74,27 @@ def make_env(env_id,
     )
     # Gaussian parameters used to initialize the states of new targets in the scene. Here, elements (0, 2, 4) of the state vector/covariance are the az/el/range of the target (angles in degrees), and (1, 3, 5) are the x/y/z velocities in m/s. If randomize_initial_state is set to True in the environment, the mean az/el are uniformly sampled across the radar field of view, and the variance is uniformly sampled from [0, max_random_az_covar] and [0, max_random_el_covar] for the az/el, respectively
     initial_state = GaussianState(
-        state_vector=[-20,   0,  20,   0, 10e3, 0],
-        covar=np.diag([5**2, 100**2, 5**2, 100**2,  1000**2, 100**2])
+        state_vector=[30,   0,  30,   0, 10e3, 0],
+        covar=np.diag([3**2, 100**2, 3**2, 100**2,  1000**2, 100**2])
     )
 
     env = gym.make(env_id,
                    radar=radar,
                    transition_model=transition_model,
                    initial_state=initial_state,
-                   birth_rate=0.01,
+                   birth_rate=0.05,
                    death_probability=0.005,
                    initial_number_targets=50,
-                   n_confirm_detections=3,
+                   n_confirm_detections=2,
                    randomize_initial_state=True,
-                   max_random_az_covar=50,
-                   max_random_el_covar=50,
+                   max_random_az_covar=7**2,
+                   max_random_el_covar=7**2,
                    render_mode='rgb_array',
                    )
 
     # Wrappers
-    env = gym.wrappers.ResizeObservation(env, (84, 84))
+    # TODO: The ResizeObservation wrapper may have been breaking my stuff!!!
+    # env = gym.wrappers.ResizeObservation(env, (64, 64))
     env = SqueezeImage(env)
     env = gym.wrappers.FrameStack(env, 4)
     env = gym.wrappers.TimeLimit(env, max_episode_steps=max_episode_steps)
@@ -139,7 +140,7 @@ class PPGSurveillanceAgent(PPG):
         ortho_init(nn.Conv2d(64, 64, kernel_size=3, stride=1)),
         nn.ReLU(),
         nn.Flatten(start_dim=1, end_dim=-1),
-        ortho_init(nn.Linear(64*7*7, 512)),
+        ortho_init(nn.Linear(1024, 512)),
         nn.ReLU(),
     )
 
@@ -246,8 +247,8 @@ env = gym.wrappers.RecordEpisodeStatistics(env=env, deque_size=20)
 # ## Training loop
 
 # %%
-az_bw = 2
-el_bw = 2
+az_bw = 3
+el_bw = 3
 bw = 100e6
 pulsewidth = 10e-6
 prf = 5e3
@@ -269,7 +270,7 @@ ppg_agent = PPGSurveillanceAgent(env,
                                  gamma=0.99,
                                  gae_lambda=0.95,
                                  value_coef=1,
-                                 entropy_coef=0.01,
+                                 entropy_coef=0,
                                  seed=seed,
                                  normalize_advantage=True,
                                  policy_clip_range=0.2,
@@ -277,9 +278,9 @@ ppg_agent = PPGSurveillanceAgent(env,
                                  # PPG parameters
                                  aux_minibatch_size=aux_minibatch_size,
                                  n_policy_steps=n_policy_steps,
-                                 n_policy_epochs=2,
-                                 n_value_epochs=2,
-                                 n_aux_epochs=9,
+                                 n_policy_epochs=3,
+                                 n_value_epochs=3,
+                                 n_aux_epochs=6,
                                  beta_clone=1.0,
                                  # Radar parameters
                                  azimuth_beamwidth=az_bw,
@@ -290,7 +291,7 @@ ppg_agent = PPGSurveillanceAgent(env,
                                  n_pulses=n_pulses,
                                  )
 
-# checkpoint_filename = "/home/shane/src/mpar-sim/lightning_logs/version_457/checkpoints/epoch=7-step=8704.ckpt"
+# checkpoint_filename = "/home/shane/src/mpar-sim/lightning_logs/version_481/checkpoints/epoch=31-step=61440.ckpt"
 # ppg_agent = PPGSurveillanceAgent.load_from_checkpoint(
 #     checkpoint_filename, env=env, seed=seed)
 
@@ -335,36 +336,41 @@ az_axis = np.linspace(-45, 45, beam_coverage_map.shape[1])
 el_axis = np.linspace(-45, 45, beam_coverage_map.shape[0])
 
 
-# tic = time.time()
-# # Test the PPO agent
 
-# obs, info = env.reset(seed=seed)
-# dones = np.zeros(n_env, dtype=bool)
-# i = 0
-# with torch.no_grad():
-#   while not np.all(dones):
-#     obs_tensor = torch.as_tensor(obs).to(
-#         device=ppg_agent.device, dtype=torch.float32)
-#     action_tensor = ppg_agent.act(obs_tensor)[0]
-#     actions = action_tensor.cpu().numpy()
-#     # Repeat actions for all environments
-#     obs, reward, terminated, truncated, info = env.step(actions)
-#     dones = np.logical_or(dones, np.logical_or(terminated, truncated))
+# Test the PPO agent
+tic = time.time()
+obs, info = env.reset(seed=seed)
+dones = np.zeros(n_env, dtype=bool)
+i = 0
+with torch.no_grad():
+  while not np.all(dones):
+    obs_tensor = torch.as_tensor(obs).to(
+        device=ppg_agent.device, dtype=torch.float32)
+    action_tensor = ppg_agent.act(obs_tensor)[0]
+    actions = action_tensor.cpu().numpy()
+    # Repeat actions for all environments
+    obs, reward, terminated, truncated, info = env.step(actions)
+    dones = np.logical_or(dones, np.logical_or(terminated, truncated))
 
-#     ppo_init_ratio[i, ~dones] = info['initiation_ratio'][~dones]
-#     ppo_tracks_init[i:, ~np.logical_or(
-#         terminated, truncated)] = info['n_tracks_initiated'][~np.logical_or(terminated, truncated)]
+    ppo_init_ratio[i, ~dones] = info['initiation_ratio'][~dones]
+    ppo_tracks_init[i:, ~np.logical_or(
+        terminated, truncated)] = info['n_tracks_initiated'][~np.logical_or(terminated, truncated)]
+    # if i == 100:
+    #   plt.imshow(obs[0, 3, :, :])
+    #   plt.show()
 
-#     # Add 1 to the pixels illuminated by the current beam using np.digitize
-#     actions[0, :] = wrap_to_interval(actions[0, :], -45, 45)
-#     az = np.digitize(actions[0, 0], az_axis) - 1
-#     el = np.digitize(actions[0, 1], el_axis[::-1]) - 1
-#     beam_coverage_map[el-1:el+1, az-1:az+1] += 1
+    # Add 1 to the pixels illuminated by the current beam using np.digitize
+    # if i > 100 and not dones[0]:
+    actions[0, :] = wrap_to_interval(actions[0, :], -45, 45)
+    az = np.digitize(actions[0, 0], az_axis, right=True)
+    el = np.digitize(actions[0, 1], el_axis[::-1], right=True)
+    beam_coverage_map[max(el-2, 0):min(el+2, len(el_axis)), max(az-2, 0):min(az+2, len(az_axis))] += 1
+    # beam_coverage_map *= 0.99
 
-#     i += 1
-# toc = time.time()
-# print("PPO agent done")
-# print(f"Time elapsed: {toc-tic:.2f} seconds")
+    i += 1
+toc = time.time()
+print("PPO agent done")
+print(f"Time elapsed: {toc-tic:.2f} seconds")
 
 # # Test the raster agent
 tic = time.time()
@@ -389,6 +395,9 @@ while not np.all(dones):
   raster_init_ratio[i, ~dones] = info['initiation_ratio'][~dones]
   raster_tracks_init[i:, ~np.logical_or(
       terminated, truncated)] = info['n_tracks_initiated'][~np.logical_or(terminated, truncated)]
+#   if i == 200:
+#       plt.imshow(obs[0, 3, :, :])
+#       plt.show()
   i += 1
 
 toc = time.time()

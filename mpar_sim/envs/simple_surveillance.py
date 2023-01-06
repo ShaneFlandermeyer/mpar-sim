@@ -10,6 +10,7 @@ from pyswarms.base.base_single import SwarmOptimizer
 from stonesoup.types.state import GaussianState
 
 from mpar_sim.common.coordinate_transform import sph2cart
+from mpar_sim.common.wrap_to_interval import wrap_to_interval
 from mpar_sim.defaults import default_gbest_pso, default_lbest_pso
 from mpar_sim.looks.spoiled_look import SpoiledLook
 from mpar_sim.models.transition.base import TransitionModel
@@ -92,7 +93,7 @@ class SimpleParticleSurveillance(gym.Env):
     self.seed = seed
 
     self.observation_space = spaces.Box(
-        low=0, high=255, shape=(128, 128, 1), dtype=np.uint8)
+        low=0, high=255, shape=(84, 84, 1), dtype=np.uint8)
 
     self.action_space = spaces.Box(
         low=np.array(
@@ -101,7 +102,6 @@ class SimpleParticleSurveillance(gym.Env):
                       np.Inf, np.Inf, np.Inf, np.Inf, np.Inf, np.Inf]),
         shape=(8,),
         dtype=np.float32)
-    # TODO: Add the other look parameters to the action space.
     assert render_mode is None or render_mode in self.metadata["render_modes"]
     self.render_mode = render_mode
 
@@ -157,13 +157,14 @@ class SimpleParticleSurveillance(gym.Env):
         if target_id not in self.detection_count.keys():
           self.detection_count[target_id] = 0
         self.detection_count[target_id] += 1
-        # Give a reward if a "track" is initiated.
+
         if self.detection_count[target_id] == self.n_confirm_detections:
           self.n_tracks_initiated += 1
-          reward += 1
 
       # Only update the swarm state for particles that have not been confirmed
       if isinstance(detection, Clutter) or self.detection_count[target_id] <= self.n_confirm_detections:
+        # TODO: The agent should only get a reward if the detection contributes to a track initiation. i.e., if 2 <= detection_count[target_id] <= n_confirm_detections
+        reward += 1 / len(self.target_paths)
         az = detection.state_vector[1, 0]
         el = detection.state_vector[0, 0]
         self.swarm_optim.optimize(
@@ -173,11 +174,18 @@ class SimpleParticleSurveillance(gym.Env):
     Pm = 0.0025
     mutate = self.np_random.uniform(
         0, 1, size=len(self.swarm_optim.swarm.position)) < Pm
-    sigma = 0.25*(self.swarm_optim.bounds[1] -
-                  self.swarm_optim.bounds[0])[np.newaxis, :]
-    sigma = np.repeat(sigma, np.count_nonzero(mutate), axis=0)
-    self.swarm_optim.swarm.position[mutate] += self.np_random.normal(
-        np.zeros_like(sigma), sigma)
+
+    if mutate.any():
+      sigma = 0.25*(self.swarm_optim.bounds[1] -
+                    self.swarm_optim.bounds[0])[np.newaxis, :]
+      sigma = np.repeat(sigma, np.count_nonzero(mutate), axis=0)
+
+      self.swarm_optim.swarm.position[mutate] += self.np_random.normal(
+          np.zeros_like(sigma), sigma)
+      # Clip the mutated values to ensure they don't go outside the bounds
+      self.swarm_optim.swarm.position[mutate] = np.clip(
+          self.swarm_optim.swarm.position[mutate],
+          self.swarm_optim.bounds[0], self.swarm_optim.bounds[1])
 
     # If multiple subarrays are scheduled to execute at once, the timestep will be zero. In this case, don't update the environment just yet.
     # For the single-beam case, this will always execute
@@ -190,7 +198,8 @@ class SimpleParticleSurveillance(gym.Env):
             del self.detection_count[path.id]
 
       # Move targets forward in time
-      self._move_targets(timestep)
+      # TODO: Uncomment this
+      # self._move_targets(timestep)
 
       # Randomly create new targets
       for _ in range(self.np_random.poisson(self.birth_rate)):
@@ -281,14 +290,17 @@ class SimpleParticleSurveillance(gym.Env):
     Returns
     -------
     np.ndarray
-        Output image where each pixel is 1 if a particle is in that pixel and 0 otherwise.
+        Output image where each pixel has a value equal to the number of swarm particles in that pixel.
     """
     az_indices = np.digitize(
-        self.swarm_optim.swarm.position[:, 0], self.az_axis) - 1
+        self.swarm_optim.swarm.position[:, 0], self.az_axis, right=True)
     el_indices = np.digitize(
-        self.swarm_optim.swarm.position[:, 1], self.el_axis) - 1
-    obs = np.zeros(self.observation_space.shape, dtype=np.uint8)
-    obs[az_indices, el_indices] = 255
+        self.swarm_optim.swarm.position[:, 1], self.el_axis, right=True)
+    indices = az_indices * self.observation_space.shape[1] + el_indices
+    obs = np.clip(np.bincount(indices, minlength=np.prod(
+        self.observation_space.shape)).reshape(self.observation_space.shape),
+        0, 255).astype(np.uint8)
+
     return obs
 
   def _get_info(self):
@@ -326,7 +338,7 @@ class SimpleParticleSurveillance(gym.Env):
 
     # Draw canvas from pixels
     # The observation gets inverted here because I want black pixels on a white background.
-    pixels = ~self._get_obs()
+    pixels = self._get_obs()
     pixels = np.flip(pixels.squeeze(), axis=1)
     canvas = pygame.surfarray.make_surface(pixels)
 
