@@ -160,11 +160,13 @@ class SimpleParticleSurveillance(gym.Env):
 
         if self.detection_count[target_id] == self.n_confirm_detections:
           self.n_tracks_initiated += 1
+        
+        # Reward the agent for detecting a target
+        if 2 <= self.detection_count[target_id] <= self.n_confirm_detections:
+          reward += 1 / len(self.target_paths)
 
       # Only update the swarm state for particles that have not been confirmed
       if isinstance(detection, Clutter) or self.detection_count[target_id] <= self.n_confirm_detections:
-        # TODO: The agent should only get a reward if the detection contributes to a track initiation. i.e., if 2 <= detection_count[target_id] <= n_confirm_detections
-        reward += 1 / len(self.target_paths)
         az = detection.state_vector[1, 0]
         el = detection.state_vector[0, 0]
         self.swarm_optim.optimize(
@@ -198,8 +200,7 @@ class SimpleParticleSurveillance(gym.Env):
             del self.detection_count[path.id]
 
       # Move targets forward in time
-      # TODO: Uncomment this
-      # self._move_targets(timestep)
+      self._move_targets(timestep)
 
       # Randomly create new targets
       for _ in range(self.np_random.poisson(self.birth_rate)):
@@ -416,17 +417,17 @@ class SimpleParticleSurveillance(gym.Env):
     # NOTE: Asssumes all targets have the same transition model
     if len(self.target_paths) == 0:
       return
-    states = np.hstack(
+    state_vectors = np.hstack(
         [path[-1].state_vector for path in self.target_paths])
-    new_states = self.transition_model.function(
-        states, noise=True, time_interval=dt)
+    updated_state_vectors = self.transition_model.function(
+        state_vectors, noise=True, time_interval=dt)
 
-    for itarget, path in enumerate(self.target_paths):
-      meta = path[-1].metadata
-      path.append(GroundTruthState(
-          new_states[:, itarget][:, np.newaxis],
+    for itarget in range(len(self.target_paths)):
+      updated_state = GroundTruthState(
+          updated_state_vectors[:, itarget][:, np.newaxis],
           timestamp=self.time,
-          metadata=meta))
+          metadata=self.target_paths[itarget][-1].metadata)
+      self.target_paths[itarget].append(updated_state)
 
   ############################################################################
   # Particle swarm methods

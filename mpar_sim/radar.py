@@ -164,7 +164,6 @@ class PhasedArrayRadar():
         velocity_mapping=self.velocity_mapping,
         noise_covar=np.diag([0.1, 0.1, 0.1, 0.1]))
 
-  @lru_cache
   def is_detectable(self,
                     target_az: float, target_el: float, target_range: float) -> bool:
     """
@@ -189,9 +188,10 @@ class PhasedArrayRadar():
   @clearable_cached_property('rotation_offset')
   def _rotation_matrix(self) -> np.ndarray:
     """3D axis rotation matrix"""
+    # TODO: This may not be correct
     theta_x = -self.rotation_offset[0, 0]  # roll
-    theta_y = self.rotation_offset[1, 0]  # pitch#elevation
-    theta_z = -self.rotation_offset[2, 0]  # yaw#azimuth
+    theta_y = self.rotation_offset[1, 0]  # pitch/elevation
+    theta_z = -self.rotation_offset[2, 0]  # yaw/azimuth
     return rotz(theta_z) @ roty(theta_y) @ rotx(theta_x)
 
   def measure(self,
