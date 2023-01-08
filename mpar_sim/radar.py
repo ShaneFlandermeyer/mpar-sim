@@ -22,14 +22,13 @@ from mpar_sim.types.groundtruth import GroundTruthState
 class PhasedArrayRadar():
   """An active electronically scanned array (AESA) radar sensor"""
 
-
   def __init__(self,
                # Motion and orientation parameters
                ndim_state: int = 6,
-               position: np.ndarray = np.zeros((3, 1)),
-               velocity: np.ndarray = np.zeros((3, 1)),
-               position_mapping: Tuple[int, int, int] = (0, 2, 4),
-               velocity_mapping: Tuple[int, int, int] = (1, 3, 5),
+               position: np.ndarray = np.zeros((3,)),
+               velocity: np.ndarray = np.zeros((3,)),
+               position_mapping: List[int] = [0, 2, 4],
+               velocity_mapping: List[int] = [1, 3, 5],
                measurement_model: MeasurementModel = None,
                rotation_offset: np.ndarray = np.zeros((3, 1)),
                timestamp: datetime = None,
@@ -160,7 +159,7 @@ class PhasedArrayRadar():
         max_unambiguous_range=self.max_unambiguous_range,
         max_unambiguous_range_rate=self.max_unambiguous_radial_speed,
         ndim_state=self.ndim_state,
-        mapping=self.position_mapping,
+        position_mapping=self.position_mapping,
         velocity_mapping=self.velocity_mapping,
         noise_covar=np.diag([0.1, 0.1, 0.1, 0.1]))
 
@@ -220,13 +219,14 @@ class PhasedArrayRadar():
 
     # Loop through the targets and generate detections
     for truth in ground_truths:
+      # Force the input state vector to be 2D
+      state_vector = truth[-1].state_vector.reshape(self.ndim_state, -1)
       # Get the position of the target in the radar coordinate frame
-      relative_pos = truth[-1].state_vector[self.position_mapping,
-                                            :] - self.position
+      relative_pos = state_vector[self.position_mapping, :] - self.position
       relative_pos = self._rotation_matrix @ relative_pos
 
       # Convert target position to spherical coordinates
-      [target_az, target_el, r] = cart2sph(*relative_pos[:,0])
+      [target_az, target_el, r] = cart2sph(*relative_pos[:, 0])
 
       # Skip targets that are not detectable
       if not self.is_detectable(target_az, target_el, r):
@@ -280,7 +280,7 @@ class PhasedArrayRadar():
              range_variance,
              velocity_variance])
 
-        measurement = measurement_model.function(truth[-1], noise=noise)
+        measurement = measurement_model.function(state_vector, noise=noise)
         detection = TrueDetection(state_vector=measurement,
                                   timestamp=truth[-1].timestamp,
                                   measurement_model=measurement_model,

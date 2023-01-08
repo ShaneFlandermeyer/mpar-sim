@@ -1,4 +1,5 @@
 
+from typing import List
 import numpy as np
 # TODO: Replicate this and remove the dependency on stonesoup
 from stonesoup.base import clearable_cached_property
@@ -7,6 +8,7 @@ from mpar_sim.common import wrap_to_interval
 from mpar_sim.common.coordinate_transform import cart2sph, rotx, roty, rotz, sph2cart
 from mpar_sim.common.matrix import jacobian
 from mpar_sim.models.measurement.base import MeasurementModel
+
 
 class NonlinearMeasurementModel(MeasurementModel):
   """Base class for nonlinear measurement models"""
@@ -74,9 +76,9 @@ class RangeRangeRateBinningAliasing(NonlinearMeasurementModel):
 
         x = \textrm{floor}(x/\Delta x)*\Delta x + \frac{\Delta x}{2}
 
-    The :py:attr:`mapping` property of the model is a 3 element vector, \
-    whose first (i.e. :py:attr:`mapping[0]`), second (i.e. \
-    :py:attr:`mapping[1]`) and third (i.e. :py:attr:`mapping[2]`) elements \
+    The :py:attr:`position_mapping` property of the model is a 3 element vector, \
+    whose first (i.e. :py:attr:`position_mapping[0]`), second (i.e. \
+    :py:attr:`position_mapping[1]`) and third (i.e. :py:attr:`position_mapping[2]`) elements \
     contain the state index of the :math:`x`, :math:`y` and :math:`z`  \
     coordinates, respectively.
 
@@ -93,11 +95,11 @@ class RangeRangeRateBinningAliasing(NonlinearMeasurementModel):
   """
 
   def __init__(self,
-               translation_offset: np.ndarray = np.zeros((3, 1)),
-               rotation_offset: np.ndarray = np.zeros((3, 1)),
-               velocity: np.ndarray = np.zeros((3, 1)),
-               mapping: tuple[int, int, int] = (0, 2, 4),
-               velocity_mapping: tuple[int, int, int] = (1, 3, 5),
+               translation_offset: np.ndarray = np.zeros((3,)),
+               rotation_offset: np.ndarray = np.zeros((3,)),
+               velocity: np.ndarray = np.zeros((3,)),
+               position_mapping: List[int] = [0, 2, 4],
+               velocity_mapping: List[int] = [1, 3, 5],
                noise_covar: np.ndarray = np.eye(4),
                range_res: float = 1,
                range_rate_res: float = 1,
@@ -106,7 +108,7 @@ class RangeRangeRateBinningAliasing(NonlinearMeasurementModel):
                ndim_state: int = 6,
                ):
     self.translation_offset = translation_offset
-    self.mapping = mapping
+    self.position_mapping = position_mapping
     self.rotation_offset = rotation_offset
     self.velocity_mapping = velocity_mapping
     self.velocity = velocity
@@ -140,23 +142,25 @@ class RangeRangeRateBinningAliasing(NonlinearMeasurementModel):
             The model function evaluated given the provided time interval.
 
     """
+    state = state.reshape((self.ndim_state, -1))
     if noise:
       meas_noise = self.rvs(
-          num_samples=state.state_vector.shape[1])
+          num_samples=state.shape[-1])
     else:
       meas_noise = 0
 
     # Account for origin offset in position to enable range and angles to be determined
-    xyz_pos = state.state_vector[self.mapping, :] - self.translation_offset
+    xyz_pos = state[self.position_mapping, :] - \
+        self.translation_offset.reshape((-1, 1))
     # Rotate coordinates based upon the sensor_velocity
     xyz_rot = self.rotation_matrix @ xyz_pos
     # Convert to Spherical
-    az, el, rho = cart2sph(xyz_rot[0, :], xyz_rot[1, :], xyz_rot[2, :], degrees=True)
+    az, el, rho = cart2sph(
+        xyz_rot[0, :], xyz_rot[1, :], xyz_rot[2, :], degrees=True)
     # Determine the net velocity component in the engagement
-    xyz_vel = state.state_vector[self.velocity_mapping, :] - self.velocity
+    xyz_vel = state[self.velocity_mapping, :] - self.velocity.reshape((-1, 1))
     # Use polar to calculate range rate
-    rr = np.einsum('ij,ij->j', xyz_pos, xyz_vel) / \
-        np.linalg.norm(xyz_pos, axis=0)
+    rr = np.einsum('ij, ij->j', xyz_pos, xyz_vel) / np.linalg.norm(xyz_pos, axis=0)
 
     out = np.array([el, az, rho, rr]) + meas_noise
     if noise:
@@ -184,22 +188,22 @@ class RangeRangeRateBinningAliasing(NonlinearMeasurementModel):
     inv_rotation_matrix = np.linalg.inv(self.rotation_matrix)
 
     out_vector = np.zeros((self.ndim_state, 1))
-    out_vector[self.mapping, 0] = x, y, z
+    out_vector[self.position_mapping, 0] = x, y, z
     out_vector[self.velocity_mapping, 0] = x_rate, y_rate, z_rate
 
-    out_vector[self.mapping,
-               :] = inv_rotation_matrix @ out_vector[self.mapping, :]
+    out_vector[self.position_mapping,
+               :] = inv_rotation_matrix @ out_vector[self.position_mapping, :]
     out_vector[self.velocity_mapping, :] = \
         inv_rotation_matrix @ out_vector[self.velocity_mapping, :]
 
-    out_vector[self.mapping, :] = out_vector[self.mapping, :] + \
+    out_vector[self.position_mapping, :] = out_vector[self.position_mapping, :] + \
         self.translation_offset
 
     return out_vector
-  
+
   def covar(self):
     return self.noise_covar
-  
+
   def jacobian(self, state) -> np.ndarray:
     return jacobian(self.function, state)
 

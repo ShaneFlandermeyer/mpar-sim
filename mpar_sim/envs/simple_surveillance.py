@@ -160,10 +160,10 @@ class SimpleParticleSurveillance(gym.Env):
 
         if self.detection_count[target_id] == self.n_confirm_detections:
           self.n_tracks_initiated += 1
-        
+
         # Reward the agent for detecting a target
         if 2 <= self.detection_count[target_id] <= self.n_confirm_detections:
-          reward += 1 / len(self.target_paths)
+          reward += 1
 
       # Only update the swarm state for particles that have not been confirmed
       if isinstance(detection, Clutter) or self.detection_count[target_id] <= self.n_confirm_detections:
@@ -185,7 +185,7 @@ class SimpleParticleSurveillance(gym.Env):
       self.swarm_optim.swarm.position[mutate] += self.np_random.normal(
           np.zeros_like(sigma), sigma)
       # Clip the mutated values to ensure they don't go outside the bounds
-      self.swarm_optim.swarm.position[mutate] = np.clip(
+      self.swarm_optim.swarm.position[mutate] = wrap_to_interval(
           self.swarm_optim.swarm.position[mutate],
           self.swarm_optim.bounds[0], self.swarm_optim.bounds[1])
 
@@ -391,16 +391,16 @@ class SimpleParticleSurveillance(gym.Env):
     GroundTruthPath
         A new ground truth path starting at the target's initial state
     """
-    state_vec = state_vector or \
-        self.initial_state.state_vector.view(np.ndarray) + \
-        np.sqrt(self.initial_state.covar.view(np.ndarray)) @ \
-        self.np_random.standard_normal(size=(self.initial_state.ndim, 1))
+    state_vector = state_vector or self.np_random.multivariate_normal(
+        mean=self.initial_state.state_vector.ravel(),
+        cov=self.initial_state.covar)
+    state_vector = state_vector.ravel()
     # Convert state vector from spherical to cartesian
     x, y, z = sph2cart(
-        *state_vec[self.radar.position_mapping, :], degrees=True)
-    state_vec[self.radar.position_mapping, :] = np.array([x, y, z])
+        *state_vector[self.radar.position_mapping], degrees=True)
+    state_vector[self.radar.position_mapping] = np.array([x, y, z])
     state = GroundTruthState(
-        state_vector=state_vec,
+        state_vector=state_vector,
         timestamp=time,
         metadata={'index': self.index})
 
@@ -418,13 +418,13 @@ class SimpleParticleSurveillance(gym.Env):
     if len(self.target_paths) == 0:
       return
     state_vectors = np.hstack(
-        [path[-1].state_vector for path in self.target_paths])
+        [path[-1].state_vector[:, np.newaxis] for path in self.target_paths])
     updated_state_vectors = self.transition_model.function(
         state_vectors, noise=True, time_interval=dt)
 
     for itarget in range(len(self.target_paths)):
       updated_state = GroundTruthState(
-          updated_state_vectors[:, itarget][:, np.newaxis],
+          state_vector=updated_state_vectors[:, itarget],
           timestamp=self.time,
           metadata=self.target_paths[itarget][-1].metadata)
       self.target_paths[itarget].append(updated_state)
