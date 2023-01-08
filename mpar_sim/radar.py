@@ -14,7 +14,7 @@ from mpar_sim.looks.spoiled_look import SpoiledLook
 from mpar_sim.models.measurement.base import MeasurementModel
 from mpar_sim.models.measurement.estimation import (angle_crlb, range_crlb,
                                                     velocity_crlb)
-from mpar_sim.models.measurement.nonlinear import RangeRangeRateBinningAliasing
+from mpar_sim.models.measurement.nonlinear import RangeAzElRangeRate
 from mpar_sim.types.detection import Clutter, TrueDetection
 from mpar_sim.types.groundtruth import GroundTruthState
 
@@ -153,7 +153,7 @@ class PhasedArrayRadar():
         self.tx_beam.gain * self.rx_beam.gain * \
         self.wavelength**2 / ((4*np.pi)**3 * noise_power)
 
-    self.measurement_model = RangeRangeRateBinningAliasing(
+    self.measurement_model = RangeAzElRangeRate(
         range_res=self.range_resolution,
         range_rate_res=self.velocity_resolution,
         max_unambiguous_range=self.max_unambiguous_range,

@@ -14,7 +14,7 @@ class NonlinearMeasurementModel(MeasurementModel):
   """Base class for nonlinear measurement models"""
 
 
-class RangeRangeRateBinningAliasing(NonlinearMeasurementModel):
+class RangeAzElRangeRate(NonlinearMeasurementModel):
   r"""This is a class implementation of a time-invariant measurement model, \
     where measurements are assumed to be in the form of elevation \
     (:math:`\theta`),  bearing (:math:`\phi`), range (:math:`r`) and
@@ -95,30 +95,45 @@ class RangeRangeRateBinningAliasing(NonlinearMeasurementModel):
   """
 
   def __init__(self,
+               # Sensor kinematic information
                translation_offset: np.ndarray = np.zeros((3,)),
                rotation_offset: np.ndarray = np.zeros((3,)),
                velocity: np.ndarray = np.zeros((3,)),
-               position_mapping: List[int] = [0, 2, 4],
-               velocity_mapping: List[int] = [1, 3, 5],
+               # Measurement information
                noise_covar: np.ndarray = np.eye(4),
                range_res: float = 1,
                range_rate_res: float = 1,
+               discretize_measurements: bool = True,
+               # Ambiguity limits
                max_unambiguous_range: float = np.inf,
                max_unambiguous_range_rate: float = np.inf,
+               alias_measurements: bool = True,
+               # State mappings
+               position_mapping: List[int] = [0, 2, 4],
+               velocity_mapping: List[int] = [1, 3, 5],
                ndim_state: int = 6,
                ):
+    # Sensor kinematic information
     self.translation_offset = translation_offset
     self.position_mapping = position_mapping
     self.rotation_offset = rotation_offset
-    self.velocity_mapping = velocity_mapping
     self.velocity = velocity
+
+    # Measurement parameters
     self.noise_covar = noise_covar
-    self.ndim_state = ndim_state
     self.range_res = range_res
     self.range_rate_res = range_rate_res
+    self.discretize_measurements = discretize_measurements
+
+    # Ambiguity limits
     self.max_unambiguous_range = max_unambiguous_range
     self.max_unambiguous_range_rate = max_unambiguous_range_rate
+    self.alias_measurements = alias_measurements
 
+    # State mappings
+    self.position_mapping = position_mapping
+    self.velocity_mapping = velocity_mapping
+    self.ndim_state = ndim_state
     # This is constant
     self.ndim_meas = self.ndim = 4
 
@@ -160,14 +175,16 @@ class RangeRangeRateBinningAliasing(NonlinearMeasurementModel):
     # Determine the net velocity component in the engagement
     xyz_vel = state[self.velocity_mapping, :] - self.velocity.reshape((-1, 1))
     # Use polar to calculate range rate
-    rr = np.einsum('ij, ij->j', xyz_pos, xyz_vel) / np.linalg.norm(xyz_pos, axis=0)
+    rr = np.einsum('ij, ij->j', xyz_pos, xyz_vel) / \
+        np.linalg.norm(xyz_pos, axis=0)
 
     out = np.array([el, az, rho, rr]) + meas_noise
-    if noise:
+    if self.alias_measurements:
       # Add aliasing to the range/range rate if it exceeds the unambiguous limits
       out[2] = wrap_to_interval(out[2], 0, self.max_unambiguous_range)
       out[3] = wrap_to_interval(
           out[3], -self.max_unambiguous_range_rate, self.max_unambiguous_range_rate)
+    if self.discretize_measurements:
       # Bin the range and range rate to the center of the cell
       out[2] = np.floor(out[2] / self.range_res) * \
           self.range_res + self.range_res/2
