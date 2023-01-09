@@ -1,5 +1,5 @@
 from mpar_sim.predictor.kalman import kalman_predict
-from mpar_sim.updater.kalman import kalman_update
+from mpar_sim.updater.kalman import kalman_update, extended_kalman_update
 import numpy as np
 from filterpy.kalman import predict, update
 
@@ -73,6 +73,7 @@ def test_kalman_update():
 
 def test_extended_kalman_update():
   print("- test_extended_kalman_update: NOT IMPLEMENTED")
+  
 
 if __name__ == '__main__':
   test_kalman_predict()

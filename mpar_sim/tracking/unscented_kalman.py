@@ -1,6 +1,10 @@
-import scipy
+import datetime
 import numpy as np
-from typing import Tuple
+from typing import Tuple, Union
+from mpar_sim.models.measurement.nonlinear import RangeAzElRangeRate
+from mpar_sim.models.transition.linear import ConstantVelocity
+from mpar_sim.types.groundtruth import GroundTruthPath, GroundTruthState
+import matplotlib.pyplot as plt
 
 
 def merwe_scaled_sigma_points(mean: np.ndarray,
@@ -95,7 +99,7 @@ def ukf_predict(prior_state: np.ndarray,
                 prior_covar: np.ndarray,
                 process_noise: np.ndarray,
                 transition_func: callable,
-                dt: float) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+                dt: Union[float, datetime.timedelta]) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
   """
   Unscented Kalman filter prediction step
 
@@ -209,7 +213,7 @@ def ukf_predict_update(prior_state: np.ndarray,
                        # Process model
                        transition_func: callable,
                        process_noise: np.ndarray,
-                       dt: float,
+                       dt: Union[float, datetime.timedelta],
                        # Measurement model
                        measurement_func: callable,
                        measurement_noise: np.ndarray,
@@ -217,30 +221,59 @@ def ukf_predict_update(prior_state: np.ndarray,
   predicted_state, predicted_covar, sigmas_f, Wm, Wc = ukf_predict(
       prior_state, prior_covar, process_noise, transition_func, dt)
 
-  updated_state, updated_covar = ukf_update(
+  posterior_state, posterior_covar = ukf_update(
       measurement, predicted_state, predicted_covar, sigmas_f, Wm, Wc, measurement_func, measurement_noise)
 
-  return updated_state, updated_covar
+  return posterior_state, posterior_covar
 
 
 if __name__ == '__main__':
-  # Simple constant-velocity transition model
-  def transition_func(x, dt):
-    F = np.array([[1, dt, 0, 0, 0, 0],
-                  [0, 1, 0, 0, 0, 0],
-                  [0, 0, 1, dt, 0, 0],
-                  [0, 0, 0, 1, 0, 0],
-                  [0, 0, 0, 0, 1, dt],
-                  [0, 0, 0, 0, 0, 1]])
-    return np.dot(F, x)
+  np.random.seed(1999)
+  transition_model = ConstantVelocity(ndim_pos=2, noise_diff_coeff=0.05)
 
-  def measurement_func(x):
-    return x + 1
+  # Create the ground truth for testing
+  truth = GroundTruthPath([GroundTruthState(np.array([50, 1, 0, 1]))])
+  dt = 1.0
+  for i in range(20):
+    new_state = GroundTruthState(
+        state_vector=transition_model.function(
+            truth[-1].state_vector,
+            noise=True,
+            time_interval=dt)
+    )
+    truth.append(new_state)
+  states = np.hstack([state.state_vector for state in truth])
 
-  x = np.zeros((6,))
-  P = np.eye(6)
-  dt = 0.1
-  process_noise = measurement_noise = np.zeros_like(P)
-  z = measurement_func(x)
-  x, P = ukf_predict_update(x, P, z, transition_func,
-                            process_noise, dt, measurement_func, measurement_noise)
+  # Simulate measurements
+  def measurement_func(state, noise_covar):
+    noise = np.random.multivariate_normal(np.zeros(2), noise_covar)
+    x = state[0, :].item()
+    y = state[2, :].item()
+    azimuth = np.arctan2(y, x)
+    range = np.sqrt(x**2 + y**2)
+    return np.array([azimuth, range]) + noise
+  R = np.diag([np.radians(0.2), 1])
+
+  measurements = np.zeros((2, len(truth)))
+  for i in range(len(truth)):
+    measurements[:, i] = measurement_func(truth[i].state_vector, R)
+
+  # Test the UKF
+  prior_state = np.array([50, 1, 0, 1])
+  prior_covar = np.diag([1.5, 0.5, 1.5, 0.5])
+  track_pos = np.zeros((4, len(truth)))
+  for measurement in measurements:
+    post_state, post_covar = ukf_predict_update(prior_state,
+                                                prior_covar,
+                                                measurement,
+                                                transition_model.function, transition_model.covar(
+                                                    dt),
+                                                dt,
+                                                measurement_func,
+                                                R
+                                                )
+
+  plt.figure()
+  plt.plot(states[0], states[2], 'k-', label='Truth')
+#   plt.plot(measurements[1, :], label='Measurements'),
+  plt.show()

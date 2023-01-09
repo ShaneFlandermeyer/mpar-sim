@@ -13,6 +13,8 @@ class GroundTruthState():
                timestamp: datetime.datetime = None,
                metadata: dict = {},
                ):
+    if state_vector.ndim == 1:
+      state_vector = state_vector.reshape(-1, 1)
     self.state_vector = state_vector
     self.timestamp = timestamp
     self.metadata = metadata
@@ -31,8 +33,11 @@ class GroundTruthPath():
     else:
       self.id = id
 
-  def __getitem__(self, index):
-    return self.states[index]
-  
   def append(self, state: GroundTruthState):
     self.states.append(state)
+    
+  def __getitem__(self, index):
+    return self.states[index]
+
+  def __len__(self):
+    return len(self.states)
