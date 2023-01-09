@@ -8,8 +8,8 @@ from mpar_sim.models.transition.base import TransitionModel
 
 def kalman_predict(prior_state: np.ndarray,
                    prior_covar: np.ndarray,
-                   transition_model: TransitionModel,
-                   timestamp: datetime.datetime) -> Tuple[np.ndarray, np.ndarray]:
+                   transition_matrix: np.ndarray,
+                   noise_covar: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
   """
   Kalman predict step.
 
@@ -21,28 +21,21 @@ def kalman_predict(prior_state: np.ndarray,
       Prior state vector
   prior_covar : np.ndarray
       Prior covariance matrix
-  transition_model : TransitionModel
-      Transition model
-  timestamp : datetime.datetime
-      Predict the state to this time
-
+  transition_matrix : np.ndarray
+      Transition model matrix
+  noise_covar : np.ndarray
   Returns
   -------
   Tuple[np.ndarray, np.ndarray]
       - Predicted state vector
       - Predicted covariance matrix
   """
-  if timestamp is None or prior_state.timestamp is None:
-    dt = None
-  else:
-    dt = timestamp - prior_state.timestamp
 
-  # Predict the mean
-  predicted_state = transition_model.function(prior_state, time_interval=dt, noise=True)
-  # Predict the covariance
-  transition_matrix = transition_model.matrix(time_interval=dt)
-  
-  process_noise = transition_model.covar(time_interval=dt)
-  predicted_covar = transition_matrix @ prior_covar @ transition_matrix.T + process_noise
-  
+  if np.isscalar(transition_matrix):
+      transition_matrix = np.array(transition_matrix)
+      
+  predicted_state = transition_matrix @ prior_state
+  predicted_covar = transition_matrix @ prior_covar @ transition_matrix.T + noise_covar
+
+
   return predicted_state, predicted_covar

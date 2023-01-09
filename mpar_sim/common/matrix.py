@@ -46,8 +46,9 @@ def jacobian(func, x, **kwargs):
 
   # For numerical reasons the step size needs to large enough. Aim for 1e-8
   # relative to spacing between floating point numbers for each dimension
-  delta = np.max(1e8*np.spacing(x.astype(np.float_).ravel()), 1e-8)
+  delta = 1e8*np.spacing(x.astype(np.double).ravel())
+  delta[delta < 1e-8] = 1e-8
   x2 = np.tile(x, ndim+1) + np.eye(ndim, ndim+1)*delta[:, np.newaxis]
   F = func(x2, **kwargs)
-  jac = np.divide(F[:, :ndim] - F[:, -1:], delta)
-  return jac.astype(np.float_)
+  jac = (F[:, :ndim] - F[:, -1:]) / delta
+  return jac.astype(np.double)

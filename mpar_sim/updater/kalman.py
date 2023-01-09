@@ -2,6 +2,7 @@ from typing import Tuple
 import numpy as np
 
 from mpar_sim.models.measurement.base import MeasurementModel
+from mpar_sim.models.measurement.linear import LinearMeasurementModel
 from mpar_sim.models.measurement.nonlinear import NonlinearMeasurementModel
 
 
@@ -56,10 +57,13 @@ def extended_kalman_update(prior_state: np.ndarray,
                            measurement: np.ndarray,
                            measurement_model: NonlinearMeasurementModel) -> Tuple[np.ndarray, np.ndarray]:
   """
-  Perform the Kalman update step. See equations here:
+  Perform the extended Kalman update step. Unlike the traditional Kalman filter, the extended Kalman filter works for nonlinear measurement models. 
+  The EKF is almost identical to the KF, but the nonlinear measurement must be linearized by using the Jacobian for the measurement matrix H.
+  
+  See equations here:
   https://github.com/rlabbe/Kalman-and-Bayesian-Filters-in-Python/blob/master/06-Multivariate-Kalman-Filters.ipynb
 
-  he posterior covariance is computed using the equation from here:
+  The posterior covariance is computed using the equation from here:
   https://stonesoup.readthedocs.io/en/v0.1b5/stonesoup.updater.html?highlight=kalman#module-stonesoup.updater.kalman
 
   Parameters
@@ -84,8 +88,10 @@ def extended_kalman_update(prior_state: np.ndarray,
   residual = measurement - prior_measurement
 
   # Compute the Kalman gain
-  # TODO: Check if the model is linear here. If it is, just use the regular matrix
-  measurement_matrix = measurement_model.jacobian()
+  if isinstance(measurement_model, LinearMeasurementModel):
+    measurement_matrix = measurement_model.matrix()
+  else:
+    measurement_matrix = measurement_model.jacobian()
   measurement_covar = measurement_model.covar()
   measurement_cross_covar = prior_covar @ measurement_matrix.T
   innovation_covar = measurement_matrix @ measurement_cross_covar + measurement_covar
