@@ -173,7 +173,7 @@ class SimpleParticleSurveillance(gym.Env):
             self._distance_objective, detection_pos=np.array([az, el]))
 
     # Mutate particles based on Engelbrecht equations (16.66-16.67)
-    Pm = 0.0025
+    Pm = 0.002
     mutate = self.np_random.uniform(
         0, 1, size=len(self.swarm_optim.swarm.position)) < Pm
 
