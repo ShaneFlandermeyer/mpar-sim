@@ -73,6 +73,7 @@ class ConstantVelocity(LinearTransitionModel):
     if noise:
       num_samples = state.shape[1] if state.ndim > 1 else 1
       noise = self.rvs(num_samples=num_samples, time_interval=time_interval)
+      noise = noise.reshape(state.shape)
     else:
       noise = 0
 
@@ -105,7 +106,4 @@ class ConstantVelocity(LinearTransitionModel):
     covar = self.covar(time_interval)
     noise = np.random.multivariate_normal(
         np.zeros(self.ndim), covar, num_samples)
-    if num_samples == 1:
-      return noise.ravel()
-    else:
-      return noise
+    return np.atleast_2d(noise).T

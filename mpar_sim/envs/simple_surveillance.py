@@ -33,11 +33,13 @@ class SimpleParticleSurveillance(gym.Env):
                initial_number_targets: int = 0,
                # Particle swarm parameters
                swarm_optim: SwarmOptimizer = None,
+               mutation_probability: float = 0.002,
                # Environment parameters
                randomize_initial_state: bool = False,
-               max_random_az_covar: float = 10,
-               max_random_el_covar: float = 10,
+               max_random_az_covar: float = 5**2,
+               max_random_el_covar: float = 5**2,
                n_confirm_detections: int = 2,
+
                seed: int = None,
                render_mode: str = None,
                ):
@@ -107,6 +109,7 @@ class SimpleParticleSurveillance(gym.Env):
 
     if swarm_optim is None:
       self.swarm_optim = default_lbest_pso()
+    self.mutation_probability = mutation_probability
 
     # Pre-compute azimuth/elevation axis values needed to digitize the particles for the observation output
     self.az_axis = np.linspace(self.swarm_optim.bounds[0][0],
@@ -173,13 +176,12 @@ class SimpleParticleSurveillance(gym.Env):
             self._distance_objective, detection_pos=np.array([az, el]))
 
     # Mutate particles based on Engelbrecht equations (16.66-16.67)
-    Pm = 0.002
     mutate = self.np_random.uniform(
-        0, 1, size=len(self.swarm_optim.swarm.position)) < Pm
+        0, 1, size=len(self.swarm_optim.swarm.position)) < self.mutation_probability
 
     if mutate.any():
       sigma = 0.25*(self.swarm_optim.bounds[1] -
-                    self.swarm_optim.bounds[0])[np.newaxis, :]
+                    self.swarm_optim.bounds[0]).reshape(1, -1)
       sigma = np.repeat(sigma, np.count_nonzero(mutate), axis=0)
 
       self.swarm_optim.swarm.position[mutate] += self.np_random.normal(
@@ -253,7 +255,6 @@ class SimpleParticleSurveillance(gym.Env):
           0, self.max_random_az_covar)
       self.initial_state.covar[el_idx, el_idx] = self.np_random.uniform(
           0, self.max_random_el_covar)
-    # print(self.initial_state.state_vector)
     self._initialize_targets()
 
     self.swarm_optim.reset()
@@ -418,7 +419,7 @@ class SimpleParticleSurveillance(gym.Env):
     if len(self.target_paths) == 0:
       return
     state_vectors = np.hstack(
-        [path[-1].state_vector[:, np.newaxis] for path in self.target_paths])
+        [path[-1].state_vector.reshape((-1, 1)) for path in self.target_paths])
     updated_state_vectors = self.transition_model.function(
         state_vectors, noise=True, time_interval=dt)
 

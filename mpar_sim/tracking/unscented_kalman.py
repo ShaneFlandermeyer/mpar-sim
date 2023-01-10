@@ -1,7 +1,6 @@
 import datetime
 import numpy as np
 from typing import Tuple, Union
-from mpar_sim.models.measurement.nonlinear import RangeAzElRangeRate
 from mpar_sim.models.transition.linear import ConstantVelocity
 from mpar_sim.types.groundtruth import GroundTruthPath, GroundTruthState
 import matplotlib.pyplot as plt
@@ -129,7 +128,7 @@ def ukf_predict(prior_state: np.ndarray,
   # Compute the sigma points and their weights
   n = prior_state.size
   sigmas, Wm, Wc = merwe_scaled_sigma_points(
-      prior_state, prior_covar, alpha=0.1, beta=2, kappa=3-n)
+      prior_state, prior_covar, alpha=0.5, beta=2, kappa=3-n)
 
   # Transform the sigma points using the process function
   sigmas_f = np.zeros_like(sigmas)
@@ -186,7 +185,7 @@ def ukf_update(measurement: np.ndarray,
   # Transform sigma points into measurement space
   sigmas_h = np.zeros((ndim_measurement, n_sigma_points))
   for i in range(n_sigma_points):
-    sigmas_h[:, i] = measurement_func(sigmas_f[:, i])
+    sigmas_h[:, i] = measurement_func(sigmas_f[:, i], measurement_noise)
 
   # Compute the mean and covariance of the measurement prediction using the unscented transform
   predicted_measurement, predicted_measurement_covar = unscented_transform(
@@ -234,7 +233,7 @@ if __name__ == '__main__':
   # Create the ground truth for testing
   truth = GroundTruthPath([GroundTruthState(np.array([50, 1, 0, 1]))])
   dt = 1.0
-  for i in range(20):
+  for i in range(50):
     new_state = GroundTruthState(
         state_vector=transition_model.function(
             truth[-1].state_vector,
@@ -245,35 +244,56 @@ if __name__ == '__main__':
   states = np.hstack([state.state_vector for state in truth])
 
   # Simulate measurements
-  def measurement_func(state, noise_covar):
-    noise = np.random.multivariate_normal(np.zeros(2), noise_covar)
-    x = state[0, :].item()
-    y = state[2, :].item()
+  def measurement_func(state, noise_covar, noise=False):
+    if noise:
+        noise = np.random.multivariate_normal(np.zeros(2), noise_covar)
+    else:
+        noise = 0
+    x = state[0].item()
+    y = state[2].item()
     azimuth = np.arctan2(y, x)
     range = np.sqrt(x**2 + y**2)
     return np.array([azimuth, range]) + noise
-  R = np.diag([np.radians(0.2), 1])
+
+  R = np.diag([np.deg2rad(0.001), 0.01])
 
   measurements = np.zeros((2, len(truth)))
   for i in range(len(truth)):
-    measurements[:, i] = measurement_func(truth[i].state_vector, R)
+    measurements[:, i] = measurement_func(truth[i].state_vector, R, noise=True)
 
   # Test the UKF
   prior_state = np.array([50, 1, 0, 1])
   prior_covar = np.diag([1.5, 0.5, 1.5, 0.5])
-  track_pos = np.zeros((4, len(truth)))
-  for measurement in measurements:
-    post_state, post_covar = ukf_predict_update(prior_state,
-                                                prior_covar,
-                                                measurement,
-                                                transition_model.function, transition_model.covar(
-                                                    dt),
-                                                dt,
-                                                measurement_func,
-                                                R
-                                                )
+  track = np.zeros((4, len(truth)))
+  for i in range(measurements.shape[1]):
+    measurement = measurements[:, i]
+    post_state, post_covar = ukf_predict_update(
+        prior_state=prior_state,
+        prior_covar=prior_covar,
+        measurement=measurement,
+        transition_func=transition_model.function,
+        process_noise=transition_model.covar(dt),
+        dt=dt,
+        measurement_func=measurement_func,
+        measurement_noise=R)
+    track[:, i] = post_state
+    prior_state = post_state
+    prior_covar = post_covar
 
   plt.figure()
   plt.plot(states[0], states[2], 'k-', label='Truth')
-#   plt.plot(measurements[1, :], label='Measurements'),
+  plt.plot(track[0], track[2], 'bo-', label='Track')
+  plt.xlabel('x')
+  plt.ylabel('y')
+  plt.legend()
+  
+  plt.figure()
+  plt.plot(np.rad2deg(measurements[0]))
+  plt.xlabel('Time step')
+  plt.ylabel('Azimuth (degrees)')
+  
+  plt.figure()
+  plt.plot(measurements[1])
+  plt.xlabel('Time step')
+  plt.ylabel('Range')
   plt.show()

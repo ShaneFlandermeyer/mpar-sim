@@ -13,8 +13,6 @@ class GroundTruthState():
                timestamp: datetime.datetime = None,
                metadata: dict = {},
                ):
-    if state_vector.ndim == 1:
-      state_vector = state_vector.reshape(-1, 1)
     self.state_vector = state_vector
     self.timestamp = timestamp
     self.metadata = metadata

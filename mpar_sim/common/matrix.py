@@ -1,8 +1,11 @@
 import copy
+from typing import Union
 import numpy as np
 
 
-def block_diag(mat: np.ndarray, nreps: int = 1) -> np.ndarray:
+def block_diag(mat: np.ndarray,
+               nreps: int = 1,
+               scale: Union[float, np.ndarray] = 1.0) -> np.ndarray:
   """
   Create a block diagonal matrix from a 2D array, where the input array is repeated nrep times
 
@@ -12,6 +15,8 @@ def block_diag(mat: np.ndarray, nreps: int = 1) -> np.ndarray:
       Array to repeat
   nreps : int, optional
       Number of repetitions of the matrix, by default 1
+  scale: Union[float, np.ndarray]
+      Scale factors for each block in the matrix. If this value is a scalar, the same scale factor is applies to all matrices
 
   Returns
   -------
@@ -20,8 +25,15 @@ def block_diag(mat: np.ndarray, nreps: int = 1) -> np.ndarray:
   """
   rows, cols = mat.shape
   result = np.zeros((nreps * rows, nreps * cols), dtype=mat.dtype)
-  for k in range(nreps):
-    result[k*rows:(k+1)*rows, k*cols:(k+1)*cols] = mat
+  # Convert scale to a 1D array of length nreps
+  if isinstance(scale, float):
+    scale = np.full(nreps, scale)
+  elif isinstance(scale, np.ndarray):
+    assert scale.size == nreps, "Scale array must have the same length as nreps"
+    
+  for i in range(nreps):
+    result[i*rows:(i+1)*rows, i*cols:(i+1)*cols] = mat*scale[i]
+  
   return result
 
 

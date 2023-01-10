@@ -14,7 +14,7 @@ class NonlinearMeasurementModel(MeasurementModel):
   """Base class for nonlinear measurement models"""
 
 
-class RangeAzElRangeRate(NonlinearMeasurementModel):
+class CartesianToRangeAzElRangeRate(NonlinearMeasurementModel):
   r"""This is a class implementation of a time-invariant measurement model, \
     where measurements are assumed to be in the form of elevation \
     (:math:`\theta`),  bearing (:math:`\phi`), range (:math:`r`) and
