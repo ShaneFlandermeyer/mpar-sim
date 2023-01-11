@@ -12,6 +12,7 @@ from stonesoup.types.state import GaussianState
 from mpar_sim.common.coordinate_transform import sph2cart
 from mpar_sim.common.wrap_to_interval import wrap_to_interval
 from mpar_sim.defaults import default_gbest_pso, default_lbest_pso
+from mpar_sim.looks.look import Look
 from mpar_sim.looks.spoiled_look import SpoiledLook
 from mpar_sim.models.transition.base import TransitionModel
 from mpar_sim.radar import PhasedArrayRadar
@@ -33,13 +34,11 @@ class SimpleParticleSurveillance(gym.Env):
                initial_number_targets: int = 0,
                # Particle swarm parameters
                swarm_optim: SwarmOptimizer = None,
-               mutation_probability: float = 0.002,
                # Environment parameters
                randomize_initial_state: bool = False,
                max_random_az_covar: float = 5**2,
                max_random_el_covar: float = 5**2,
                n_confirm_detections: int = 2,
-
                seed: int = None,
                render_mode: str = None,
                ):
@@ -109,7 +108,6 @@ class SimpleParticleSurveillance(gym.Env):
 
     if swarm_optim is None:
       self.swarm_optim = default_lbest_pso()
-    self.mutation_probability = mutation_probability
 
     # Pre-compute azimuth/elevation axis values needed to digitize the particles for the observation output
     self.az_axis = np.linspace(self.swarm_optim.bounds[0][0],
@@ -150,11 +148,13 @@ class SimpleParticleSurveillance(gym.Env):
       path.states[-1].rcs = 10
 
     detections = self.radar.measure(self.target_paths, noise=True)
+    
+    # Mutate particles away from the direction that has just been searched.
+    self._mutate_swarm(look)
 
     reward = 0
     for detection in detections:
-      # Update the detection count for this target
-      # In practice, we won't know if the detection is from clutter or not. However, for the first simulation I'm assuming no false alarms so this is to make the reward calculation still work when the false alarm switch is on
+      # Update the detection count for this target. If a non-clutter target that has not been tracked (n_detections < n_confirm_detections), the agent receives a reward.
       if not isinstance(detection, Clutter):
         target_id = detection.groundtruth_path.id
         if target_id not in self.detection_count.keys():
@@ -167,29 +167,13 @@ class SimpleParticleSurveillance(gym.Env):
         # Reward the agent for detecting a target
         if 2 <= self.detection_count[target_id] <= self.n_confirm_detections:
           reward += 1
-
-      # Only update the swarm state for particles that have not been confirmed
+      
+      # Update the swarm if an untracked target is detected.
       if isinstance(detection, Clutter) or self.detection_count[target_id] <= self.n_confirm_detections:
         az = detection.state_vector[1, 0]
         el = detection.state_vector[0, 0]
         self.swarm_optim.optimize(
             self._distance_objective, detection_pos=np.array([az, el]))
-
-    # Mutate particles based on Engelbrecht equations (16.66-16.67)
-    mutate = self.np_random.uniform(
-        0, 1, size=len(self.swarm_optim.swarm.position)) < self.mutation_probability
-
-    if mutate.any():
-      sigma = 0.25*(self.swarm_optim.bounds[1] -
-                    self.swarm_optim.bounds[0]).reshape(1, -1)
-      sigma = np.repeat(sigma, np.count_nonzero(mutate), axis=0)
-
-      self.swarm_optim.swarm.position[mutate] += self.np_random.normal(
-          np.zeros_like(sigma), sigma)
-      # Clip the mutated values to ensure they don't go outside the bounds
-      self.swarm_optim.swarm.position[mutate] = wrap_to_interval(
-          self.swarm_optim.swarm.position[mutate],
-          self.swarm_optim.bounds[0], self.swarm_optim.bounds[1])
 
     # If multiple subarrays are scheduled to execute at once, the timestep will be zero. In this case, don't update the environment just yet.
     # For the single-beam case, this will always execute
@@ -392,11 +376,15 @@ class SimpleParticleSurveillance(gym.Env):
     GroundTruthPath
         A new ground truth path starting at the target's initial state
     """
+    # TODO: Allow multiple target centers by making the initial state vector/covariance a collection with a categorical weight to give the probability that a new target comes from that point.
     state_vector = state_vector or self.np_random.multivariate_normal(
         mean=self.initial_state.state_vector.ravel(),
         cov=self.initial_state.covar)
     state_vector = state_vector.ravel()
     # Convert state vector from spherical to cartesian
+    # TODO: This creates a bimodal distribution from the input state vector to test how the agent handles multiple target sources.
+    # if self.np_random.uniform(0, 1) < 0.5:
+    #   state_vector[self.radar.position_mapping[0:2]] *= -1
     x, y, z = sph2cart(
         *state_vector[self.radar.position_mapping], degrees=True)
     state_vector[self.radar.position_mapping] = np.array([x, y, z])
@@ -433,6 +421,44 @@ class SimpleParticleSurveillance(gym.Env):
   ############################################################################
   # Particle swarm methods
   ############################################################################
+
+  # Mutate all particles that are in the current beam. Since the density of particles represents a sort of untracked target density, this represents the idea that we have searched this az/el region and unseen targets are unlikely to exist there. If lots of detections are found, many optimization steps will be carried out to bring particles back into the beam. Otherwise, the beam region should be mostly empty.
+  def _mutate_swarm(self, look: Look, alpha: float = 0.25):
+    """
+    Perform a Gaussian mutation on all particles that are in the current beam.
+    
+    Since the density of particles represents the density of untracked targets, this mutation means that areas that have recently been searched are not likely to contain unseen targets. If lots of detections are found after this step, particles will be drawn back to the beam region, which should encourage the agent to search there again. Otherwise, the agent will be encouraged to search other areas that have not been searched recently.
+
+    Parameters
+    ----------
+    look : Look
+        Contains the azimuth/elevation steering angles and beamwidths
+    alpha : float, optional
+        The mutation scaling factor, which dictates the fraction of the search space used in the standard deviation computation. By default 0.25
+    """
+    min_az = look.azimuth_steering_angle - look.azimuth_beamwidth/2
+    max_az = look.azimuth_steering_angle + look.azimuth_beamwidth/2
+    min_el = look.elevation_steering_angle - look.elevation_beamwidth/2
+    max_el = look.elevation_steering_angle + look.elevation_beamwidth/2
+    mutate = np.logical_and(
+        np.logical_and(
+            self.swarm_optim.swarm.position[:, 0] >= min_az,
+            self.swarm_optim.swarm.position[:, 0] <= max_az),
+        np.logical_and(
+            self.swarm_optim.swarm.position[:, 1] >= min_el,
+            self.swarm_optim.swarm.position[:, 1] <= max_el))
+    if mutate.any():
+      sigma = alpha*(self.swarm_optim.bounds[1] -
+                    self.swarm_optim.bounds[0]).reshape(1, -1)
+      sigma = np.repeat(sigma, np.count_nonzero(mutate), axis=0)
+
+      self.swarm_optim.swarm.position[mutate] += self.np_random.normal(
+          np.zeros_like(sigma), sigma)
+      
+      # If the particle position exceeds the az/el bounds, wrap it back into the range on the other side. This improves diversity when detections are at the edge of the space compared to simple clipping.
+      self.swarm_optim.swarm.position[mutate] = wrap_to_interval(
+          self.swarm_optim.swarm.position[mutate],
+          self.swarm_optim.bounds[0], self.swarm_optim.bounds[1])
 
   def _distance_objective(self,
                           swarm_pos: np.ndarray,

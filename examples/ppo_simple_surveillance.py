@@ -82,14 +82,14 @@ def make_env(env_id,
                    radar=radar,
                    transition_model=transition_model,
                    initial_state=initial_state,
-                   birth_rate=0.025,
+                   birth_rate=0,
                    death_probability=0,
                    initial_number_targets=50,
                    n_confirm_detections=3,
                    randomize_initial_state=True,
-                   max_random_az_covar=7**2,
-                   max_random_el_covar=7**2,
-                   render_mode='rgb_array',
+                   max_random_az_covar=5**2,
+                   max_random_el_covar=5**2,
+                   render_mode='human',
                    )
 
     # Wrappers
@@ -259,17 +259,17 @@ ppo_agent = PPOSurveillanceAgent(env,
                                  )
 
 
-# checkpoint_filename = "/home/shane/src/mpar-sim/lightning_logs/version_510/checkpoints/epoch=149-step=5400.ckpt"
-# ppo_agent = PPOSurveillanceAgent.load_from_checkpoint(
-#     checkpoint_filename, env=env, seed=seed)
+checkpoint_filename = "/home/shane/src/mpar-sim/lightning_logs/version_209/checkpoints/epoch=99-step=6000.ckpt"
+ppo_agent = PPOSurveillanceAgent.load_from_checkpoint(
+    checkpoint_filename, env=env, seed=seed)
 
-trainer = pl.Trainer(
-    max_epochs=150,
-    gradient_clip_val=0.5,
-    accelerator='gpu',
-    devices=1,
-)
-trainer.fit(ppo_agent)
+# trainer = pl.Trainer(
+#     max_epochs=100,
+#     gradient_clip_val=0.5,
+#     accelerator='gpu',
+#     devices=1,
+# )
+# trainer.fit(ppo_agent)
 
 
 # %% [markdown]
