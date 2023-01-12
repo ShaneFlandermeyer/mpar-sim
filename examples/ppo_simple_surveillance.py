@@ -87,9 +87,9 @@ def make_env(env_id,
                    initial_number_targets=50,
                    n_confirm_detections=3,
                    randomize_initial_state=True,
-                   max_random_az_covar=5**2,
-                   max_random_el_covar=5**2,
-                   render_mode='human',
+                   max_random_az_covar=10**2,
+                   max_random_el_covar=10**2,
+                   render_mode='rgb_array',
                    )
 
     # Wrappers
@@ -145,7 +145,8 @@ class PPOSurveillanceAgent(PPO):
 
     # The actor head parameterizes the mean and std of a Gaussian distribution for the beam steering angles in az/el.
     self.n_stochastic_actions = 2
-    self.action_mean = ortho_init(nn.Linear(512, self.n_stochastic_actions),std=0.01)
+    self.action_mean = ortho_init(
+        nn.Linear(512, self.n_stochastic_actions), std=0.01)
 
     self.action_std = nn.Sequential(
         ortho_init(nn.Linear(512, self.n_stochastic_actions)),
@@ -170,9 +171,9 @@ class PPOSurveillanceAgent(PPO):
     mean, std, value = self.forward(observations)
     action_dist = torch.distributions.Normal(mean, std)
     if deterministic:
-        stochastic_actions = mean
+      stochastic_actions = mean
     else:
-        stochastic_actions = action_dist.sample()
+      stochastic_actions = action_dist.sample()
     deterministic_actions = (
         # Azimuth beamwidth
         torch.full((observations.shape[0], 1), self.azimuth_beamwidth).to(
@@ -210,12 +211,9 @@ class PPOSurveillanceAgent(PPO):
     return optimizer
 
 
-
-
 # %% [markdown]
 # ## Environment setup
 # %%
-
 # Create the environment
 env_id = 'mpar_sim/SimpleParticleSurveillance-v0'
 n_env = 32
@@ -229,8 +227,8 @@ env = gym.wrappers.RecordEpisodeStatistics(env=env, deque_size=20)
 # ## Training loop
 
 # %%
-az_bw = 4
-el_bw = 4
+az_bw = 5
+el_bw = 5
 bw = 100e6
 pulsewidth = 10e-6
 prf = 5e3
@@ -244,7 +242,7 @@ ppo_agent = PPOSurveillanceAgent(env,
                                  gamma=0.99,
                                  gae_lambda=0.95,
                                  value_coef=1e-3,
-                                 entropy_coef=0.01,
+                                 entropy_coef=0,
                                  seed=seed,
                                  normalize_advantage=True,
                                  policy_clip_range=0.2,
@@ -259,17 +257,17 @@ ppo_agent = PPOSurveillanceAgent(env,
                                  )
 
 
-checkpoint_filename = "/home/shane/src/mpar-sim/lightning_logs/version_209/checkpoints/epoch=99-step=6000.ckpt"
-ppo_agent = PPOSurveillanceAgent.load_from_checkpoint(
-    checkpoint_filename, env=env, seed=seed)
+# checkpoint_filename = "/home/shane/src/mpar-sim/lightning_logs/version_633/checkpoints/epoch=84-step=5100.ckpt"
+# ppo_agent = PPOSurveillanceAgent.load_from_checkpoint(
+#     checkpoint_filename, env=env, seed=seed)
 
-# trainer = pl.Trainer(
-#     max_epochs=100,
-#     gradient_clip_val=0.5,
-#     accelerator='gpu',
-#     devices=1,
-# )
-# trainer.fit(ppo_agent)
+trainer = pl.Trainer(
+    max_epochs=100,
+    gradient_clip_val=0.5,
+    accelerator='gpu',
+    devices=1,
+)
+trainer.fit(ppo_agent)
 
 
 # %% [markdown]
@@ -304,7 +302,6 @@ az_axis = np.linspace(-45, 45, beam_coverage_map.shape[1])
 el_axis = np.linspace(-45, 45, beam_coverage_map.shape[0])
 
 
-
 # Test the PPO agent
 tic = time.time()
 obs, info = env.reset(seed=seed)
@@ -328,11 +325,12 @@ with torch.no_grad():
     #   plt.show()
 
     # Add 1 to the pixels illuminated by the current beam using np.digitize
-    # if i > 100 and not dones[0]:
-    actions[0, :] = wrap_to_interval(actions[0, :], -45, 45)
-    az = np.digitize(actions[0, 0], az_axis, right=True)
-    el = np.digitize(actions[0, 1], el_axis[::-1], right=True)
-    beam_coverage_map[max(el-2, 0):min(el+2, len(el_axis)), max(az-2, 0):min(az+2, len(az_axis))] += 1
+    if not dones[0]:
+      actions[0, :] = wrap_to_interval(actions[0, :], -45, 45)
+      az = np.digitize(actions[0, 0], az_axis, right=True)
+      el = np.digitize(actions[0, 1], el_axis[::-1], right=True)
+      beam_coverage_map[max(el-2, 0):min(el+2, len(el_axis)),
+                        max(az-2, 0):min(az+2, len(az_axis))] += 1
     # beam_coverage_map *= 0.99
 
     i += 1

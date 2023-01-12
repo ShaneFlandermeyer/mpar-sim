@@ -153,6 +153,9 @@ class SimpleParticleSurveillance(gym.Env):
     self._mutate_swarm(look)
 
     reward = 0
+    # Only update the particle swarm max_optim_steps times to prevent degeneracy to a single particle
+    n_optim_steps = 0
+    max_optim_steps = 5
     for detection in detections:
       # Update the detection count for this target. If a non-clutter target that has not been tracked (n_detections < n_confirm_detections), the agent receives a reward.
       if not isinstance(detection, Clutter):
@@ -170,10 +173,12 @@ class SimpleParticleSurveillance(gym.Env):
       
       # Update the swarm if an untracked target is detected.
       if isinstance(detection, Clutter) or self.detection_count[target_id] <= self.n_confirm_detections:
-        az = detection.state_vector[1, 0]
-        el = detection.state_vector[0, 0]
-        self.swarm_optim.optimize(
-            self._distance_objective, detection_pos=np.array([az, el]))
+        if n_optim_steps < max_optim_steps:
+          az = detection.state_vector[1, 0]
+          el = detection.state_vector[0, 0]
+          self.swarm_optim.optimize(
+              self._distance_objective, detection_pos=np.array([az, el]))
+          n_optim_steps += 1
 
     # If multiple subarrays are scheduled to execute at once, the timestep will be zero. In this case, don't update the environment just yet.
     # For the single-beam case, this will always execute
@@ -186,7 +191,7 @@ class SimpleParticleSurveillance(gym.Env):
             del self.detection_count[path.id]
 
       # Move targets forward in time
-      self._move_targets(timestep)
+      # self._move_targets(timestep)
 
       # Randomly create new targets
       for _ in range(self.np_random.poisson(self.birth_rate)):
@@ -285,7 +290,7 @@ class SimpleParticleSurveillance(gym.Env):
     indices = az_indices * self.observation_space.shape[1] + el_indices
     obs = np.clip(np.bincount(indices, minlength=np.prod(
         self.observation_space.shape)).reshape(self.observation_space.shape),
-        0, 255).astype(np.uint8)
+        0, 255)
 
     return obs
 
