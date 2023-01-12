@@ -23,6 +23,7 @@ from mpar_sim.agents.raster_scan import RasterScanAgent
 from mpar_sim.beam.beam import SincBeam
 from mpar_sim.common.wrap_to_interval import wrap_to_interval
 from mpar_sim.radar import PhasedArrayRadar
+from mpar_sim.wrappers.squash_action import SquashAction
 from mpar_sim.wrappers.squeeze_image import SqueezeImage
 from lightning_rl.common.layer_init import ortho_init
 
@@ -87,17 +88,16 @@ def make_env(env_id,
                    initial_number_targets=50,
                    n_confirm_detections=3,
                    randomize_initial_state=True,
-                   max_random_az_covar=10**2,
-                   max_random_el_covar=10**2,
-                   render_mode='rgb_array',
+                   max_random_az_covar=5**2,
+                   max_random_el_covar=5**2,
+                   render_mode='human',
                    )
 
     # Wrappers
     env = SqueezeImage(env)
     env = gym.wrappers.FrameStack(env, 4)
     env = gym.wrappers.TimeLimit(env, max_episode_steps=max_episode_steps)
-    env = gym.wrappers.ClipAction(env)
-    # env = gym.wrappers.NormalizeReward(env)
+    env = SquashAction(env, inds=[0, 1])
 
     return env
 
@@ -163,44 +163,6 @@ class PPOSurveillanceAgent(PPO):
     self.pulsewidth = pulsewidth
     self.prf = prf
     self.n_pulses = n_pulses
-
-    # self.feature_net = nn.Sequential(
-    #     ortho_init(nn.Conv2d(
-    #         self.observation_space.shape[0], 32, kernel_size=8, stride=4)),
-    #     nn.ReLU(),
-    #     ortho_init(nn.Conv2d(32, 64, kernel_size=4, stride=2)),
-    #     nn.ReLU(),
-    #     ortho_init(nn.Conv2d(64, 64, kernel_size=3, stride=1)),
-    #     nn.ReLU(),
-    #     nn.Flatten(start_dim=1, end_dim=-1),
-    #     ortho_init(nn.Linear(64*7*7, 512)),
-    #     nn.ReLU(),
-    # )
-    
-    # self.policy_feature_net = nn.Sequential(
-    #     ortho_init(nn.Conv2d(
-    #         self.observation_space.shape[0], 32, kernel_size=8, stride=4)),
-    #     nn.ReLU(),
-    #     ortho_init(nn.Conv2d(32, 64, kernel_size=4, stride=2)),
-    #     nn.ReLU(),
-    #     ortho_init(nn.Conv2d(64, 64, kernel_size=3, stride=1)),
-    #     nn.ReLU(),
-    #     nn.Flatten(start_dim=1, end_dim=-1),
-    #     ortho_init(nn.Linear(64*7*7, 512)),
-    #     nn.ReLU(),
-    # )
-    # self.value_feature_net = nn.Sequential(
-    #     ortho_init(nn.Conv2d(
-    #         self.observation_space.shape[0], 32, kernel_size=8, stride=4)),
-    #     nn.ReLU(),
-    #     ortho_init(nn.Conv2d(32, 64, kernel_size=4, stride=2)),
-    #     nn.ReLU(),
-    #     ortho_init(nn.Conv2d(64, 64, kernel_size=3, stride=1)),
-    #     nn.ReLU(),
-    #     nn.Flatten(start_dim=1, end_dim=-1),
-    #     ortho_init(nn.Linear(64*7*7, 512)),
-    #     nn.ReLU(),
-    # )
     
     shape = self.observation_space.shape
     conv_seqs = []
@@ -240,17 +202,6 @@ class PPOSurveillanceAgent(PPO):
     # Compute the value of the state
     value = self.critic(feature).flatten()
     return mean, std, value
-
-#   def forward(self, x: torch.Tensor):
-#     policy_features = self.policy_feature_net(x / 255.0)
-#     value_features = self.value_feature_net(x / 255.0)
-#     # Sample the action from its distribution
-#     mean = self.action_mean(policy_features)
-#     std = self.action_std(policy_features)
-
-#     # Compute the value of the state
-#     value = self.critic(value_features).flatten()
-#     return mean, std, value
 
   def act(self, observations: torch.Tensor, deterministic: bool = False):
     mean, std, value = self.forward(observations)
@@ -302,12 +253,10 @@ class PPOSurveillanceAgent(PPO):
 # Create the environment
 env_id = 'mpar_sim/SimpleParticleSurveillance-v0'
 n_env = 20
-max_episode_steps = 500
+max_episode_steps = 250
 env = gym.vector.AsyncVectorEnv(
     [make_env(env_id,  max_episode_steps) for _ in range(n_env)])
 env = gym.wrappers.RecordEpisodeStatistics(env=env, deque_size=20)
-env = gym.wrappers.NormalizeReward(env, gamma=0.999)
-
 
 # %% [markdown]
 # ## Training loop
@@ -321,8 +270,8 @@ prf = 5e3
 n_pulses = 32
 
 ppo_agent = PPOSurveillanceAgent(env,
-                                 n_rollouts_per_epoch=1,
-                                 n_steps_per_rollout=2048,
+                                 n_rollouts_per_epoch=3,
+                                 n_steps_per_rollout=512,
                                  n_gradient_steps=3,
                                  batch_size=64,
                                  gamma=0.999,
@@ -348,7 +297,7 @@ ppo_agent = PPOSurveillanceAgent(env,
 #     checkpoint_filename, env=env, seed=seed)
 
 trainer = pl.Trainer(
-    max_epochs=500,
+    max_epochs=250,
     gradient_clip_val=0.5,
     accelerator='gpu',
     devices=1,
@@ -424,37 +373,38 @@ el_axis = np.linspace(-45, 45, beam_coverage_map.shape[0])
 # print("PPO agent done")
 # print(f"Time elapsed: {toc-tic:.2f} seconds")
 
-# # Test the raster agent
-tic = time.time()
+# # # Test the raster agent
+# tic = time.time()
 
-obs, info = env.reset(seed=seed)
-dones = np.zeros(n_env, dtype=bool)
-i = 0
-while not np.all(dones):
-  look = raster_agent.act(obs)
-  actions = np.array([[look.azimuth_steering_angle,
-                     look.elevation_steering_angle,
-                     look.azimuth_beamwidth,
-                     look.elevation_beamwidth,
-                     look.bandwidth,
-                     look.pulsewidth,
-                     look.prf,
-                     look.n_pulses]])
-  actions = np.repeat(actions, n_env, axis=0)
-  # Repeat actions for all environments
-  obs, reward, terminated, truncated, info = env.step(actions)
-  dones = np.logical_or(dones, np.logical_or(terminated, truncated))
-  raster_init_ratio[i, ~dones] = info['initiation_ratio'][~dones]
-  raster_tracks_init[i:, ~np.logical_or(
-      terminated, truncated)] = info['n_tracks_initiated'][~np.logical_or(terminated, truncated)]
-#   if i == 200:
-#       plt.imshow(obs[0, 3, :, :])
-#       plt.show()
-  i += 1
+# obs, info = env.reset(seed=seed)
+# dones = np.zeros(n_env, dtype=bool)
+# i = 0
+# while not np.all(dones):
+#   look = raster_agent.act(obs)
+#   actions = np.array([[look.azimuth_steering_angle,
+#                      look.elevation_steering_angle,
+#                      look.azimuth_beamwidth,
+#                      look.elevation_beamwidth,
+#                      look.bandwidth,
+#                      look.pulsewidth,
+#                      look.prf,
+#                      look.n_pulses]])
+#   actions = np.repeat(actions, n_env, axis=0)
+#   # Repeat actions for all environments
+#   obs, reward, terminated, truncated, info = env.step(actions)
+#   dones = np.logical_or(dones, np.logical_or(terminated, truncated))
+#   raster_init_ratio[i, ~dones] = info['initiation_ratio'][~dones]
+#   raster_tracks_init[i:, ~np.logical_or(
+#       terminated, truncated)] = info['n_tracks_initiated'][~np.logical_or(terminated, truncated)]
+# #   if i == 500:
+# #     #   pixels = np.flip(pixels.squeeze(), axis=1)
+# #       plt.imshow(np.flip(obs[0, 1, :, :].squeeze(), axis=1))
+# #       plt.show()
+#   i += 1
 
-toc = time.time()
-print("Raster agent done")
-print(f"Time elapsed: {toc-tic:.2f} seconds")
+# toc = time.time()
+# print("Raster agent done")
+# print(f"Time elapsed: {toc-tic:.2f} seconds")
 env.close()
 
 # %% [markdown]

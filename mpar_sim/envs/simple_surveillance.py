@@ -94,7 +94,7 @@ class SimpleParticleSurveillance(gym.Env):
     self.seed = seed
 
     self.observation_space = spaces.Box(
-        low=0, high=255, shape=(42, 42, 1), dtype=np.uint8)
+        low=0, high=255, shape=(64, 64, 1), dtype=np.uint8)
 
     self.action_space = spaces.Box(
         low=np.array(
@@ -148,14 +148,11 @@ class SimpleParticleSurveillance(gym.Env):
       path.states[-1].rcs = 10
 
     detections = self.radar.measure(self.target_paths, noise=True)
-    
+
     # Mutate particles away from the direction that has just been searched.
     self._mutate_swarm(look)
 
     reward = 0
-    # Only update the particle swarm max_optim_steps times to prevent degeneracy to a single particle
-    n_optim_steps = 0
-    max_optim_steps = 5
     for detection in detections:
       # Update the detection count for this target. If a non-clutter target that has not been tracked (n_detections < n_confirm_detections), the agent receives a reward.
       if not isinstance(detection, Clutter):
@@ -169,16 +166,15 @@ class SimpleParticleSurveillance(gym.Env):
 
         # Reward the agent for detecting a target
         if 2 <= self.detection_count[target_id] <= self.n_confirm_detections:
-          reward += 1
-      
+          reward += 20 / ((self.n_confirm_detections - 1)
+                          * len(self.target_paths))
+
       # Update the swarm if an untracked target is detected.
       if isinstance(detection, Clutter) or self.detection_count[target_id] <= self.n_confirm_detections:
-        if n_optim_steps < max_optim_steps:
-          az = detection.state_vector[1, 0]
-          el = detection.state_vector[0, 0]
-          self.swarm_optim.optimize(
-              self._distance_objective, detection_pos=np.array([az, el]))
-          n_optim_steps += 1
+        az = detection.state_vector[1, 0]
+        el = detection.state_vector[0, 0]
+        self.swarm_optim.optimize(
+            self._distance_objective, detection_pos=np.array([az, el]))
 
     # If multiple subarrays are scheduled to execute at once, the timestep will be zero. In this case, don't update the environment just yet.
     # For the single-beam case, this will always execute
@@ -214,6 +210,7 @@ class SimpleParticleSurveillance(gym.Env):
       terminated = True
     else:
       terminated = False
+    terminated = False
 
     truncated = False
 
@@ -283,6 +280,7 @@ class SimpleParticleSurveillance(gym.Env):
     np.ndarray
         Output image where each pixel has a value equal to the number of swarm particles in that pixel.
     """
+    # Form the az/el image
     az_indices = np.digitize(
         self.swarm_optim.swarm.position[:, 0], self.az_axis, right=True)
     el_indices = np.digitize(
@@ -291,8 +289,16 @@ class SimpleParticleSurveillance(gym.Env):
     obs = np.clip(np.bincount(indices, minlength=np.prod(
         self.observation_space.shape)).reshape(self.observation_space.shape),
         0, 255)
+    # TODO: Form the range/doppler image
+    # if len(self.detection_history) > 0:
+    #   range_axis = np.arange(0, self.max_unambiguous_range,
+    #                          self.observation_space.shape[0])
+    #   vel_axis = np.arange(-self.max_unambiguous_velocity,
+    #                        self.max_unambiguous_velocity, self.observation_space.shape[1])
+    # ranges = np.array(
+    #     [detection.range for detection in self.detection_history[-1]])
 
-    return obs
+    return obs.astype(np.uint8)
 
   def _get_info(self):
     """
@@ -428,10 +434,10 @@ class SimpleParticleSurveillance(gym.Env):
   ############################################################################
 
   # Mutate all particles that are in the current beam. Since the density of particles represents a sort of untracked target density, this represents the idea that we have searched this az/el region and unseen targets are unlikely to exist there. If lots of detections are found, many optimization steps will be carried out to bring particles back into the beam. Otherwise, the beam region should be mostly empty.
-  def _mutate_swarm(self, look: Look, alpha: float = 0.25):
+  def _mutate_swarm(self, look: Look, alpha: float = 0.15):
     """
     Perform a Gaussian mutation on all particles that are in the current beam.
-    
+
     Since the density of particles represents the density of untracked targets, this mutation means that areas that have recently been searched are not likely to contain unseen targets. If lots of detections are found after this step, particles will be drawn back to the beam region, which should encourage the agent to search there again. Otherwise, the agent will be encouraged to search other areas that have not been searched recently.
 
     Parameters
@@ -441,33 +447,48 @@ class SimpleParticleSurveillance(gym.Env):
     alpha : float, optional
         The mutation scaling factor, which dictates the fraction of the search space used in the standard deviation computation. By default 0.25
     """
-    min_az = look.azimuth_steering_angle - look.azimuth_beamwidth/2
-    max_az = look.azimuth_steering_angle + look.azimuth_beamwidth/2
-    min_el = look.elevation_steering_angle - look.elevation_beamwidth/2
-    max_el = look.elevation_steering_angle + look.elevation_beamwidth/2
-    mutate = np.logical_and(
-        np.logical_and(
-            self.swarm_optim.swarm.position[:, 0] >= min_az,
-            self.swarm_optim.swarm.position[:, 0] <= max_az),
-        np.logical_and(
-            self.swarm_optim.swarm.position[:, 1] >= min_el,
-            self.swarm_optim.swarm.position[:, 1] <= max_el))
-    if mutate.any():
-      sigma = alpha*(self.swarm_optim.bounds[1] -
-                    self.swarm_optim.bounds[0]).reshape(1, -1)
-      sigma = np.repeat(sigma, np.count_nonzero(mutate), axis=0)
+    relative_pos = self.swarm_optim.swarm.position - \
+        np.array([look.azimuth_steering_angle,
+                  look.elevation_steering_angle])
+    # velocity = relative_pos / np.linalg.norm(relative_pos, axis=1)[:, None]
+    # TODO: Scale the velocity based on the distance from the detection.
+    velocity = alpha * relative_pos * \
+        np.exp(-0.1*np.linalg.norm(relative_pos, axis=1)[:, None])
+    self.swarm_optim.swarm.velocity += velocity * \
+        self.np_random.standard_normal(velocity.shape)
+    self.swarm_optim.swarm.position += velocity
+#
+    self.swarm_optim.swarm.position = wrap_to_interval(
+        self.swarm_optim.swarm.position, self.swarm_optim.bounds[0], self.swarm_optim.bounds[1])
 
-      self.swarm_optim.swarm.position[mutate] += self.np_random.normal(
-          np.zeros_like(sigma), sigma)
-      
-      # If the particle position exceeds the az/el bounds, wrap it back into the range on the other side. This improves diversity when detections are at the edge of the space compared to simple clipping.
-      self.swarm_optim.swarm.position[mutate] = wrap_to_interval(
-          self.swarm_optim.swarm.position[mutate],
-          self.swarm_optim.bounds[0], self.swarm_optim.bounds[1])
+    # min_az = look.azimuth_steering_angle - look.azimuth_beamwidth/2
+    # max_az = look.azimuth_steering_angle + look.azimuth_beamwidth/2
+    # min_el = look.elevation_steering_angle - look.elevation_beamwidth/2
+    # max_el = look.elevation_steering_angle + look.elevation_beamwidth/2
+    # mutate = np.logical_and(
+    #     np.logical_and(
+    #         self.swarm_optim.swarm.position[:, 0] >= min_az,
+    #         self.swarm_optim.swarm.position[:, 0] <= max_az),
+    #     np.logical_and(
+    #         self.swarm_optim.swarm.position[:, 1] >= min_el,
+    #         self.swarm_optim.swarm.position[:, 1] <= max_el))
+    # if mutate.any():
+    #   relative_pos = self.swarm_optim.swarm.position[mutate] - \
+    #       np.array([look.azimuth_steering_angle,
+    #                look.elevation_steering_angle])
+    #   # velocity = relative_pos / np.linalg.norm(relative_pos)
+    #   velocity = 1.0 / relative_pos
+
+    #   # TODO: Try this if the position mutation is not sufficient
+    # self.swarm_optim.swarm.velocity[mutate] += velocity
+    # self.swarm_optim.swarm.position[mutate] += self.swarm_optim.swarm.velocity[mutate]
+    # self.swarm_optim.swarm.position[mutate] = wrap_to_interval(
+    #     self.swarm_optim.swarm.position[mutate], self.swarm_optim.bounds[0][0], self.swarm_optim.bounds[1][1])
 
   def _distance_objective(self,
                           swarm_pos: np.ndarray,
-                          detection_pos: np.ndarray) -> np.ndarray:
+                          detection_pos: np.ndarray,
+                          negative=False) -> np.ndarray:
     """
     Compute the distance between each particle and the detection
 
@@ -483,4 +504,7 @@ class SimpleParticleSurveillance(gym.Env):
     np.ndarray
         The distance of each particle from the detection
     """
-    return np.linalg.norm(swarm_pos - detection_pos, axis=1)
+    d = np.linalg.norm(swarm_pos - detection_pos, axis=1)
+    if negative:
+      d = -d
+    return d

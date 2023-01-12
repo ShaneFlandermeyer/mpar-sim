@@ -121,7 +121,7 @@ class IncrementalLocalBestPSO(SwarmOptimizer):
       oh_strategy=None,
       bh_strategy="reflective",
       velocity_clamp=None,
-      vh_strategy="unmodified",
+      vh_strategy="invert",
       center=1.0,
       init_pos=None,
       pbest_reset_interval=None,
