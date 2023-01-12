@@ -280,7 +280,7 @@ class PPOSurveillanceAgent(PPO):
             stochastic_actions.device),
     )
     action = torch.cat((stochastic_actions,) + deterministic_actions, 1)
-    return action, value, action_dist.log_prob(stochastic_actions), action_dist.entropy()
+    return action, value, action_dist.log_prob(stochastic_actions).sum(1), action_dist.entropy().sum(1)
 
   def evaluate_actions(self,
                        observations: torch.Tensor,
@@ -289,7 +289,7 @@ class PPOSurveillanceAgent(PPO):
     actions = actions[:, :self.n_stochastic_actions]
     mean, std, value = self.forward(observations)
     action_dist = torch.distributions.Normal(mean, std)
-    return action_dist.log_prob(actions), action_dist.entropy(), value
+    return action_dist.log_prob(actions).sum(1), action_dist.entropy().sum(1), value
 
   def configure_optimizers(self):
     optimizer = torch.optim.Adam(self.parameters(), lr=3e-4, eps=1e-5)
@@ -301,7 +301,7 @@ class PPOSurveillanceAgent(PPO):
 # %%
 # Create the environment
 env_id = 'mpar_sim/SimpleParticleSurveillance-v0'
-n_env = 32
+n_env = 20
 max_episode_steps = 500
 env = gym.vector.AsyncVectorEnv(
     [make_env(env_id,  max_episode_steps) for _ in range(n_env)])
@@ -318,13 +318,13 @@ el_bw = 5
 bw = 100e6
 pulsewidth = 10e-6
 prf = 5e3
-n_pulses = 20
+n_pulses = 32
 
 ppo_agent = PPOSurveillanceAgent(env,
-                                 n_rollouts_per_epoch=5,
-                                 n_steps_per_rollout=1024,
+                                 n_rollouts_per_epoch=1,
+                                 n_steps_per_rollout=2048,
                                  n_gradient_steps=3,
-                                 batch_size=256,
+                                 batch_size=64,
                                  gamma=0.999,
                                  gae_lambda=0.95,
                                  value_coef=0.5,
@@ -348,7 +348,7 @@ ppo_agent = PPOSurveillanceAgent(env,
 #     checkpoint_filename, env=env, seed=seed)
 
 trainer = pl.Trainer(
-    max_epochs=100,
+    max_epochs=500,
     gradient_clip_val=0.5,
     accelerator='gpu',
     devices=1,
