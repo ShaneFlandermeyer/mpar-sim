@@ -108,7 +108,41 @@ def make_env(env_id,
 # ## RL agent defintion
 
 # %%
+class ResidualBlock(nn.Module):
+    def __init__(self, channels):
+        super().__init__()
+        self.conv0 = nn.Conv2d(in_channels=channels, out_channels=channels, kernel_size=3, padding=1)
+        self.conv1 = nn.Conv2d(in_channels=channels, out_channels=channels, kernel_size=3, padding=1)
 
+    def forward(self, x):
+        inputs = x
+        x = nn.functional.relu(x)
+        x = self.conv0(x)
+        x = nn.functional.relu(x)
+        x = self.conv1(x)
+        return x + inputs
+
+
+class ConvSequence(nn.Module):
+    def __init__(self, input_shape, out_channels):
+        super().__init__()
+        self._input_shape = input_shape
+        self._out_channels = out_channels
+        self.conv = nn.Conv2d(in_channels=self._input_shape[0], out_channels=self._out_channels, kernel_size=3, padding=1)
+        self.res_block0 = ResidualBlock(self._out_channels)
+        self.res_block1 = ResidualBlock(self._out_channels)
+
+    def forward(self, x):
+        x = self.conv(x)
+        x = nn.functional.max_pool2d(x, kernel_size=3, stride=2, padding=1)
+        x = self.res_block0(x)
+        x = self.res_block1(x)
+        assert x.shape[1:] == self.get_output_shape()
+        return x
+
+    def get_output_shape(self):
+        _c, h, w = self._input_shape
+        return (self._out_channels, (h + 1) // 2, (w + 1) // 2)
 
 class PPOSurveillanceAgent(PPO):
   def __init__(self,
@@ -130,30 +164,70 @@ class PPOSurveillanceAgent(PPO):
     self.prf = prf
     self.n_pulses = n_pulses
 
-    self.feature_net = nn.Sequential(
-        ortho_init(nn.Conv2d(
-            self.observation_space.shape[0], 32, kernel_size=8, stride=4)),
+    # self.feature_net = nn.Sequential(
+    #     ortho_init(nn.Conv2d(
+    #         self.observation_space.shape[0], 32, kernel_size=8, stride=4)),
+    #     nn.ReLU(),
+    #     ortho_init(nn.Conv2d(32, 64, kernel_size=4, stride=2)),
+    #     nn.ReLU(),
+    #     ortho_init(nn.Conv2d(64, 64, kernel_size=3, stride=1)),
+    #     nn.ReLU(),
+    #     nn.Flatten(start_dim=1, end_dim=-1),
+    #     ortho_init(nn.Linear(64*7*7, 512)),
+    #     nn.ReLU(),
+    # )
+    
+    # self.policy_feature_net = nn.Sequential(
+    #     ortho_init(nn.Conv2d(
+    #         self.observation_space.shape[0], 32, kernel_size=8, stride=4)),
+    #     nn.ReLU(),
+    #     ortho_init(nn.Conv2d(32, 64, kernel_size=4, stride=2)),
+    #     nn.ReLU(),
+    #     ortho_init(nn.Conv2d(64, 64, kernel_size=3, stride=1)),
+    #     nn.ReLU(),
+    #     nn.Flatten(start_dim=1, end_dim=-1),
+    #     ortho_init(nn.Linear(64*7*7, 512)),
+    #     nn.ReLU(),
+    # )
+    # self.value_feature_net = nn.Sequential(
+    #     ortho_init(nn.Conv2d(
+    #         self.observation_space.shape[0], 32, kernel_size=8, stride=4)),
+    #     nn.ReLU(),
+    #     ortho_init(nn.Conv2d(32, 64, kernel_size=4, stride=2)),
+    #     nn.ReLU(),
+    #     ortho_init(nn.Conv2d(64, 64, kernel_size=3, stride=1)),
+    #     nn.ReLU(),
+    #     nn.Flatten(start_dim=1, end_dim=-1),
+    #     ortho_init(nn.Linear(64*7*7, 512)),
+    #     nn.ReLU(),
+    # )
+    
+    shape = self.observation_space.shape
+    conv_seqs = []
+    for out_channels in [16, 32, 32]:
+        conv_seq = ConvSequence(shape, out_channels)
+        shape = conv_seq.get_output_shape()
+        conv_seqs.append(conv_seq)
+    conv_seqs += [
+        nn.Flatten(),
         nn.ReLU(),
-        ortho_init(nn.Conv2d(32, 64, kernel_size=4, stride=2)),
+        nn.Linear(in_features=shape[0] * shape[1] * shape[2], out_features=256),
         nn.ReLU(),
-        ortho_init(nn.Conv2d(64, 64, kernel_size=3, stride=1)),
-        nn.ReLU(),
-        nn.Flatten(start_dim=1, end_dim=-1),
-        ortho_init(nn.Linear(64*7*7, 512)),
-        nn.ReLU(),
-    )
-
+    ]
+    self.feature_net = nn.Sequential(*conv_seqs)
+    
+    
     # The actor head parameterizes the mean and std of a Gaussian distribution for the beam steering angles in az/el.
     self.n_stochastic_actions = 2
     self.action_mean = ortho_init(
-        nn.Linear(512, self.n_stochastic_actions), std=0.01)
+        nn.Linear(256, self.n_stochastic_actions), std=0.01)
 
     self.action_std = nn.Sequential(
-        ortho_init(nn.Linear(512, self.n_stochastic_actions)),
+        ortho_init(nn.Linear(256, self.n_stochastic_actions)),
         nn.Softplus(),
     )
 
-    self.critic = ortho_init(nn.Linear(512, 1), std=1.0)
+    self.critic = ortho_init(nn.Linear(256, 1), std=1.0)
 
     self.save_hyperparameters()
 
@@ -166,6 +240,17 @@ class PPOSurveillanceAgent(PPO):
     # Compute the value of the state
     value = self.critic(feature).flatten()
     return mean, std, value
+
+#   def forward(self, x: torch.Tensor):
+#     policy_features = self.policy_feature_net(x / 255.0)
+#     value_features = self.value_feature_net(x / 255.0)
+#     # Sample the action from its distribution
+#     mean = self.action_mean(policy_features)
+#     std = self.action_std(policy_features)
+
+#     # Compute the value of the state
+#     value = self.critic(value_features).flatten()
+#     return mean, std, value
 
   def act(self, observations: torch.Tensor, deterministic: bool = False):
     mean, std, value = self.forward(observations)
@@ -207,7 +292,7 @@ class PPOSurveillanceAgent(PPO):
     return action_dist.log_prob(actions), action_dist.entropy(), value
 
   def configure_optimizers(self):
-    optimizer = torch.optim.Adam(self.parameters(), lr=5e-4, eps=1e-5)
+    optimizer = torch.optim.Adam(self.parameters(), lr=3e-4, eps=1e-5)
     return optimizer
 
 
@@ -221,6 +306,7 @@ max_episode_steps = 500
 env = gym.vector.AsyncVectorEnv(
     [make_env(env_id,  max_episode_steps) for _ in range(n_env)])
 env = gym.wrappers.RecordEpisodeStatistics(env=env, deque_size=20)
+env = gym.wrappers.NormalizeReward(env, gamma=0.999)
 
 
 # %% [markdown]
@@ -235,14 +321,14 @@ prf = 5e3
 n_pulses = 32
 
 ppo_agent = PPOSurveillanceAgent(env,
-                                 n_rollouts_per_epoch=5,
+                                 n_rollouts_per_epoch=3,
                                  n_steps_per_rollout=256,
                                  n_gradient_steps=3,
                                  batch_size=2048,
-                                 gamma=0.99,
+                                 gamma=0.999,
                                  gae_lambda=0.95,
-                                 value_coef=1e-3,
-                                 entropy_coef=0,
+                                 value_coef=0.5,
+                                 entropy_coef=0.01,
                                  seed=seed,
                                  normalize_advantage=True,
                                  policy_clip_range=0.2,
