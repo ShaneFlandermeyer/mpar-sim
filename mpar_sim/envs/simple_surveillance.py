@@ -94,7 +94,7 @@ class SimpleParticleSurveillance(gym.Env):
     self.seed = seed
 
     self.observation_space = spaces.Box(
-        low=0, high=255, shape=(50, 50, 1), dtype=np.uint8)
+        low=0, high=255, shape=(42, 42, 1), dtype=np.uint8)
 
     self.action_space = spaces.Box(
         low=np.array(

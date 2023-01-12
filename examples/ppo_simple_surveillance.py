@@ -318,17 +318,17 @@ el_bw = 5
 bw = 100e6
 pulsewidth = 10e-6
 prf = 5e3
-n_pulses = 32
+n_pulses = 20
 
 ppo_agent = PPOSurveillanceAgent(env,
-                                 n_rollouts_per_epoch=3,
-                                 n_steps_per_rollout=256,
+                                 n_rollouts_per_epoch=5,
+                                 n_steps_per_rollout=1024,
                                  n_gradient_steps=3,
-                                 batch_size=2048,
+                                 batch_size=256,
                                  gamma=0.999,
                                  gae_lambda=0.95,
                                  value_coef=0.5,
-                                 entropy_coef=0.01,
+                                 entropy_coef=0,
                                  seed=seed,
                                  normalize_advantage=True,
                                  policy_clip_range=0.2,
@@ -343,7 +343,7 @@ ppo_agent = PPOSurveillanceAgent(env,
                                  )
 
 
-# checkpoint_filename = "/home/shane/src/mpar-sim/lightning_logs/version_633/checkpoints/epoch=84-step=5100.ckpt"
+# checkpoint_filename = "/home/shane/src/mpar-sim/lightning_logs/version_658/checkpoints/epoch=99-step=5100.ckpt"
 # ppo_agent = PPOSurveillanceAgent.load_from_checkpoint(
 #     checkpoint_filename, env=env, seed=seed)
 
@@ -389,40 +389,40 @@ el_axis = np.linspace(-45, 45, beam_coverage_map.shape[0])
 
 
 # Test the PPO agent
-tic = time.time()
-obs, info = env.reset(seed=seed)
-dones = np.zeros(n_env, dtype=bool)
-i = 0
-with torch.no_grad():
-  while not np.all(dones):
-    obs_tensor = torch.as_tensor(obs).to(
-        device=ppo_agent.device, dtype=torch.float32)
-    action_tensor = ppo_agent.act(obs_tensor, deterministic=False)[0]
-    actions = action_tensor.cpu().numpy()
-    # Repeat actions for all environments
-    obs, reward, terminated, truncated, info = env.step(actions)
-    dones = np.logical_or(dones, np.logical_or(terminated, truncated))
+# tic = time.time()
+# obs, info = env.reset(seed=seed)
+# dones = np.zeros(n_env, dtype=bool)
+# i = 0
+# with torch.no_grad():
+#   while not np.all(dones):
+#     obs_tensor = torch.as_tensor(obs).to(
+#         device=ppo_agent.device, dtype=torch.float32)
+#     action_tensor = ppo_agent.act(obs_tensor, deterministic=False)[0]
+#     actions = action_tensor.cpu().numpy()
+#     # Repeat actions for all environments
+#     obs, reward, terminated, truncated, info = env.step(actions)
+#     dones = np.logical_or(dones, np.logical_or(terminated, truncated))
 
-    ppo_init_ratio[i, ~dones] = info['initiation_ratio'][~dones]
-    ppo_tracks_init[i:, ~np.logical_or(
-        terminated, truncated)] = info['n_tracks_initiated'][~np.logical_or(terminated, truncated)]
-    # if i == 100:
-    #   plt.imshow(obs[0, 3, :, :])
-    #   plt.show()
+#     ppo_init_ratio[i, ~dones] = info['initiation_ratio'][~dones]
+#     ppo_tracks_init[i:, ~np.logical_or(
+#         terminated, truncated)] = info['n_tracks_initiated'][~np.logical_or(terminated, truncated)]
+#     # if i == 100:
+#     #   plt.imshow(obs[0, 3, :, :])
+#     #   plt.show()
 
-    # Add 1 to the pixels illuminated by the current beam using np.digitize
-    if not dones[0]:
-      actions[0, :] = wrap_to_interval(actions[0, :], -45, 45)
-      az = np.digitize(actions[0, 0], az_axis, right=True)
-      el = np.digitize(actions[0, 1], el_axis[::-1], right=True)
-      beam_coverage_map[max(el-2, 0):min(el+2, len(el_axis)),
-                        max(az-2, 0):min(az+2, len(az_axis))] += 1
-    # beam_coverage_map *= 0.99
+#     # Add 1 to the pixels illuminated by the current beam using np.digitize
+#     if not dones[0]:
+#       actions[0, :] = wrap_to_interval(actions[0, :], -45, 45)
+#       az = np.digitize(actions[0, 0], az_axis, right=True)
+#       el = np.digitize(actions[0, 1], el_axis[::-1], right=True)
+#       beam_coverage_map[max(el-2, 0):min(el+2, len(el_axis)),
+#                         max(az-2, 0):min(az+2, len(az_axis))] += 1
+#     # beam_coverage_map *= 0.99
 
-    i += 1
-toc = time.time()
-print("PPO agent done")
-print(f"Time elapsed: {toc-tic:.2f} seconds")
+#     i += 1
+# toc = time.time()
+# print("PPO agent done")
+# print(f"Time elapsed: {toc-tic:.2f} seconds")
 
 # # Test the raster agent
 tic = time.time()
