@@ -94,7 +94,7 @@ class SimpleParticleSurveillance(gym.Env):
     self.seed = seed
 
     self.observation_space = spaces.Box(
-        low=0, high=255, shape=(64, 64, 1), dtype=np.uint8)
+        low=0, high=255, shape=(84, 84, 1), dtype=np.uint8)
 
     self.action_space = spaces.Box(
         low=np.array(
@@ -210,7 +210,6 @@ class SimpleParticleSurveillance(gym.Env):
       terminated = True
     else:
       terminated = False
-    terminated = False
 
     truncated = False
 
@@ -434,7 +433,7 @@ class SimpleParticleSurveillance(gym.Env):
   ############################################################################
 
   # Mutate all particles that are in the current beam. Since the density of particles represents a sort of untracked target density, this represents the idea that we have searched this az/el region and unseen targets are unlikely to exist there. If lots of detections are found, many optimization steps will be carried out to bring particles back into the beam. Otherwise, the beam region should be mostly empty.
-  def _mutate_swarm(self, look: Look, alpha: float = 0.15):
+  def _mutate_swarm(self, look: Look, alpha: float = 5, beta: float = 0.15):
     """
     Perform a Gaussian mutation on all particles that are in the current beam.
 
@@ -450,12 +449,14 @@ class SimpleParticleSurveillance(gym.Env):
     relative_pos = self.swarm_optim.swarm.position - \
         np.array([look.azimuth_steering_angle,
                   look.elevation_steering_angle])
-    # velocity = relative_pos / np.linalg.norm(relative_pos, axis=1)[:, None]
-    # TODO: Scale the velocity based on the distance from the detection.
-    velocity = alpha * relative_pos * \
-        np.exp(-0.1*np.linalg.norm(relative_pos, axis=1)[:, None])
-    self.swarm_optim.swarm.velocity += velocity * \
-        self.np_random.standard_normal(velocity.shape)
+    velocity = relative_pos / np.linalg.norm(relative_pos, axis=1)[:, None]
+    # Exponentially reduce the velocity based on the distance from the beam.
+    velocity = alpha * velocity * \
+        np.exp(-beta*np.linalg.norm(relative_pos, axis=1)[:, None])
+    # The variation should also depend on the beamwidth
+    velocity *= self.np_random.multivariate_normal(
+        [0, 0], np.diag([look.azimuth_beamwidth, look.elevation_beamwidth]), velocity.shape[0])
+    self.swarm_optim.swarm.velocity = velocity
     self.swarm_optim.swarm.position += velocity
 #
     self.swarm_optim.swarm.position = wrap_to_interval(

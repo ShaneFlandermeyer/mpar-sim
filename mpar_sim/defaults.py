@@ -72,7 +72,8 @@ def default_lbest_pso():
   return IncrementalLocalBestPSO(n_particles=2500,
                                  dimensions=2,
                                  options=options,
-                                 bounds=np.array([[-45, -45], [45, 45]]),
+                                 bounds=np.array(
+                                     [[-45-2.5, -45+2.5], [45-2.5, 45+2.5]]),
                                  pbest_reset_interval=np.Inf,
                                  static=True,
                                  )

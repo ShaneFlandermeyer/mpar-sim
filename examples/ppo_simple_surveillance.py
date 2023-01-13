@@ -97,7 +97,8 @@ def make_env(env_id,
     env = SqueezeImage(env)
     env = gym.wrappers.FrameStack(env, 4)
     env = gym.wrappers.TimeLimit(env, max_episode_steps=max_episode_steps)
-    env = SquashAction(env, inds=[0, 1])
+    # env = SquashAction(env, inds=[0, 1])
+    env = gym.wrappers.ClipAction(env)
 
     return env
 
@@ -164,32 +165,30 @@ class PPOSurveillanceAgent(PPO):
     self.prf = prf
     self.n_pulses = n_pulses
     
-    shape = self.observation_space.shape
-    conv_seqs = []
-    for out_channels in [16, 32, 32]:
-        conv_seq = ConvSequence(shape, out_channels)
-        shape = conv_seq.get_output_shape()
-        conv_seqs.append(conv_seq)
-    conv_seqs += [
-        nn.Flatten(),
+    self.feature_net = nn.Sequential(
+        ortho_init(nn.Conv2d(
+            self.observation_space.shape[0], 32, kernel_size=8, stride=4)),
         nn.ReLU(),
-        nn.Linear(in_features=shape[0] * shape[1] * shape[2], out_features=256),
+        ortho_init(nn.Conv2d(32, 64, kernel_size=4, stride=2)),
         nn.ReLU(),
-    ]
-    self.feature_net = nn.Sequential(*conv_seqs)
-    
-    
+        ortho_init(nn.Conv2d(64, 64, kernel_size=3, stride=1)),
+        nn.ReLU(),
+        nn.Flatten(start_dim=1, end_dim=-1),
+        ortho_init(nn.Linear(64*7*7, 512)),
+        nn.ReLU(),
+    )
+
     # The actor head parameterizes the mean and std of a Gaussian distribution for the beam steering angles in az/el.
     self.n_stochastic_actions = 2
     self.action_mean = ortho_init(
-        nn.Linear(256, self.n_stochastic_actions), std=0.01)
-
+        nn.Linear(512, self.n_stochastic_actions), std=0.01)
+    
     self.action_std = nn.Sequential(
-        ortho_init(nn.Linear(256, self.n_stochastic_actions)),
+        ortho_init(nn.Linear(512, self.n_stochastic_actions)),
         nn.Softplus(),
     )
 
-    self.critic = ortho_init(nn.Linear(256, 1), std=1.0)
+    self.critic = ortho_init(nn.Linear(512, 1), std=1.0)
 
     self.save_hyperparameters()
 
@@ -243,7 +242,7 @@ class PPOSurveillanceAgent(PPO):
     return action_dist.log_prob(actions).sum(1), action_dist.entropy().sum(1), value
 
   def configure_optimizers(self):
-    optimizer = torch.optim.Adam(self.parameters(), lr=3e-4, eps=1e-5)
+    optimizer = torch.optim.Adam(self.parameters(), lr=5e-4, eps=1e-5)
     return optimizer
 
 
@@ -253,7 +252,7 @@ class PPOSurveillanceAgent(PPO):
 # Create the environment
 env_id = 'mpar_sim/SimpleParticleSurveillance-v0'
 n_env = 20
-max_episode_steps = 250
+max_episode_steps = 500
 env = gym.vector.AsyncVectorEnv(
     [make_env(env_id,  max_episode_steps) for _ in range(n_env)])
 env = gym.wrappers.RecordEpisodeStatistics(env=env, deque_size=20)
@@ -273,11 +272,11 @@ ppo_agent = PPOSurveillanceAgent(env,
                                  n_rollouts_per_epoch=3,
                                  n_steps_per_rollout=512,
                                  n_gradient_steps=3,
-                                 batch_size=64,
-                                 gamma=0.999,
+                                 batch_size=2048,
+                                 gamma=0.99,
                                  gae_lambda=0.95,
                                  value_coef=0.5,
-                                 entropy_coef=0,
+                                 entropy_coef=0.01,
                                  seed=seed,
                                  normalize_advantage=True,
                                  policy_clip_range=0.2,
@@ -292,17 +291,17 @@ ppo_agent = PPOSurveillanceAgent(env,
                                  )
 
 
-# checkpoint_filename = "/home/shane/src/mpar-sim/lightning_logs/version_658/checkpoints/epoch=99-step=5100.ckpt"
-# ppo_agent = PPOSurveillanceAgent.load_from_checkpoint(
-#     checkpoint_filename, env=env, seed=seed)
+checkpoint_filename = "/home/shane/src/mpar-sim/lightning_logs/version_695/checkpoints/epoch=39-step=1800.ckpt"
+ppo_agent = PPOSurveillanceAgent.load_from_checkpoint(
+    checkpoint_filename, env=env, seed=seed)
 
-trainer = pl.Trainer(
-    max_epochs=250,
-    gradient_clip_val=0.5,
-    accelerator='gpu',
-    devices=1,
-)
-trainer.fit(ppo_agent)
+# trainer = pl.Trainer(
+#     max_epochs=250,
+#     gradient_clip_val=0.5,
+#     accelerator='gpu',
+#     devices=1,
+# )
+# trainer.fit(ppo_agent)
 
 
 # %% [markdown]
@@ -338,73 +337,73 @@ el_axis = np.linspace(-45, 45, beam_coverage_map.shape[0])
 
 
 # Test the PPO agent
-# tic = time.time()
-# obs, info = env.reset(seed=seed)
-# dones = np.zeros(n_env, dtype=bool)
-# i = 0
-# with torch.no_grad():
-#   while not np.all(dones):
-#     obs_tensor = torch.as_tensor(obs).to(
-#         device=ppo_agent.device, dtype=torch.float32)
-#     action_tensor = ppo_agent.act(obs_tensor, deterministic=False)[0]
-#     actions = action_tensor.cpu().numpy()
-#     # Repeat actions for all environments
-#     obs, reward, terminated, truncated, info = env.step(actions)
-#     dones = np.logical_or(dones, np.logical_or(terminated, truncated))
+tic = time.time()
+obs, info = env.reset(seed=seed)
+dones = np.zeros(n_env, dtype=bool)
+i = 0
+with torch.no_grad():
+  while not np.all(dones):
+    obs_tensor = torch.as_tensor(obs).to(
+        device=ppo_agent.device, dtype=torch.float32)
+    action_tensor = ppo_agent.act(obs_tensor, deterministic=False)[0]
+    actions = action_tensor.cpu().numpy()
+    # Repeat actions for all environments
+    obs, reward, terminated, truncated, info = env.step(actions)
+    dones = np.logical_or(dones, np.logical_or(terminated, truncated))
 
-#     ppo_init_ratio[i, ~dones] = info['initiation_ratio'][~dones]
-#     ppo_tracks_init[i:, ~np.logical_or(
-#         terminated, truncated)] = info['n_tracks_initiated'][~np.logical_or(terminated, truncated)]
-#     # if i == 100:
-#     #   plt.imshow(obs[0, 3, :, :])
-#     #   plt.show()
+    ppo_init_ratio[i, ~dones] = info['initiation_ratio'][~dones]
+    ppo_tracks_init[i:, ~np.logical_or(
+        terminated, truncated)] = info['n_tracks_initiated'][~np.logical_or(terminated, truncated)]
+    # if i == 100:
+    #   plt.imshow(obs[0, 3, :, :])
+    #   plt.show()
 
-#     # Add 1 to the pixels illuminated by the current beam using np.digitize
-#     if not dones[0]:
-#       actions[0, :] = wrap_to_interval(actions[0, :], -45, 45)
-#       az = np.digitize(actions[0, 0], az_axis, right=True)
-#       el = np.digitize(actions[0, 1], el_axis[::-1], right=True)
-#       beam_coverage_map[max(el-2, 0):min(el+2, len(el_axis)),
-#                         max(az-2, 0):min(az+2, len(az_axis))] += 1
-#     # beam_coverage_map *= 0.99
+    # Add 1 to the pixels illuminated by the current beam using np.digitize
+    if not dones[0]:
+      actions[0, :] = wrap_to_interval(actions[0, :], -45, 45)
+      az = np.digitize(actions[0, 0], az_axis, right=True)
+      el = np.digitize(actions[0, 1], el_axis[::-1], right=True)
+      beam_coverage_map[max(el-2, 0):min(el+2, len(el_axis)),
+                        max(az-2, 0):min(az+2, len(az_axis))] += 1
+    # beam_coverage_map *= 0.99
 
-#     i += 1
-# toc = time.time()
-# print("PPO agent done")
-# print(f"Time elapsed: {toc-tic:.2f} seconds")
+    i += 1
+toc = time.time()
+print("PPO agent done")
+print(f"Time elapsed: {toc-tic:.2f} seconds")
 
-# # # Test the raster agent
-# tic = time.time()
+# # Test the raster agent
+tic = time.time()
 
-# obs, info = env.reset(seed=seed)
-# dones = np.zeros(n_env, dtype=bool)
-# i = 0
-# while not np.all(dones):
-#   look = raster_agent.act(obs)
-#   actions = np.array([[look.azimuth_steering_angle,
-#                      look.elevation_steering_angle,
-#                      look.azimuth_beamwidth,
-#                      look.elevation_beamwidth,
-#                      look.bandwidth,
-#                      look.pulsewidth,
-#                      look.prf,
-#                      look.n_pulses]])
-#   actions = np.repeat(actions, n_env, axis=0)
-#   # Repeat actions for all environments
-#   obs, reward, terminated, truncated, info = env.step(actions)
-#   dones = np.logical_or(dones, np.logical_or(terminated, truncated))
-#   raster_init_ratio[i, ~dones] = info['initiation_ratio'][~dones]
-#   raster_tracks_init[i:, ~np.logical_or(
-#       terminated, truncated)] = info['n_tracks_initiated'][~np.logical_or(terminated, truncated)]
-# #   if i == 500:
-# #     #   pixels = np.flip(pixels.squeeze(), axis=1)
-# #       plt.imshow(np.flip(obs[0, 1, :, :].squeeze(), axis=1))
-# #       plt.show()
-#   i += 1
+obs, info = env.reset(seed=seed)
+dones = np.zeros(n_env, dtype=bool)
+i = 0
+while not np.all(dones):
+  look = raster_agent.act(obs)
+  actions = np.array([[look.azimuth_steering_angle,
+                     look.elevation_steering_angle,
+                     look.azimuth_beamwidth,
+                     look.elevation_beamwidth,
+                     look.bandwidth,
+                     look.pulsewidth,
+                     look.prf,
+                     look.n_pulses]])
+  actions = np.repeat(actions, n_env, axis=0)
+  # Repeat actions for all environments
+  obs, reward, terminated, truncated, info = env.step(actions)
+  dones = np.logical_or(dones, np.logical_or(terminated, truncated))
+  raster_init_ratio[i, ~dones] = info['initiation_ratio'][~dones]
+  raster_tracks_init[i:, ~np.logical_or(
+      terminated, truncated)] = info['n_tracks_initiated'][~np.logical_or(terminated, truncated)]
+#   if i == 500:
+#     #   pixels = np.flip(pixels.squeeze(), axis=1)
+#       plt.imshow(np.flip(obs[0, 1, :, :].squeeze(), axis=1))
+#       plt.show()
+  i += 1
 
-# toc = time.time()
-# print("Raster agent done")
-# print(f"Time elapsed: {toc-tic:.2f} seconds")
+toc = time.time()
+print("Raster agent done")
+print(f"Time elapsed: {toc-tic:.2f} seconds")
 env.close()
 
 # %% [markdown]
