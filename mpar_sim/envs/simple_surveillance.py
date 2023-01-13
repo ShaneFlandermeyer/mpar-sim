@@ -94,7 +94,7 @@ class SimpleParticleSurveillance(gym.Env):
     self.seed = seed
 
     self.observation_space = spaces.Box(
-        low=0, high=255, shape=(84, 84, 1), dtype=np.uint8)
+        low=0, high=255, shape=(2, 84, 84), dtype=np.uint8)
 
     self.action_space = spaces.Box(
         low=np.array(
@@ -198,7 +198,8 @@ class SimpleParticleSurveillance(gym.Env):
 
     # Update useful info
     self.target_history |= set(self.target_paths)
-    self.detection_history.append(detections)
+    if detections:
+      self.detection_history.append(detections)
 
     # Create outputs
     observation = self._get_obs()
@@ -280,22 +281,29 @@ class SimpleParticleSurveillance(gym.Env):
         Output image where each pixel has a value equal to the number of swarm particles in that pixel.
     """
     # Form the az/el image
+    obs = np.zeros(self.observation_space.shape)
     az_indices = np.digitize(
         self.swarm_optim.swarm.position[:, 0], self.az_axis, right=True)
     el_indices = np.digitize(
         self.swarm_optim.swarm.position[:, 1], self.el_axis, right=True)
     indices = az_indices * self.observation_space.shape[1] + el_indices
-    obs = np.clip(np.bincount(indices, minlength=np.prod(
-        self.observation_space.shape)).reshape(self.observation_space.shape),
-        0, 255)
-    # TODO: Form the range/doppler image
-    # if len(self.detection_history) > 0:
-    #   range_axis = np.arange(0, self.max_unambiguous_range,
-    #                          self.observation_space.shape[0])
-    #   vel_axis = np.arange(-self.max_unambiguous_velocity,
-    #                        self.max_unambiguous_velocity, self.observation_space.shape[1])
-    # ranges = np.array(
-    #     [detection.range for detection in self.detection_history[-1]])
+    obs[0, :, :] = np.clip(np.bincount(indices, minlength=np.prod(
+        self.observation_space.shape[1:])).reshape(self.observation_space.shape[1:]), 0, 255)
+    # Form the range/velocity image
+    if len(self.detection_history) > 0:
+      range_axis = np.linspace(0, self.radar.max_unambiguous_range,
+                               self.observation_space.shape[2])
+      vel_axis = np.linspace(-self.radar.max_unambiguous_radial_speed,
+                             self.radar.max_unambiguous_radial_speed, self.observation_space.shape[1])
+      ranges = np.array(
+          [detection.state_vector[2] for detection in self.detection_history[-1]])
+      velocities = np.array(
+          [detection.state_vector[3] for detection in self.detection_history[-1]])
+      range_indices = np.digitize(ranges, range_axis, right=True)
+      vel_indices = np.digitize(velocities, vel_axis, right=True)
+      indices = vel_indices * self.observation_space.shape[1] + range_indices
+      obs[1, :, :] = np.clip(np.bincount(indices.flatten(), minlength=np.prod(
+          self.observation_space.shape[1:])).reshape(self.observation_space.shape[1:])*255, 0, 255)
 
     return obs.astype(np.uint8)
 
@@ -334,7 +342,7 @@ class SimpleParticleSurveillance(gym.Env):
 
     # Draw canvas from pixels
     # The observation gets inverted here because I want black pixels on a white background.
-    pixels = self._get_obs()
+    pixels = self._get_obs()[0, :, :]
     pixels = np.flip(pixels.squeeze(), axis=1)
     canvas = pygame.surfarray.make_surface(pixels)
 

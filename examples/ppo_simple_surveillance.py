@@ -90,11 +90,11 @@ def make_env(env_id,
                    randomize_initial_state=True,
                    max_random_az_covar=5**2,
                    max_random_el_covar=5**2,
-                   render_mode='human',
+                   render_mode='rgb_array',
                    )
 
     # Wrappers
-    env = SqueezeImage(env)
+    # env = SqueezeImage(env)
     env = gym.wrappers.FrameStack(env, 4)
     env = gym.wrappers.TimeLimit(env, max_episode_steps=max_episode_steps)
     # env = SquashAction(env, inds=[0, 1])
@@ -109,41 +109,6 @@ def make_env(env_id,
 # ## RL agent defintion
 
 # %%
-class ResidualBlock(nn.Module):
-    def __init__(self, channels):
-        super().__init__()
-        self.conv0 = nn.Conv2d(in_channels=channels, out_channels=channels, kernel_size=3, padding=1)
-        self.conv1 = nn.Conv2d(in_channels=channels, out_channels=channels, kernel_size=3, padding=1)
-
-    def forward(self, x):
-        inputs = x
-        x = nn.functional.relu(x)
-        x = self.conv0(x)
-        x = nn.functional.relu(x)
-        x = self.conv1(x)
-        return x + inputs
-
-
-class ConvSequence(nn.Module):
-    def __init__(self, input_shape, out_channels):
-        super().__init__()
-        self._input_shape = input_shape
-        self._out_channels = out_channels
-        self.conv = nn.Conv2d(in_channels=self._input_shape[0], out_channels=self._out_channels, kernel_size=3, padding=1)
-        self.res_block0 = ResidualBlock(self._out_channels)
-        self.res_block1 = ResidualBlock(self._out_channels)
-
-    def forward(self, x):
-        x = self.conv(x)
-        x = nn.functional.max_pool2d(x, kernel_size=3, stride=2, padding=1)
-        x = self.res_block0(x)
-        x = self.res_block1(x)
-        assert x.shape[1:] == self.get_output_shape()
-        return x
-
-    def get_output_shape(self):
-        _c, h, w = self._input_shape
-        return (self._out_channels, (h + 1) // 2, (w + 1) // 2)
 
 class PPOSurveillanceAgent(PPO):
   def __init__(self,
@@ -164,10 +129,23 @@ class PPOSurveillanceAgent(PPO):
     self.pulsewidth = pulsewidth
     self.prf = prf
     self.n_pulses = n_pulses
-    
+
     self.feature_net = nn.Sequential(
         ortho_init(nn.Conv2d(
-            self.observation_space.shape[0], 32, kernel_size=8, stride=4)),
+            self.observation_space.shape[0]*self.observation_space.shape[1], 32, kernel_size=8, stride=4)),
+        nn.ReLU(),
+        ortho_init(nn.Conv2d(32, 64, kernel_size=4, stride=2)),
+        nn.ReLU(),
+        ortho_init(nn.Conv2d(64, 64, kernel_size=3, stride=1)),
+        nn.ReLU(),
+        nn.Flatten(start_dim=1, end_dim=-1),
+        ortho_init(nn.Linear(64*7*7, 512)),
+        nn.ReLU(),
+    )
+
+    self.value_feature_net = nn.Sequential(
+        ortho_init(nn.Conv2d(
+            self.observation_space.shape[0]*self.observation_space.shape[1], 32, kernel_size=8, stride=4)),
         nn.ReLU(),
         ortho_init(nn.Conv2d(32, 64, kernel_size=4, stride=2)),
         nn.ReLU(),
@@ -182,7 +160,7 @@ class PPOSurveillanceAgent(PPO):
     self.n_stochastic_actions = 2
     self.action_mean = ortho_init(
         nn.Linear(512, self.n_stochastic_actions), std=0.01)
-    
+
     self.action_std = nn.Sequential(
         ortho_init(nn.Linear(512, self.n_stochastic_actions)),
         nn.Softplus(),
@@ -193,13 +171,17 @@ class PPOSurveillanceAgent(PPO):
     self.save_hyperparameters()
 
   def forward(self, x: torch.Tensor):
+    # Have to reshape the observation tensor to be (batch, channels, height, width). The frame stack wrapper does not automatically apply itself to the channel dimension, so multi-channel observations have to be manually stacked.
+    if len(x.shape) == 5:
+      x = x.view(x.shape[0], -1, x.shape[3], x.shape[4])
     feature = self.feature_net(x / 255.0)
+    value_feature = self.value_feature_net(x / 255.0)
     # Sample the action from its distribution
     mean = self.action_mean(feature)
     std = self.action_std(feature)
 
     # Compute the value of the state
-    value = self.critic(feature).flatten()
+    value = self.critic(value_feature).flatten()
     return mean, std, value
 
   def act(self, observations: torch.Tensor, deterministic: bool = False):
@@ -251,7 +233,7 @@ class PPOSurveillanceAgent(PPO):
 # %%
 # Create the environment
 env_id = 'mpar_sim/SimpleParticleSurveillance-v0'
-n_env = 20
+n_env = 16
 max_episode_steps = 500
 env = gym.vector.AsyncVectorEnv(
     [make_env(env_id,  max_episode_steps) for _ in range(n_env)])
@@ -269,14 +251,14 @@ prf = 5e3
 n_pulses = 32
 
 ppo_agent = PPOSurveillanceAgent(env,
-                                 n_rollouts_per_epoch=3,
-                                 n_steps_per_rollout=512,
+                                 n_rollouts_per_epoch=5,
+                                 n_steps_per_rollout=128,
                                  n_gradient_steps=3,
-                                 batch_size=2048,
+                                 batch_size=256,
                                  gamma=0.99,
                                  gae_lambda=0.95,
-                                 value_coef=0.5,
-                                 entropy_coef=0.01,
+                                 value_coef=1,
+                                 entropy_coef=5e-3,
                                  seed=seed,
                                  normalize_advantage=True,
                                  policy_clip_range=0.2,
@@ -291,17 +273,17 @@ ppo_agent = PPOSurveillanceAgent(env,
                                  )
 
 
-checkpoint_filename = "/home/shane/src/mpar-sim/lightning_logs/version_695/checkpoints/epoch=39-step=1800.ckpt"
+checkpoint_filename = "/home/shane/src/mpar-sim/lightning_logs/version_735/checkpoints/epoch=110-step=13320.ckpt"
 ppo_agent = PPOSurveillanceAgent.load_from_checkpoint(
     checkpoint_filename, env=env, seed=seed)
 
-# trainer = pl.Trainer(
-#     max_epochs=250,
-#     gradient_clip_val=0.5,
-#     accelerator='gpu',
-#     devices=1,
-# )
-# trainer.fit(ppo_agent)
+trainer = pl.Trainer(
+    max_epochs=250,
+    gradient_clip_val=0.5,
+    accelerator='gpu',
+    devices=1,
+)
+trainer.fit(ppo_agent)
 
 
 # %% [markdown]
