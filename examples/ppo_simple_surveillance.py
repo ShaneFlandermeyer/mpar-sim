@@ -86,7 +86,7 @@ def make_env(env_id,
                    death_probability=0,
                    initial_number_targets=50,
                    n_confirm_detections=3,
-                   randomize_initial_state=False,
+                   randomize_initial_state=True,
                    max_random_az_covar=10**2,
                    max_random_el_covar=10**2,
                    render_mode='rgb_array',
@@ -259,7 +259,7 @@ ppo_agent = PPOSurveillanceAgent(env,
                                  )
 
 
-# checkpoint_filename = "/home/shane/src/mpar-sim/lightning_logs/version_568/checkpoints/epoch=74-step=4500.ckpt"
+# checkpoint_filename = "/home/shane/src/mpar-sim/lightning_logs/version_572/checkpoints/epoch=74-step=4500.ckpt"
 # ppo_agent = PPOSurveillanceAgent.load_from_checkpoint(
 #     checkpoint_filename, env=env, seed=seed)
 

@@ -171,10 +171,34 @@ class SimpleParticleSurveillance(gym.Env):
 
       # Update the swarm if an untracked target is detected.
       if isinstance(detection, Clutter) or self.detection_count[target_id] <= self.n_confirm_detections:
+        # TODO: Determine if this works better than the classic PSO update
         az = detection.state_vector[1, 0]
         el = detection.state_vector[0, 0]
-        self.swarm_optim.optimize(
-            self._distance_objective, detection_pos=np.array([az, el]))
+        relative_pos = np.array([az, el]) - self.swarm_optim.swarm.position
+        distance = np.linalg.norm(relative_pos, axis=1)[:, None]
+        velocity = relative_pos / distance * np.exp(-0.05*distance)
+
+        w = 0.75
+        c1 = 2.0
+        self.swarm_optim.swarm.velocity = w*self.swarm_optim.swarm.velocity + \
+            c1*velocity*self.np_random.uniform(0, 1, size=velocity.shape)
+        position = self.swarm_optim.swarm.position
+        velocity = self.swarm_optim.swarm.velocity
+        # Invert the velocity if it would cause the particle to leave the search space.
+        self.swarm_optim.swarm.velocity = np.where(
+            np.logical_or(
+                (position + velocity) < self.swarm_optim.bounds[0],
+                (position + velocity) > self.swarm_optim.bounds[1]),
+            -velocity, velocity)
+        self.swarm_optim.swarm.position = self.swarm_optim.top.compute_position(
+            self.swarm_optim.swarm, self.swarm_optim.bounds, self.swarm_optim.bh
+        )
+
+        # Mutate each particle to prevent them from piling up into one pixel.
+        self.swarm_optim.swarm.position += self.np_random.normal(
+            0, 1, size=self.swarm_optim.swarm.position.shape)
+        self.swarm_optim.swarm.position = np.clip(
+            self.swarm_optim.swarm.position, self.swarm_optim.bounds[0], self.swarm_optim.bounds[1])
 
     # If multiple subarrays are scheduled to execute at once, the timestep will be zero. In this case, don't update the environment just yet.
     # For the single-beam case, this will always execute
@@ -391,7 +415,7 @@ class SimpleParticleSurveillance(gym.Env):
     # TODO: This creates a bimodal distribution from the input state vector to test how the agent handles multiple target sources.
     # if self.np_random.uniform(0, 1) < 0.5:
     #   state_vector[self.radar.position_mapping[0:2]] *= -1
-    
+
     # Convert state vector from spherical to cartesian
     x, y, z = sph2cart(
         *state_vector[self.radar.position_mapping], degrees=True)
@@ -467,6 +491,15 @@ class SimpleParticleSurveillance(gym.Env):
       self.swarm_optim.swarm.position[mutate] = wrap_to_interval(
           self.swarm_optim.swarm.position[mutate],
           self.swarm_optim.bounds[0], self.swarm_optim.bounds[1])
+
+      # Set the velocity of each mutated particle radially away from the beam
+      # TODO: Try doing a position update here
+      relative_pos = self.swarm_optim.swarm.position[mutate] - \
+          np.array([look.azimuth_steering_angle,
+                    look.elevation_steering_angle])
+      velocity = relative_pos / np.linalg.norm(relative_pos, axis=1)[:, None]
+      self.swarm_optim.swarm.velocity[mutate] = velocity * \
+          self.np_random.uniform(0, 1, size=velocity.shape)
 
   def _distance_objective(self,
                           swarm_pos: np.ndarray,
