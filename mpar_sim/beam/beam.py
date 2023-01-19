@@ -40,6 +40,18 @@ class Beam():
     gain_db = beamwidth2gain(
         self.azimuth_beamwidth, self.elevation_beamwidth, self.directivity_beamwidth_prod)
     self.gain = 10**(gain_db/10)
+    
+  def norm_pattern_gain(self,
+                        az: Union[float, np.ndarray],
+                        el: Union[float, np.ndarray]
+                        ) -> Union[float, np.ndarray]:
+    raise NotImplementedError
+
+  def shape_loss(self,
+                        az: Union[float, np.ndarray],
+                        el: Union[float, np.ndarray]
+                        ) -> Union[float, np.ndarray]:
+    raise NotImplementedError
 
 
 class RectangularBeam(Beam):
@@ -67,6 +79,15 @@ class RectangularBeam(Beam):
 
   def __init__(self, *args, **kwargs) -> None:
     super().__init__(*args, **kwargs)
+
+  def norm_pattern_gain(self,
+                        az: Union[float, np.ndarray],
+                        el: Union[float, np.ndarray]
+                        ) -> Union[float, np.ndarray]:
+    gain = np.zeros_like(az)
+    gain[np.logical_or(np.abs(az) <= self.azimuth_beamwidth/2,
+                       np.abs(el) <= self.elevation_beamwidth/2)] = 1
+    return gain
 
   def shape_loss(self,
                  az: Union[float, np.ndarray],
@@ -137,9 +158,9 @@ class GaussianBeam(Beam):
         Beam shape loss (dB)
     """
     az_pattern_gain = np.exp(-4*np.log(2) *
-                     (az / self.azimuth_beamwidth)**2)
+                             (az / self.azimuth_beamwidth)**2)
     el_pattern_gain = np.exp(-4*np.log(2) *
-                     (el / self.elevation_beamwidth)**2)
+                             (el / self.elevation_beamwidth)**2)
     gain = az_pattern_gain*el_pattern_gain
     return -10*np.log10(gain)
 
@@ -153,24 +174,56 @@ class SincBeam(Beam):
                **kwargs) -> None:
     super().__init__(*args, **kwargs)
 
+  def norm_pattern_gain(self,
+                        az: Union[float, np.ndarray],
+                        el: Union[float, np.ndarray]) -> Union[float, np.ndarray]:
+    # All the angles must be raveled to avoid broadcasting issues
+    if isinstance(az, np.ndarray):
+      az = az.ravel()
+    else:
+      az = np.array([az])
+    if isinstance(el, np.ndarray):
+      el = el.ravel()
+    else:
+      el = np.array([el])
+
+    angles = np.atleast_2d(np.array([az, el])).T
+    beamwidths = np.array([self.azimuth_beamwidth, self.elevation_beamwidth])[
+        np.newaxis, :]
+    d_norm = beamwidth2aperture(beamwidths, self.wavelength) / self.wavelength
+    gains = np.sinc(d_norm * np.sin(np.deg2rad(angles)))
+    norm_pattern_gain = np.abs(gains[:, 0] * gains[:, 1])
+    return norm_pattern_gain if norm_pattern_gain.size > 1 else norm_pattern_gain.item()
+
   def shape_loss(self,
                  az: Union[float, np.ndarray],
                  el: Union[float, np.ndarray]) -> Union[float, np.ndarray]:
     """
-    Compute the off-boresight pattern loss.
+    Compute the off-boresight pattern loss for a sinc beam pattern.
+
     Parameters
     ----------
     az : Union[float, np.ndarray]
-        Azimuth angles 
+        Azimuth angle(s)
     el : Union[float, np.ndarray]
-        Elevation angles
+        Elevation angle(s)
     Returns
     -------
     Union[float, np.ndarray]
         Beam shape loss (dB)
     """
-    dnorm = beamwidth2aperture(
-        np.array([self.azimuth_beamwidth, self.elevation_beamwidth]), self.wavelength) / self.wavelength
-    pattern_gains = np.sinc(dnorm * np.sin(np.deg2rad([az, el])))
-    gain = np.prod(pattern_gains)**2
-    return -10*np.log10(gain)
+    power_pattern = self.norm_pattern_gain(az, el)**2
+    shape_loss = -10*np.log10(power_pattern)
+    return shape_loss
+
+
+if __name__ == '__main__':
+  import scipy.constants as sc
+
+  az_bw = el_bw = 5
+  fc = 3e9
+  lambda_ = sc.c/fc
+  beam = SincBeam(lambda_, az_bw, el_bw)
+  beam.shape_loss(0, 0)
+  beam.shape_loss(np.zeros((2,)), np.ones((2,)))
+  beam.shape_loss(np.zeros((5, 1)), np.ones((5, 1)))

@@ -86,10 +86,10 @@ def make_env(env_id,
                    death_probability=0,
                    initial_number_targets=50,
                    n_confirm_detections=3,
-                   randomize_initial_state=True,
-                   max_random_az_covar=5**2,
-                   max_random_el_covar=5**2,
-                   render_mode='human',
+                   randomize_initial_state=False,
+                   max_random_az_covar=10**2,
+                   max_random_el_covar=10**2,
+                   render_mode='rgb_array',
                    )
 
     # Wrappers
@@ -259,17 +259,17 @@ ppo_agent = PPOSurveillanceAgent(env,
                                  )
 
 
-checkpoint_filename = "/home/shane/src/mpar-sim/lightning_logs/version_209/checkpoints/epoch=99-step=6000.ckpt"
-ppo_agent = PPOSurveillanceAgent.load_from_checkpoint(
-    checkpoint_filename, env=env, seed=seed)
+# checkpoint_filename = "/home/shane/src/mpar-sim/lightning_logs/version_568/checkpoints/epoch=74-step=4500.ckpt"
+# ppo_agent = PPOSurveillanceAgent.load_from_checkpoint(
+#     checkpoint_filename, env=env, seed=seed)
 
-# trainer = pl.Trainer(
-#     max_epochs=100,
-#     gradient_clip_val=0.5,
-#     accelerator='gpu',
-#     devices=1,
-# )
-# trainer.fit(ppo_agent)
+trainer = pl.Trainer(
+    max_epochs=75,
+    gradient_clip_val=0.5,
+    accelerator='gpu',
+    devices=1,
+)
+trainer.fit(ppo_agent)
 
 
 # %% [markdown]
@@ -328,11 +328,11 @@ with torch.no_grad():
     #   plt.show()
 
     # Add 1 to the pixels illuminated by the current beam using np.digitize
-    # if i > 100 and not dones[0]:
-    actions[0, :] = wrap_to_interval(actions[0, :], -45, 45)
-    az = np.digitize(actions[0, 0], az_axis, right=True)
-    el = np.digitize(actions[0, 1], el_axis[::-1], right=True)
-    beam_coverage_map[max(el-2, 0):min(el+2, len(el_axis)), max(az-2, 0):min(az+2, len(az_axis))] += 1
+    if not dones[0]:
+        actions[0, :] = np.clip(actions[0, :], -45, 45)
+        az = np.digitize(actions[0, 0], az_axis, right=True)
+        el = np.digitize(actions[0, 1], el_axis[::-1], right=True)
+        beam_coverage_map[max(el-2, 0):min(el+2, len(el_axis)), max(az-2, 0):min(az+2, len(az_axis))] += 1
     # beam_coverage_map *= 0.99
 
     i += 1

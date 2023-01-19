@@ -1,6 +1,7 @@
 import copy
 import datetime
 from typing import Collection, Dict, Optional
+import cv2
 
 import gymnasium as gym
 import numpy as np
@@ -36,9 +37,9 @@ class SimpleParticleSurveillance(gym.Env):
                swarm_optim: SwarmOptimizer = None,
                # Environment parameters
                randomize_initial_state: bool = False,
-               max_random_az_covar: float = 5**2,
-               max_random_el_covar: float = 5**2,
-               n_confirm_detections: int = 2,
+               max_random_az_covar: float = 10**2,
+               max_random_el_covar: float = 10**2,
+               n_confirm_detections: int = 3,
                seed: int = None,
                render_mode: str = None,
                ):
@@ -148,9 +149,9 @@ class SimpleParticleSurveillance(gym.Env):
       path.states[-1].rcs = 10
 
     detections = self.radar.measure(self.target_paths, noise=True)
-    
+
     # Mutate particles away from the direction that has just been searched.
-    self._mutate_swarm(look)
+    self._mutate_swarm(look, alpha=0.10)
 
     reward = 0
     for detection in detections:
@@ -164,10 +165,10 @@ class SimpleParticleSurveillance(gym.Env):
         if self.detection_count[target_id] == self.n_confirm_detections:
           self.n_tracks_initiated += 1
 
-        # Reward the agent for detecting a target
+        # Reward the agent updating a tentative track
         if 2 <= self.detection_count[target_id] <= self.n_confirm_detections:
           reward += 1
-      
+
       # Update the swarm if an untracked target is detected.
       if isinstance(detection, Clutter) or self.detection_count[target_id] <= self.n_confirm_detections:
         az = detection.state_vector[1, 0]
@@ -186,7 +187,7 @@ class SimpleParticleSurveillance(gym.Env):
             del self.detection_count[path.id]
 
       # Move targets forward in time
-      self._move_targets(timestep)
+      # self._move_targets(timestep)
 
       # Randomly create new targets
       for _ in range(self.np_random.poisson(self.birth_rate)):
@@ -285,9 +286,9 @@ class SimpleParticleSurveillance(gym.Env):
     indices = az_indices * self.observation_space.shape[1] + el_indices
     obs = np.clip(np.bincount(indices, minlength=np.prod(
         self.observation_space.shape)).reshape(self.observation_space.shape),
-        0, 255).astype(np.uint8)
+        0, 255)
 
-    return obs
+    return obs.astype(np.uint8)
 
   def _get_info(self):
     """
@@ -316,16 +317,16 @@ class SimpleParticleSurveillance(gym.Env):
     if self.window is None and self.render_mode == "human":
       pygame.init()
       pygame.display.init()
-      self.window = pygame.display.set_mode(
-          self.observation_space.shape[:2])
+      self.window = pygame.display.set_mode((256, 256))
 
     if self.clock is None and self.render_mode == "human":
       self.clock = pygame.time.Clock()
 
     # Draw canvas from pixels
     # The observation gets inverted here because I want black pixels on a white background.
-    pixels = self._get_obs()
+    pixels = self._get_obs()[:, :, 0]
     pixels = np.flip(pixels.squeeze(), axis=1)
+    pixels = cv2.resize(pixels, (256, 256), interpolation=cv2.INTER_NEAREST)
     canvas = pygame.surfarray.make_surface(pixels)
 
     if self.render_mode == "human":
@@ -346,14 +347,17 @@ class SimpleParticleSurveillance(gym.Env):
     """
     Create new targets based on the initial state and preexisting states specified in the environment's input arguments
     """
+    n_initial_targets = self.initial_number_targets
     if self.preexisting_states or self.initial_number_targets:
       # Use preexisting_states to make some ground truth paths
       preexisting_paths = [self._new_target(
           self.time, state_vector=state) for state in self.preexisting_states]
 
       # Simulate more groundtruth paths for the number of initial targets
-      initial_simulated_paths = [self._new_target(
-          self.time) for _ in range(self.initial_number_targets)]
+      n_initial_targets -= len(self.preexisting_states)
+      if n_initial_targets > 0:
+        initial_simulated_paths = [self._new_target(
+            self.time) for _ in range(n_initial_targets)]
       self.target_paths = preexisting_paths + initial_simulated_paths
     else:
       self.target_paths = []
@@ -376,15 +380,19 @@ class SimpleParticleSurveillance(gym.Env):
     GroundTruthPath
         A new ground truth path starting at the target's initial state
     """
-    # TODO: Allow multiple target centers by making the initial state vector/covariance a collection with a categorical weight to give the probability that a new target comes from that point.
     state_vector = state_vector or self.np_random.multivariate_normal(
         mean=self.initial_state.state_vector.ravel(),
         cov=self.initial_state.covar)
     state_vector = state_vector.ravel()
-    # Convert state vector from spherical to cartesian
+    state_vector[self.radar.position_mapping] = np.clip(
+        state_vector[self.radar.position_mapping],
+        [self.radar.az_fov[0], self.radar.el_fov[0], self.radar.min_range],
+        [self.radar.az_fov[1], self.radar.el_fov[1], self.radar.max_range])
     # TODO: This creates a bimodal distribution from the input state vector to test how the agent handles multiple target sources.
     # if self.np_random.uniform(0, 1) < 0.5:
     #   state_vector[self.radar.position_mapping[0:2]] *= -1
+    
+    # Convert state vector from spherical to cartesian
     x, y, z = sph2cart(
         *state_vector[self.radar.position_mapping], degrees=True)
     state_vector[self.radar.position_mapping] = np.array([x, y, z])
@@ -426,7 +434,7 @@ class SimpleParticleSurveillance(gym.Env):
   def _mutate_swarm(self, look: Look, alpha: float = 0.25):
     """
     Perform a Gaussian mutation on all particles that are in the current beam.
-    
+
     Since the density of particles represents the density of untracked targets, this mutation means that areas that have recently been searched are not likely to contain unseen targets. If lots of detections are found after this step, particles will be drawn back to the beam region, which should encourage the agent to search there again. Otherwise, the agent will be encouraged to search other areas that have not been searched recently.
 
     Parameters
@@ -449,12 +457,12 @@ class SimpleParticleSurveillance(gym.Env):
             self.swarm_optim.swarm.position[:, 1] <= max_el))
     if mutate.any():
       sigma = alpha*(self.swarm_optim.bounds[1] -
-                    self.swarm_optim.bounds[0]).reshape(1, -1)
+                     self.swarm_optim.bounds[0]).reshape(1, -1)
       sigma = np.repeat(sigma, np.count_nonzero(mutate), axis=0)
 
       self.swarm_optim.swarm.position[mutate] += self.np_random.normal(
           np.zeros_like(sigma), sigma)
-      
+
       # If the particle position exceeds the az/el bounds, wrap it back into the range on the other side. This improves diversity when detections are at the edge of the space compared to simple clipping.
       self.swarm_optim.swarm.position[mutate] = wrap_to_interval(
           self.swarm_optim.swarm.position[mutate],

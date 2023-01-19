@@ -17,6 +17,7 @@ from mpar_sim.models.measurement.estimation import (angle_crlb, range_crlb,
 from mpar_sim.models.measurement.nonlinear import CartesianToRangeAzElRangeRate
 from mpar_sim.types.detection import Clutter, TrueDetection
 from mpar_sim.types.groundtruth import GroundTruthState
+from scipy.special import gammaincinv
 
 
 class PhasedArrayRadar():
@@ -46,9 +47,11 @@ class PhasedArrayRadar():
                # Detection settings
                false_alarm_rate: float = 1e-6,
                include_false_alarms: bool = True,
-               max_range: float = np.inf,
                az_fov: Union[List, np.ndarray] = np.array([-90, 90]),
                el_fov: Union[List, np.ndarray] = np.array([-90, 90]),
+               min_range: float = 0,
+               max_range: float = np.inf,
+               max_range_rate: float = np.inf,
                ) -> None:
     self.ndim_state = ndim_state
     self.position = position
@@ -69,9 +72,11 @@ class PhasedArrayRadar():
     self.beam_shape = beam_shape
     self.false_alarm_rate = false_alarm_rate
     self.include_false_alarms = include_false_alarms
-    self.max_range = max_range
     self.az_fov = az_fov
     self.el_fov = el_fov
+    self.min_range = min_range
+    self.max_range = max_range
+    self.max_range_rate = max_range_rate
 
     # Compute the maximum possible beamwidth in az/el for the array geometry
     aperture_width = self.n_elements_x * self.element_spacing * self.wavelength
@@ -182,12 +187,12 @@ class PhasedArrayRadar():
     """
     return (self.az_fov[0] <= target_az <= self.az_fov[1]) and \
            (self.el_fov[0] <= target_el <= self.el_fov[1]) and \
-           (target_range <= self.max_range)
+           (self.min_range <= target_range <= self.max_range)
 
   @clearable_cached_property('rotation_offset')
   def _rotation_matrix(self) -> np.ndarray:
     """3D axis rotation matrix"""
-    # TODO: This may not be correct
+    # TODO: This may not be correct, but everything for the thesis assumes the radar is oriented at (0,0,0)
     theta_x = -self.rotation_offset[0, 0]  # roll
     theta_y = self.rotation_offset[1, 0]  # pitch/elevation
     theta_z = -self.rotation_offset[2, 0]  # yaw/azimuth
@@ -282,6 +287,7 @@ class PhasedArrayRadar():
 
         measurement = measurement_model.function(state_vector, noise=noise)
         detection = TrueDetection(state_vector=measurement,
+                                  snr=snr_db,
                                   timestamp=truth[-1].timestamp,
                                   measurement_model=measurement_model,
                                   groundtruth_path=truth)
@@ -296,7 +302,7 @@ class PhasedArrayRadar():
       n_expected_false_alarms = self.false_alarm_rate * n_range_bins * n_vel_bins
       n_false_alarms = int(np.random.poisson(n_expected_false_alarms))
 
-      # Generate random false alarm positions
+      # Generate random false alarm measurements
       el = np.random.uniform(low=-self.tx_beam.elevation_beamwidth/2,
                              high=self.tx_beam.elevation_beamwidth/2,
                              size=n_false_alarms) + self.tx_beam.elevation_steering_angle
@@ -317,12 +323,14 @@ class PhasedArrayRadar():
           self.velocity_resolution + self.velocity_resolution/2
 
       # Add false alarms to the detection report
+      snr_db = 20*np.log10(gammaincinv(1, 1 - self.false_alarm_rate))
       for i in range(n_false_alarms):
         state_vector = np.array([[np.deg2rad(el[i])],
                                  [np.deg2rad(az[i])],
                                  [r[i]],
                                  [v[i]]])
         detections.add(Clutter(state_vector=state_vector,
+                               snr=snr_db,
                                timestamp=truth[-1].timestamp if truth else timestamp,
                                measurement_model=measurement_model))
 

@@ -8,12 +8,14 @@ from mpar_sim.types.groundtruth import GroundTruthPath
 class Detection():
   def __init__(self,
                state_vector: np.ndarray,
+               snr: float = None,
                timestamp: datetime.datetime = None,
                measurement_model: MeasurementModel = None,
                metadata: dict = {},
                **kwargs
                ):
     self.state_vector = state_vector
+    self.snr = snr
     self.timestamp = timestamp
     self.measurement_model = measurement_model
     self.metadata = metadata
