@@ -97,7 +97,8 @@ def make_env(env_id,
     env = gym.wrappers.FrameStack(env, 4)
     env = gym.wrappers.TimeLimit(env, max_episode_steps=max_episode_steps)
     env = gym.wrappers.ClipAction(env)
-    # env = gym.wrappers.NormalizeReward(env)
+    # env = gym.wrappers.NormalizeReward(env, gamma=0.99)
+    # env = gym.wrappers.TransformReward(env, lambda reward: np.clip(reward, -10, 10))
 
     return env
 
@@ -130,49 +131,56 @@ class PPOSurveillanceAgent(PPO):
     self.prf = prf
     self.n_pulses = n_pulses
 
+    self.rpo_alpha = 0.1
+
     self.feature_net = nn.Sequential(
         ortho_init(nn.Conv2d(
-            self.observation_space.shape[0], 32, kernel_size=8, stride=4)),
+            self.observation_space.shape[0], 16, kernel_size=8, stride=4)),
         nn.ReLU(),
-        ortho_init(nn.Conv2d(32, 64, kernel_size=4, stride=2)),
+        ortho_init(nn.Conv2d(16, 32, kernel_size=4, stride=2)),
         nn.ReLU(),
-        ortho_init(nn.Conv2d(64, 64, kernel_size=3, stride=1)),
-        nn.ReLU(),
+        # nn.Conv2d(64, 64, kernel_size=3, stride=1),
+        # nn.ReLU(),
         nn.Flatten(start_dim=1, end_dim=-1),
-        ortho_init(nn.Linear(64*7*7, 512)),
+        ortho_init(nn.Linear(32*9*9, 256)),
         nn.ReLU(),
     )
 
-    # The actor head parameterizes the mean and std of a Gaussian distribution for the beam steering angles in az/el.
+    # The actor head parameterizes the mean and (log)std of a Gaussian distribution for the beam steering angles in az/el.
     self.n_stochastic_actions = 2
-    self.action_mean = ortho_init(nn.Linear(512, self.n_stochastic_actions),std=0.01)
-
-    self.action_std = nn.Sequential(
-        ortho_init(nn.Linear(512, self.n_stochastic_actions)),
-        nn.Softplus(),
+    self.action_mean = nn.Sequential(ortho_init(
+        nn.Linear(256, self.n_stochastic_actions), std=0.01),
+        nn.Tanh(),
     )
+    self.action_logstd = nn.Parameter(torch.zeros(
+        self.n_stochastic_actions), requires_grad=True)
+    # self.action_std = nn.Sequential(
+    #     ortho_init(nn.Linear(256, self.n_stochastic_actions), std=0.01),
+    #     nn.Softplus(),
+    # )
 
-    self.critic = ortho_init(nn.Linear(512, 1), std=1.0)
+    self.critic = ortho_init(nn.Linear(256, 1), std=1.0)
 
     self.save_hyperparameters()
 
   def forward(self, x: torch.Tensor):
-    feature = self.feature_net(x / 255.0)
+    features = self.feature_net(x / 255.0)
+
     # Sample the action from its distribution
-    mean = self.action_mean(feature)
-    std = self.action_std(feature)
+    mean = self.action_mean(features)
+    std = torch.exp(self.action_logstd)
 
     # Compute the value of the state
-    value = self.critic(feature).flatten()
+    value = self.critic(features).flatten()
     return mean, std, value
 
   def act(self, observations: torch.Tensor, deterministic: bool = False):
     mean, std, value = self.forward(observations)
     action_dist = torch.distributions.Normal(mean, std)
     if deterministic:
-        stochastic_actions = mean
+      stochastic_actions = mean
     else:
-        stochastic_actions = action_dist.sample()
+      stochastic_actions = action_dist.sample()
     deterministic_actions = (
         # Azimuth beamwidth
         torch.full((observations.shape[0], 1), self.azimuth_beamwidth).to(
@@ -194,7 +202,7 @@ class PPOSurveillanceAgent(PPO):
             stochastic_actions.device),
     )
     action = torch.cat((stochastic_actions,) + deterministic_actions, 1)
-    return action, value, action_dist.log_prob(stochastic_actions), action_dist.entropy()
+    return action, value, action_dist.log_prob(stochastic_actions).sum(1), action_dist.entropy().sum(1)
 
   def evaluate_actions(self,
                        observations: torch.Tensor,
@@ -202,24 +210,24 @@ class PPOSurveillanceAgent(PPO):
     # Only evaluate stochastic actions
     actions = actions[:, :self.n_stochastic_actions]
     mean, std, value = self.forward(observations)
+    # Apply RPO to improve exploration
+    z = torch.FloatTensor(mean.shape).uniform_(-self.rpo_alpha, self.rpo_alpha)
+    mean = mean + z.to(mean.device)
     action_dist = torch.distributions.Normal(mean, std)
-    return action_dist.log_prob(actions), action_dist.entropy(), value
+    return action_dist.log_prob(actions).sum(1), action_dist.entropy().sum(1), value
 
   def configure_optimizers(self):
-    optimizer = torch.optim.Adam(self.parameters(), lr=5e-4, eps=1e-5)
+    optimizer = torch.optim.Adam(self.parameters(), lr=3e-4, eps=1e-5)
     return optimizer
-
-
 
 
 # %% [markdown]
 # ## Environment setup
 # %%
-
 # Create the environment
 env_id = 'mpar_sim/SimpleParticleSurveillance-v0'
 n_env = 32
-max_episode_steps = 500
+max_episode_steps = 200
 env = gym.vector.AsyncVectorEnv(
     [make_env(env_id,  max_episode_steps) for _ in range(n_env)])
 env = gym.wrappers.RecordEpisodeStatistics(env=env, deque_size=20)
@@ -237,14 +245,14 @@ prf = 5e3
 n_pulses = 32
 
 ppo_agent = PPOSurveillanceAgent(env,
-                                 n_rollouts_per_epoch=5,
+                                 n_rollouts_per_epoch=3,
                                  n_steps_per_rollout=256,
-                                 n_gradient_steps=3,
+                                 n_gradient_steps=10,
                                  batch_size=2048,
                                  gamma=0.99,
                                  gae_lambda=0.95,
-                                 value_coef=1e-3,
-                                 entropy_coef=0.01,
+                                 value_coef=0.5,
+                                 entropy_coef=0,
                                  seed=seed,
                                  normalize_advantage=True,
                                  policy_clip_range=0.2,
@@ -259,12 +267,12 @@ ppo_agent = PPOSurveillanceAgent(env,
                                  )
 
 
-# checkpoint_filename = "/home/shane/src/mpar-sim/lightning_logs/version_572/checkpoints/epoch=74-step=4500.ckpt"
+# checkpoint_filename = "/home/shane/src/mpar-sim/lightning_logs/version_92/checkpoints/epoch=149-step=9000.ckpt"
 # ppo_agent = PPOSurveillanceAgent.load_from_checkpoint(
 #     checkpoint_filename, env=env, seed=seed)
 
 trainer = pl.Trainer(
-    max_epochs=75,
+    max_epochs=150,
     gradient_clip_val=0.5,
     accelerator='gpu',
     devices=1,
@@ -304,7 +312,6 @@ az_axis = np.linspace(-45, 45, beam_coverage_map.shape[1])
 el_axis = np.linspace(-45, 45, beam_coverage_map.shape[0])
 
 
-
 # Test the PPO agent
 tic = time.time()
 obs, info = env.reset(seed=seed)
@@ -329,10 +336,11 @@ with torch.no_grad():
 
     # Add 1 to the pixels illuminated by the current beam using np.digitize
     if not dones[0]:
-        actions[0, :] = np.clip(actions[0, :], -45, 45)
-        az = np.digitize(actions[0, 0], az_axis, right=True)
-        el = np.digitize(actions[0, 1], el_axis[::-1], right=True)
-        beam_coverage_map[max(el-2, 0):min(el+2, len(el_axis)), max(az-2, 0):min(az+2, len(az_axis))] += 1
+      actions[0, :2] = np.tanh(actions[0, :2])*45
+      az = np.digitize(actions[0, 0], az_axis, right=True)
+      el = np.digitize(actions[0, 1], el_axis[::-1], right=True)
+      beam_coverage_map[max(el-2, 0):min(el+2, len(el_axis)),
+                        max(az-2, 0):min(az+2, len(az_axis))] += 1
     # beam_coverage_map *= 0.99
 
     i += 1

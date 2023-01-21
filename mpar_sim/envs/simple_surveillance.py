@@ -9,6 +9,7 @@ import pygame
 from gymnasium import spaces
 from pyswarms.base.base_single import SwarmOptimizer
 from stonesoup.types.state import GaussianState
+from mpar_sim.beam.common import beamwidth2aperture
 
 from mpar_sim.common.coordinate_transform import sph2cart
 from mpar_sim.common.wrap_to_interval import wrap_to_interval
@@ -99,9 +100,8 @@ class SimpleParticleSurveillance(gym.Env):
 
     self.action_space = spaces.Box(
         low=np.array(
-            [self.radar.az_fov[0], self.radar.el_fov[0], 0, 0, 0, 0, 0, 0]),
-        high=np.array([self.radar.az_fov[1], self.radar.el_fov[1],
-                      np.Inf, np.Inf, np.Inf, np.Inf, np.Inf, np.Inf]),
+            [-1, -1, 0, 0, 0, 0, 0, 0]),
+        high=np.array([1, 1, np.Inf, np.Inf, np.Inf, np.Inf, np.Inf, np.Inf]),
         shape=(8,),
         dtype=np.float32)
     assert render_mode is None or render_mode in self.metadata["render_modes"]
@@ -123,10 +123,23 @@ class SimpleParticleSurveillance(gym.Env):
     self.clock = None
 
   def step(self, action: np.ndarray):
+    # Squash the actions into the range [-1, 1] then scale by the max/min az and el values
+    az_steering_angle = action[0] * \
+        (self.radar.az_fov[1] - self.radar.az_fov[0]) / 2
+    el_steering_angle = action[1] * \
+        (self.radar.el_fov[1] - self.radar.el_fov[0]) / 2
+        
+    # Compute the number of elements used to form the Tx beam. Assuming the total Tx power is equal to the # of tx elements times the max element power
+    tx_beamwidths = np.array([action[2], action[3]])
+    tx_aperture_size = beamwidth2aperture(
+        tx_beamwidths, self.radar.wavelength) / self.radar.wavelength
+    n_tx_elements = np.prod(np.ceil(
+        tx_aperture_size / self.radar.element_spacing).astype(int))
+    tx_power = n_tx_elements * self.radar.element_tx_power
 
     look = SpoiledLook(
-        azimuth_steering_angle=action[0],
-        elevation_steering_angle=action[1],
+        azimuth_steering_angle=az_steering_angle,
+        elevation_steering_angle=el_steering_angle,
         azimuth_beamwidth=action[2],
         elevation_beamwidth=action[3],
         bandwidth=action[4],
@@ -134,8 +147,7 @@ class SimpleParticleSurveillance(gym.Env):
         prf=action[6],
         n_pulses=action[7],
         # TODO: For a spoiled look, this depends on the number of elements used to form the tx beam
-        tx_power=self.radar.n_elements_x *
-        self.radar.n_elements_y*self.radar.element_tx_power,
+        tx_power=tx_power,
         start_time=self.time,
     )
 
@@ -151,7 +163,7 @@ class SimpleParticleSurveillance(gym.Env):
     detections = self.radar.measure(self.target_paths, noise=True)
 
     # Mutate particles away from the direction that has just been searched.
-    self._mutate_swarm(look, alpha=0.10)
+    self._mutate_swarm(look, alpha=0.20)
 
     reward = 0
     for detection in detections:
@@ -164,10 +176,12 @@ class SimpleParticleSurveillance(gym.Env):
 
         if self.detection_count[target_id] == self.n_confirm_detections:
           self.n_tracks_initiated += 1
+          reward += 1
 
         # Reward the agent updating a tentative track
-        if 2 <= self.detection_count[target_id] <= self.n_confirm_detections:
-          reward += 1
+        # if 2 <= self.detection_count[target_id] <= self.n_confirm_detections:
+        #   reward += 1
+          
 
       # Update the swarm if an untracked target is detected.
       if isinstance(detection, Clutter) or self.detection_count[target_id] <= self.n_confirm_detections:
@@ -231,11 +245,11 @@ class SimpleParticleSurveillance(gym.Env):
     # Terminate the episode when all targets have been detected at least n_detections_max times
     if len(self.detection_count) == len(self.target_paths) and \
             all(count >= self.n_confirm_detections for count in self.detection_count.values()):
-      terminated = True
+      truncated = True
     else:
-      terminated = False
-
-    truncated = False
+      truncated = False
+      # terminated = False
+    terminated = False
 
     if self.render_mode == "human":
       self._render_frame()

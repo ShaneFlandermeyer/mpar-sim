@@ -74,6 +74,7 @@ def default_lbest_pso():
                                  dimensions=2,
                                  options=options,
                                  bounds=np.array([[-45, -45], [45, 45]]),
+                                 gbest_mutation_std=1,
                                  pbest_reset_interval=1000,
                                  static=True,
                                  )
