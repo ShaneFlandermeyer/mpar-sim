@@ -231,15 +231,15 @@ class PhasedArrayRadar():
       relative_pos = self._rotation_matrix @ relative_pos
 
       # Convert target position to spherical coordinates
-      [target_az, target_el, r] = cart2sph(*relative_pos[:, 0])
+      [target_az, target_el, r] = cart2sph(*relative_pos[:, 0], degrees=True)
 
       # Skip targets that are not detectable
       if not self.is_detectable(target_az, target_el, r):
         continue
 
       # Compute target's az/el relative to the beam center
-      relative_az = np.rad2deg(target_az) - self.tx_beam.azimuth_steering_angle
-      relative_el = np.rad2deg(target_el) - \
+      relative_az = target_az - self.tx_beam.azimuth_steering_angle
+      relative_el = target_el - \
           self.tx_beam.elevation_steering_angle
       # Compute loss due to the target being off-centered in the beam
       beam_shape_loss_db = self.tx_beam.shape_loss(relative_az, relative_el)
@@ -249,7 +249,7 @@ class PhasedArrayRadar():
       snr_lin = 10**(snr_db/10)
 
       # Probability of detection
-      if snr_db > 0:
+      if snr_db > 5:
         pfa = self.false_alarm_rate
         pd = pfa**(1/(1+snr_lin))
       else:
