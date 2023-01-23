@@ -268,7 +268,7 @@ ppo_agent = PPOSurveillanceAgent(env,
                                  )
 
 
-# checkpoint_filename = "/home/shane/src/mpar-sim/lightning_logs/version_297/checkpoints/epoch=85-step=4128.ckpt"
+# checkpoint_filename = "/home/shane/src/mpar-sim/lightning_logs/version_637/checkpoints/epoch=99-step=4800.ckpt"
 # ppo_agent = PPOSurveillanceAgent.load_from_checkpoint(
 #     checkpoint_filename, env=env, seed=seed)
 
