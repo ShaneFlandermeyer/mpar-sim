@@ -241,6 +241,11 @@ class PhasedArrayRadar():
       relative_az = target_az - self.tx_beam.azimuth_steering_angle
       relative_el = target_el - \
           self.tx_beam.elevation_steering_angle
+
+      # Assume targets are not detectable outside the main beam
+      if abs(relative_az) > 0.5*self.tx_beam.azimuth_beamwidth or abs(relative_el) > 0.5*self.tx_beam.elevation_beamwidth:
+        continue
+
       # Compute loss due to the target being off-centered in the beam
       beam_shape_loss_db = self.tx_beam.shape_loss(relative_az, relative_el)
 
@@ -249,7 +254,7 @@ class PhasedArrayRadar():
       snr_lin = 10**(snr_db/10)
 
       # Probability of detection
-      if snr_db > 5:
+      if snr_db > 0:
         pfa = self.false_alarm_rate
         pd = pfa**(1/(1+snr_lin))
       else:

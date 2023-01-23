@@ -6,6 +6,7 @@
 
 # %%
 import time
+from typing import Tuple
 import warnings
 
 import gymnasium as gym
@@ -87,8 +88,8 @@ def make_env(env_id,
                    initial_number_targets=50,
                    n_confirm_detections=3,
                    randomize_initial_state=True,
-                   max_random_az_covar=10**2,
-                   max_random_el_covar=10**2,
+                   max_random_az_covar=5**2,
+                   max_random_el_covar=5**2,
                    render_mode='rgb_array',
                    )
 
@@ -97,8 +98,6 @@ def make_env(env_id,
     env = gym.wrappers.FrameStack(env, 4)
     env = gym.wrappers.TimeLimit(env, max_episode_steps=max_episode_steps)
     env = gym.wrappers.ClipAction(env)
-    # env = gym.wrappers.NormalizeReward(env, gamma=0.99)
-    # env = gym.wrappers.TransformReward(env, lambda reward: np.clip(reward, -10, 10))
 
     return env
 
@@ -131,7 +130,7 @@ class PPOSurveillanceAgent(PPO):
     self.prf = prf
     self.n_pulses = n_pulses
 
-    self.rpo_alpha = 0.1
+    self.rpo_alpha = 0
 
     self.feature_net = nn.Sequential(
         ortho_init(nn.Conv2d(
@@ -139,27 +138,28 @@ class PPOSurveillanceAgent(PPO):
         nn.ReLU(),
         ortho_init(nn.Conv2d(16, 32, kernel_size=4, stride=2)),
         nn.ReLU(),
-        # nn.Conv2d(64, 64, kernel_size=3, stride=1),
+        # ortho_init(nn.Conv2d(32, 32, kernel_size=3, stride=1)),
         # nn.ReLU(),
         nn.Flatten(start_dim=1, end_dim=-1),
         ortho_init(nn.Linear(32*9*9, 256)),
         nn.ReLU(),
     )
-
+    
     # The actor head parameterizes the mean and (log)std of a Gaussian distribution for the beam steering angles in az/el.
     self.n_stochastic_actions = 2
     self.action_mean = nn.Sequential(ortho_init(
         nn.Linear(256, self.n_stochastic_actions), std=0.01),
-        nn.Tanh(),
+        nn.Tanh()
     )
-    self.action_logstd = nn.Parameter(torch.zeros(
-        self.n_stochastic_actions), requires_grad=True)
-    # self.action_std = nn.Sequential(
-    #     ortho_init(nn.Linear(256, self.n_stochastic_actions), std=0.01),
-    #     nn.Softplus(),
-    # )
+    self.action_std = nn.Sequential(ortho_init(
+        nn.Linear(256, self.n_stochastic_actions), std=0.01),
+        nn.Softplus()
+    )
+    # self.action_logstd = nn.Parameter(torch.zeros(
+    #     self.n_stochastic_actions), requires_grad=True)
 
     self.critic = ortho_init(nn.Linear(256, 1), std=1.0)
+
 
     self.save_hyperparameters()
 
@@ -168,19 +168,20 @@ class PPOSurveillanceAgent(PPO):
 
     # Sample the action from its distribution
     mean = self.action_mean(features)
-    std = torch.exp(self.action_logstd)
+    # std = torch.exp(self.action_logstd)
+    std = self.action_std(features)
 
     # Compute the value of the state
     value = self.critic(features).flatten()
+
+    
     return mean, std, value
 
-  def act(self, observations: torch.Tensor, deterministic: bool = False):
+  def act(self, observations: torch.Tensor):
     mean, std, value = self.forward(observations)
     action_dist = torch.distributions.Normal(mean, std)
-    if deterministic:
-      stochastic_actions = mean
-    else:
-      stochastic_actions = action_dist.sample()
+    stochastic_actions = action_dist.sample()
+    # stochastic_actions = mean
     deterministic_actions = (
         # Azimuth beamwidth
         torch.full((observations.shape[0], 1), self.azimuth_beamwidth).to(
@@ -226,8 +227,8 @@ class PPOSurveillanceAgent(PPO):
 # %%
 # Create the environment
 env_id = 'mpar_sim/SimpleParticleSurveillance-v0'
-n_env = 32
-max_episode_steps = 200
+n_env = 16
+max_episode_steps = 1000
 env = gym.vector.AsyncVectorEnv(
     [make_env(env_id,  max_episode_steps) for _ in range(n_env)])
 env = gym.wrappers.RecordEpisodeStatistics(env=env, deque_size=20)
@@ -246,13 +247,13 @@ n_pulses = 32
 
 ppo_agent = PPOSurveillanceAgent(env,
                                  n_rollouts_per_epoch=3,
-                                 n_steps_per_rollout=256,
-                                 n_gradient_steps=10,
+                                 n_steps_per_rollout=512,
+                                 n_gradient_steps=4,
                                  batch_size=2048,
                                  gamma=0.99,
                                  gae_lambda=0.95,
                                  value_coef=0.5,
-                                 entropy_coef=0,
+                                 entropy_coef=0.005,
                                  seed=seed,
                                  normalize_advantage=True,
                                  policy_clip_range=0.2,
@@ -267,12 +268,12 @@ ppo_agent = PPOSurveillanceAgent(env,
                                  )
 
 
-# checkpoint_filename = "/home/shane/src/mpar-sim/lightning_logs/version_92/checkpoints/epoch=149-step=9000.ckpt"
+# checkpoint_filename = "/home/shane/src/mpar-sim/lightning_logs/version_297/checkpoints/epoch=85-step=4128.ckpt"
 # ppo_agent = PPOSurveillanceAgent.load_from_checkpoint(
 #     checkpoint_filename, env=env, seed=seed)
 
 trainer = pl.Trainer(
-    max_epochs=150,
+    max_epochs=100,
     gradient_clip_val=0.5,
     accelerator='gpu',
     devices=1,
@@ -311,7 +312,12 @@ beam_coverage_map = np.zeros((32, 32))
 az_axis = np.linspace(-45, 45, beam_coverage_map.shape[1])
 el_axis = np.linspace(-45, 45, beam_coverage_map.shape[0])
 
+plt.ion()
 
+fig, ax = plt.subplots()
+im = ax.imshow(np.zeros((84, 84)))
+cb = fig.colorbar(im)
+fig.canvas.draw()
 # Test the PPO agent
 tic = time.time()
 obs, info = env.reset(seed=seed)
@@ -321,12 +327,21 @@ with torch.no_grad():
   while not np.all(dones):
     obs_tensor = torch.as_tensor(obs).to(
         device=ppo_agent.device, dtype=torch.float32)
-    action_tensor = ppo_agent.act(obs_tensor, deterministic=False)[0]
+    action_tensor = ppo_agent.act(obs_tensor)[0]
     actions = action_tensor.cpu().numpy()
     # Repeat actions for all environments
     obs, reward, terminated, truncated, info = env.step(actions)
     dones = np.logical_or(dones, np.logical_or(terminated, truncated))
-
+    
+    # ax.clear()
+    
+    vmin = np.min(obs[0, 3, :, :])
+    vmax = np.max(obs[0, 3, :, :])
+    im.set_data(obs[0, 3, :, :])
+    im.set_clim(vmin, vmax)
+    fig.canvas.flush_events()
+    time.sleep(0.01)
+    
     ppo_init_ratio[i, ~dones] = info['initiation_ratio'][~dones]
     ppo_tracks_init[i:, ~np.logical_or(
         terminated, truncated)] = info['n_tracks_initiated'][~np.logical_or(terminated, truncated)]
@@ -336,7 +351,7 @@ with torch.no_grad():
 
     # Add 1 to the pixels illuminated by the current beam using np.digitize
     if not dones[0]:
-      actions[0, :2] = np.tanh(actions[0, :2])*45
+      actions[0, :2] = actions[0, :2]*45
       az = np.digitize(actions[0, 0], az_axis, right=True)
       el = np.digitize(actions[0, 1], el_axis[::-1], right=True)
       beam_coverage_map[max(el-2, 0):min(el+2, len(el_axis)),
@@ -350,14 +365,13 @@ print(f"Time elapsed: {toc-tic:.2f} seconds")
 
 # # Test the raster agent
 tic = time.time()
-
 obs, info = env.reset(seed=seed)
 dones = np.zeros(n_env, dtype=bool)
 i = 0
 while not np.all(dones):
   look = raster_agent.act(obs)
-  actions = np.array([[look.azimuth_steering_angle,
-                     look.elevation_steering_angle,
+  actions = np.array([[look.azimuth_steering_angle / 45,
+                     look.elevation_steering_angle / 45,
                      look.azimuth_beamwidth,
                      look.elevation_beamwidth,
                      look.bandwidth,
@@ -416,6 +430,8 @@ plt.imshow(beam_coverage_map,
 # plotter.plot_ground_truths(test_env.target_history, radar.position_mapping)
 # plotter.plot_measurements(test_env.detection_history, radar.position_mapping)
 
+# plt.show()
+plt.ioff()
 plt.show()
 env.close()
 
