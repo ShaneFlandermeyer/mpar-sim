@@ -228,7 +228,7 @@ class SimpleParticleSurveillance(gym.Env):
         velocity = relative_pos / distance
 
         w = 0.9
-        c1 = 2.0
+        c1 = 1.0
         self.swarm_optim.swarm.velocity[move_inds] = w*self.swarm_optim.swarm.velocity[move_inds] + \
             c1*velocity[move_inds] * \
             self.np_random.uniform(0, 1, size=velocity[move_inds].shape)
@@ -461,8 +461,8 @@ class SimpleParticleSurveillance(gym.Env):
         [self.radar.az_fov[0], self.radar.el_fov[0], self.radar.min_range],
         [self.radar.az_fov[1], self.radar.el_fov[1], self.radar.max_range])
     # TODO: This creates a bimodal distribution from the input state vector to test how the agent handles multiple target sources.
-    # if self.np_random.uniform(0, 1) < 0.5:
-    #   state_vector[self.radar.position_mapping[0:2]] *= -1
+    if self.np_random.uniform(0, 1) < 0.5:
+      state_vector[self.radar.position_mapping[0:2]] *= -1
 
     # Convert state vector from spherical to cartesian
     x, y, z = sph2cart(
