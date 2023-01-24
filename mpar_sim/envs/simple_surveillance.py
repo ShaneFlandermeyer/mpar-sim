@@ -97,7 +97,8 @@ class SimpleParticleSurveillance(gym.Env):
     self.seed = seed
 
     self.observation_space = spaces.Box(
-        low=0, high=255, shape=(84, 84, 1), dtype=np.uint8)
+        low=0, high=255, shape=(50,), dtype=np.float32)
+    self.azel_image_shape = (84, 84)
 
     self.action_space = spaces.Box(
         low=np.array(
@@ -115,10 +116,10 @@ class SimpleParticleSurveillance(gym.Env):
     # Pre-compute azimuth/elevation axis values needed to digitize the particles for the observation output
     self.az_axis = np.linspace(self.swarm_optim.bounds[0][0],
                                self.swarm_optim.bounds[1][0],
-                               self.observation_space.shape[0])
+                               self.azel_image_shape[0])
     self.el_axis = np.linspace(self.swarm_optim.bounds[0][1],
                                self.swarm_optim.bounds[1][1],
-                               self.observation_space.shape[1])
+                               self.azel_image_shape[1])
 
     # PyGame objects
     self.window = None
@@ -279,11 +280,11 @@ class SimpleParticleSurveillance(gym.Env):
     # Terminate the episode when all targets have been detected at least n_detections_max times
     if len(self.detection_count) == len(self.target_paths) and \
             all(count >= self.n_confirm_detections for count in self.detection_count.values()):
-      truncated = True
+      terminated = True
     else:
-      truncated = False
+      terminated = False
       # terminated = False
-    terminated = False
+    truncated = False
 
     if self.render_mode == "human":
       self._render_frame()
@@ -355,12 +356,16 @@ class SimpleParticleSurveillance(gym.Env):
         self.swarm_optim.swarm.position[:, 0], self.az_axis, right=True)
     el_indices = np.digitize(
         self.swarm_optim.swarm.position[:, 1], self.el_axis, right=True)
-    indices = az_indices * self.observation_space.shape[1] + el_indices
-    obs = np.clip(np.bincount(indices, minlength=np.prod(
-        self.observation_space.shape)).reshape(self.observation_space.shape),
-        0, 255)
-
-    return obs.astype(np.uint8)
+    flat_inds = az_indices * self.azel_image_shape[0] + el_indices
+    bin_counts = np.clip(np.bincount(flat_inds, minlength=np.prod(self.azel_image_shape)).reshape(self.azel_image_shape),
+                       0, 255)
+    best_inds = np.argsort(bin_counts, axis=None)[
+        :-self.observation_space.shape[0]//2-1:-1]
+    best_inds = np.unravel_index(best_inds, self.azel_image_shape)
+    az = self.az_axis[best_inds[0]] / max(self.az_axis)
+    el = self.el_axis[best_inds[1]] / max(self.az_axis)
+    obs = np.array([az, el]).ravel()
+    return obs
 
   def _get_info(self):
     """
