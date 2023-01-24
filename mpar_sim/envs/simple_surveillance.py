@@ -97,7 +97,7 @@ class SimpleParticleSurveillance(gym.Env):
     self.seed = seed
 
     self.observation_space = spaces.Box(
-        low=0, high=255, shape=(50,), dtype=np.float32)
+        low=0, high=1, shape=(50,), dtype=np.float32)
     self.azel_image_shape = (84, 84)
 
     self.action_space = spaces.Box(
@@ -466,8 +466,8 @@ class SimpleParticleSurveillance(gym.Env):
         [self.radar.az_fov[0], self.radar.el_fov[0], self.radar.min_range],
         [self.radar.az_fov[1], self.radar.el_fov[1], self.radar.max_range])
     # TODO: This creates a bimodal distribution from the input state vector to test how the agent handles multiple target sources.
-    if self.np_random.uniform(0, 1) < 0.5:
-      state_vector[self.radar.position_mapping[0:2]] *= -1
+    # if self.np_random.uniform(0, 1) < 0.5:
+    #   state_vector[self.radar.position_mapping[0:2]] *= -1
 
     # Convert state vector from spherical to cartesian
     x, y, z = sph2cart(

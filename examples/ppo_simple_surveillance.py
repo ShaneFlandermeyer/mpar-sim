@@ -132,45 +132,42 @@ class PPOSurveillanceAgent(PPO):
     self.n_pulses = n_pulses
 
     self.rpo_alpha = 0
-    self.n_stochastic_actions = 2
+    self.stochastic_action_inds = [0, 1]
     self.critic = nn.Sequential(
-        ortho_init(nn.Linear(np.array(self.observation_space.shape).prod(), 64)),
+        ortho_init(
+            nn.Linear(np.array(self.observation_space.shape).prod(), 128)),
         nn.Tanh(),
-        ortho_init(nn.Linear(64, 64)),
+        ortho_init(nn.Linear(128, 128)),
         nn.Tanh(),
-        ortho_init(nn.Linear(64, 1), std=1.0),
+        ortho_init(nn.Linear(128, 1), std=1.0),
     )
     self.actor_mean = nn.Sequential(
-        ortho_init(nn.Linear(np.array(self.observation_space.shape).prod(), 64)),
+        ortho_init(
+            nn.Linear(np.array(self.observation_space.shape).prod(), 128)),
         nn.Tanh(),
-        ortho_init(nn.Linear(64, 64)),
+        ortho_init(nn.Linear(128, 128)),
         nn.Tanh(),
-        ortho_init(nn.Linear(64, 2), std=0.01),
+        ortho_init(nn.Linear(128, len(self.stochastic_action_inds)), std=0.01),
     )
     self.actor_logstd = nn.Parameter(torch.zeros(1, 2))
-
 
     self.save_hyperparameters()
 
   def forward(self, x: torch.Tensor):
-    # features = self.feature_net(x / 255.0)
-
     # Sample the action from its distribution
     mean = self.actor_mean(x)
     std = torch.exp(self.actor_logstd)
-    
 
     # Compute the value of the state
     value = self.critic(x).flatten()
 
-    
     return mean, std, value
 
   def act(self, observations: torch.Tensor):
     mean, std, value = self.forward(observations)
     action_dist = torch.distributions.Normal(mean, std)
     stochastic_actions = action_dist.sample()
-    # stochastic_actions = mean
+    # TODO: Use the stochastic action indices to determine the action order
     deterministic_actions = (
         # Azimuth beamwidth
         torch.full((observations.shape[0], 1), self.azimuth_beamwidth).to(
@@ -198,7 +195,7 @@ class PPOSurveillanceAgent(PPO):
                        observations: torch.Tensor,
                        actions: torch.Tensor):
     # Only evaluate stochastic actions
-    actions = actions[:, :self.n_stochastic_actions]
+    actions = actions[:, self.stochastic_action_inds]
     mean, std, value = self.forward(observations)
     # Apply RPO to improve exploration
     z = torch.FloatTensor(mean.shape).uniform_(-self.rpo_alpha, self.rpo_alpha)
@@ -207,7 +204,7 @@ class PPOSurveillanceAgent(PPO):
     return action_dist.log_prob(actions).sum(1), action_dist.entropy().sum(1), value
 
   def configure_optimizers(self):
-    optimizer = torch.optim.Adam(self.parameters(), lr=2.5e-4, eps=1e-5)
+    optimizer = torch.optim.Adam(self.parameters(), lr=3e-4, eps=1e-5)
     return optimizer
 
 
@@ -257,17 +254,17 @@ ppo_agent = PPOSurveillanceAgent(env,
                                  )
 
 
-checkpoint_filename = "/home/shane/src/mpar-sim/lightning_logs/version_369/checkpoints/epoch=99-step=12000.ckpt"
-ppo_agent = PPOSurveillanceAgent.load_from_checkpoint(
-    checkpoint_filename, env=env, seed=seed)
+# checkpoint_filename = "/home/shane/src/mpar-sim/lightning_logs/version_369/checkpoints/epoch=99-step=12000.ckpt"
+# ppo_agent = PPOSurveillanceAgent.load_from_checkpoint(
+#     checkpoint_filename, env=env, seed=seed)
 
-# trainer = pl.Trainer(
-#     max_epochs=100,
-#     gradient_clip_val=0.5,
-#     accelerator='gpu',
-#     devices=1,
-# )
-# trainer.fit(ppo_agent)
+trainer = pl.Trainer(
+    max_epochs=100,
+    gradient_clip_val=0.5,
+    accelerator='gpu',
+    devices=1,
+)
+trainer.fit(ppo_agent)
 
 
 # %% [markdown]
@@ -321,16 +318,16 @@ with torch.no_grad():
     # Repeat actions for all environments
     obs, reward, terminated, truncated, info = env.step(actions)
     dones = np.logical_or(dones, np.logical_or(terminated, truncated))
-    
+
     # ax.clear()
-    
+
     # vmin = np.min(obs[0, 0, :, :])
     # vmax = np.max(obs[0, 0, :, :])
     # im.set_data(obs[0, 0, :, :])
     # im.set_clim(vmin, vmax)
     # fig.canvas.flush_events()
     # time.sleep(0.01)
-    
+
     ppo_init_ratio[i, ~dones] = info['initiation_ratio'][~dones]
     ppo_tracks_init[i:, ~np.logical_or(
         terminated, truncated)] = info['n_tracks_initiated'][~np.logical_or(terminated, truncated)]
