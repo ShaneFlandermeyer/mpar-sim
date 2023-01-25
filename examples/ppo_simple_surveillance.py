@@ -95,7 +95,6 @@ def make_env(env_id,
 
     # Wrappers
     env = gym.wrappers.FlattenObservation(env)
-    # env = SqueezeImage(env)
     # env = gym.wrappers.FrameStack(env, 1)
     env = gym.wrappers.TimeLimit(env, max_episode_steps=max_episode_steps)
     env = gym.wrappers.ClipAction(env)
@@ -218,6 +217,7 @@ max_episode_steps = 1000
 env = gym.vector.AsyncVectorEnv(
     [make_env(env_id,  max_episode_steps) for _ in range(n_env)])
 env = gym.wrappers.RecordEpisodeStatistics(env=env, deque_size=20)
+# env = gym.wrappers.NormalizeReward(env)
 
 
 # %% [markdown]
@@ -239,7 +239,7 @@ ppo_agent = PPOSurveillanceAgent(env,
                                  gamma=0.99,
                                  gae_lambda=0.95,
                                  value_coef=0.5,
-                                 entropy_coef=0.005,
+                                 entropy_coef=0.01,
                                  seed=seed,
                                  normalize_advantage=True,
                                  policy_clip_range=0.2,
