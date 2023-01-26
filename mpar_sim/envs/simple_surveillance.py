@@ -42,6 +42,9 @@ class SimpleParticleSurveillance(gym.Env):
                max_random_az_covar: float = 10**2,
                max_random_el_covar: float = 10**2,
                n_confirm_detections: int = 3,
+               # Gym-specific parameters
+               n_obs_bins: int = 25,
+               image_shape: int = (84, 84),
                seed: int = None,
                render_mode: str = None,
                ):
@@ -94,11 +97,13 @@ class SimpleParticleSurveillance(gym.Env):
     self.randomize_initial_state = randomize_initial_state
     self.max_random_az_covar = max_random_az_covar
     self.max_random_el_covar = max_random_el_covar
+    self.n_obs_bins = n_obs_bins
+    self.feature_size = self.n_obs_bins*2
+    self.image_shape = image_shape
     self.seed = seed
 
     self.observation_space = spaces.Box(
-        low=0, high=1, shape=(50,), dtype=np.float32)
-    self.azel_image_shape = (84, 84)
+        low=0, high=1, shape=(self.feature_size,), dtype=np.float32)
 
     self.action_space = spaces.Box(
         low=np.array(
@@ -116,10 +121,10 @@ class SimpleParticleSurveillance(gym.Env):
     # Pre-compute azimuth/elevation axis values needed to digitize the particles for the observation output
     self.az_axis = np.linspace(self.swarm_optim.bounds[0][0],
                                self.swarm_optim.bounds[1][0],
-                               self.azel_image_shape[0])
+                               self.image_shape[0])
     self.el_axis = np.linspace(self.swarm_optim.bounds[0][1],
                                self.swarm_optim.bounds[1][1],
-                               self.azel_image_shape[1])
+                               self.image_shape[1])
 
     # PyGame objects
     self.window = None
@@ -149,7 +154,6 @@ class SimpleParticleSurveillance(gym.Env):
         pulsewidth=action[5],
         prf=action[6],
         n_pulses=action[7],
-        # TODO: For a spoiled look, this depends on the number of elements used to form the tx beam
         tx_power=tx_power,
         start_time=self.time,
     )
@@ -192,12 +196,12 @@ class SimpleParticleSurveillance(gym.Env):
             (position + velocity) < self.swarm_optim.bounds[0],
             (position + velocity) > self.swarm_optim.bounds[1]),
         -velocity, velocity)
-    self.swarm_optim.swarm.position = self.swarm_optim.top.compute_position(
-        self.swarm_optim.swarm, self.swarm_optim.bounds, self.swarm_optim.bh
-    )
+    self.swarm_optim.swarm.position += self.swarm_optim.swarm.velocity
     self.swarm_optim.swarm.velocity *= 0.9
 
-    detections = self.radar.measure(self.target_paths, noise=True)
+    # Try to detect the remaining untracked targets
+    detections = self.radar.measure(
+        self.target_paths, noise=True, timestamp=self.time)
 
     reward = 0
     for detection in detections:
@@ -212,28 +216,23 @@ class SimpleParticleSurveillance(gym.Env):
           self.n_tracks_initiated += 1
           reward += 1
 
-        # Reward the agent updating a tentative track
-        # if self.detection_count[target_id] <= self.n_confirm_detections:
-        #   reward += 1
-
       # Update the swarm if an untracked target is detected.
-      if isinstance(detection, Clutter) or self.detection_count[target_id] <= self.n_confirm_detections:
-        # The probability that a particle gets updated decays exponentially with its distance from the latest detection. If an update occurs, the particle moves radially towards the detection
-        az = detection.state_vector[1, 0]
-        el = detection.state_vector[0, 0]
+      # The probability that a particle gets updated decays exponentially with its distance from the latest detection. If an update occurs, the particle moves radially towards the detection
+      is_tracked = self.detection_count[detection.groundtruth_path.id] >= self.n_confirm_detections
+      if isinstance(detection, Clutter) or not is_tracked:
+        az = detection.state_vector[1]
+        el = detection.state_vector[0]
         relative_pos = np.array([az, el]) - self.swarm_optim.swarm.position
         distance = np.linalg.norm(relative_pos, axis=1)[:, None]
         move_probability = np.exp(-0.05*distance).ravel()
         move_inds = self.np_random.uniform(
             0, 1, size=distance.size) < move_probability
         velocity = relative_pos / distance
-
         w = 0.9
         c1 = 1.0
         self.swarm_optim.swarm.velocity[move_inds] = w*self.swarm_optim.swarm.velocity[move_inds] + \
             c1*velocity[move_inds] * \
             self.np_random.uniform(0, 1, size=velocity[move_inds].shape)
-
         # Invert the velocity if it would cause the particle to leave the search space.
         position = self.swarm_optim.swarm.position
         velocity = self.swarm_optim.swarm.velocity
@@ -242,9 +241,7 @@ class SimpleParticleSurveillance(gym.Env):
                 (position + velocity) < self.swarm_optim.bounds[0],
                 (position + velocity) > self.swarm_optim.bounds[1]),
             -velocity, velocity)
-        self.swarm_optim.swarm.position = self.swarm_optim.top.compute_position(
-            self.swarm_optim.swarm, self.swarm_optim.bounds, self.swarm_optim.bh
-        )
+        self.swarm_optim.swarm.position += self.swarm_optim.swarm.velocity
 
     # Apply a Gaussian mutation to a fraction of the swarm to improve exploration.
     self._mutate_swarm(alpha=0.25)
@@ -356,12 +353,11 @@ class SimpleParticleSurveillance(gym.Env):
         self.swarm_optim.swarm.position[:, 0], self.az_axis, right=True)
     el_indices = np.digitize(
         self.swarm_optim.swarm.position[:, 1], self.el_axis, right=True)
-    flat_inds = az_indices * self.azel_image_shape[0] + el_indices
-    bin_counts = np.clip(np.bincount(flat_inds, minlength=np.prod(self.azel_image_shape)).reshape(self.azel_image_shape),
-                       0, 255)
-    best_inds = np.argsort(bin_counts, axis=None)[
-        :-self.observation_space.shape[0]//2-1:-1]
-    best_inds = np.unravel_index(best_inds, self.azel_image_shape)
+    flat_inds = az_indices * self.image_shape[0] + el_indices
+    bin_counts = np.clip(np.bincount(flat_inds, minlength=np.prod(self.image_shape)).reshape(self.image_shape),
+                         0, 255)
+    best_inds = np.argsort(bin_counts, axis=None)[:-self.n_obs_bins-1:-1]
+    best_inds = np.unravel_index(best_inds, self.image_shape)
     az = self.az_axis[best_inds[0]] / max(self.az_axis)
     el = self.el_axis[best_inds[1]] / max(self.az_axis)
     obs = np.array([az, el]).ravel()
@@ -466,8 +462,8 @@ class SimpleParticleSurveillance(gym.Env):
         [self.radar.az_fov[0], self.radar.el_fov[0], self.radar.min_range],
         [self.radar.az_fov[1], self.radar.el_fov[1], self.radar.max_range])
     # TODO: This creates a bimodal distribution from the input state vector to test how the agent handles multiple target sources.
-    if self.np_random.uniform(0, 1) < 0.5:
-      state_vector[self.radar.position_mapping[0:2]] *= -1
+    # if self.np_random.uniform(0, 1) < 0.5:
+    #   state_vector[self.radar.position_mapping[0:2]] *= -1
 
     # Convert state vector from spherical to cartesian
     x, y, z = sph2cart(

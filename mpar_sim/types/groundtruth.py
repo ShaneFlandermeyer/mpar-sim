@@ -33,6 +33,18 @@ class GroundTruthPath():
 
   def append(self, state: GroundTruthState):
     self.states.append(state)
+  
+  @property
+  def state_vector(self):
+    return self.states[-1].state_vector
+  
+  @property
+  def timestamp(self):
+    return self.states[-1].timestamp
+  
+  @property
+  def metadata(self):
+    return self.states[-1].metadata
     
   def __getitem__(self, index):
     return self.states[index]

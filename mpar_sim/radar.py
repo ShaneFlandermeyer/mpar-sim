@@ -163,7 +163,6 @@ class PhasedArrayRadar():
         range_rate_res=self.velocity_resolution,
         max_unambiguous_range=self.max_unambiguous_range,
         max_unambiguous_range_rate=self.max_unambiguous_radial_speed,
-        ndim_state=self.ndim_state,
         position_mapping=self.position_mapping,
         velocity_mapping=self.velocity_mapping,
         noise_covar=np.diag([0.1, 0.1, 0.1, 0.1]))
@@ -185,9 +184,31 @@ class PhasedArrayRadar():
     bool
         Whether the target can be detected by the radar
     """
-    return (self.az_fov[0] <= target_az <= self.az_fov[1]) and \
-           (self.el_fov[0] <= target_el <= self.el_fov[1]) and \
-           (self.min_range <= target_range <= self.max_range)
+    valid_az = np.logical_and(
+        self.az_fov[0] <= target_az, target_az <= self.az_fov[1])
+    valid_el = np.logical_and(
+        self.el_fov[0] <= target_el, target_el <= self.el_fov[1])
+    valid_range = np.logical_and(
+        self.min_range <= target_range, target_range <= self.max_range)
+    return np.logical_and(valid_az, np.logical_and(valid_el, valid_range))
+
+  def is_in_beam(self, relative_az: float, relative_el: float) -> bool:
+    """
+    Returns true if the target is within the radar's beam and false otherwise
+    Parameters
+    ----------
+    target_az: float
+        Azimuth angle of the target in degrees
+    target_el: float
+        Elevation angle of the target in degrees
+    Returns
+    -------
+    bool
+        Whether the target is within the radar's beam
+    """
+    return np.logical_and(
+        np.abs(relative_az) <= 0.5 * self.tx_beam.azimuth_beamwidth,
+        np.abs(relative_el) <= 0.5 * self.tx_beam.elevation_beamwidth)
 
   @clearable_cached_property('rotation_offset')
   def _rotation_matrix(self) -> np.ndarray:
@@ -199,104 +220,99 @@ class PhasedArrayRadar():
     return rotz(theta_z) @ roty(theta_y) @ rotx(theta_x)
 
   def measure(self,
-              ground_truths: Set[GroundTruthState],
+              ground_truths: List[GroundTruthState],
               noise: Union[np.ndarray, bool] = True,
               timestamp: Optional[datetime] = None,
-              **kwargs) -> set[TrueDetection, Clutter]:
+              **kwargs) -> List[Union[TrueDetection, Clutter]]:
     """
     Generates stochastic detections from a set of target ground truths
     Parameters
     ----------
-    ground_truths : Set[GroundTruthState]
+    ground_truths : List[GroundTruthState]
         True information of targets to be measured
     noise : Union[np.ndarray, bool], optional
         If true, noise is added to each detection. This noise includes aliasing, discretization into bins, and measurement accuracy limits dictated by the CRLB of the measurement error for each quantity, by default True
     Returns
     -------
-    set[TrueDetection]
+    List[TrueDetection]
         Detections made by the radar
     """
-    detections = set()
+    detections = []
     measurement_model = self.measurement_model
     measurement_model.translation_offset = np.array(self.position)
     measurement_model.rotation_offset = np.array(self.rotation_offset)
-    # Compute the rotation matrix that maps the global coordinate frame into the radar frame
 
-    # Loop through the targets and generate detections
-    for truth in ground_truths:
-      # Force the input state vector to be 2D
-      state_vector = truth[-1].state_vector.reshape(self.ndim_state, -1)
-      # Get the position of the target in the radar coordinate frame
-      relative_pos = state_vector[self.position_mapping, :] - self.position
-      relative_pos = self._rotation_matrix @ relative_pos
+    n_targets = len(ground_truths)
+    state_vectors = np.atleast_2d(
+        np.array([truth.state_vector.ravel() for truth in ground_truths])).T
+    rcs = np.array([truth[-1].rcs for truth in ground_truths])
 
-      # Convert target position to spherical coordinates
-      [target_az, target_el, r] = cart2sph(*relative_pos[:, 0], degrees=True)
+    # Get the position of the target in the radar coordinate frame
+    relative_pos = state_vectors[self.position_mapping, :] - self.position
+    relative_pos = self._rotation_matrix @ relative_pos
+    [target_az, target_el, r] = cart2sph(*relative_pos, degrees=True)
+    relative_az = target_az - self.tx_beam.azimuth_steering_angle
+    relative_el = target_el - self.tx_beam.elevation_steering_angle
+    
+    # Compute SNR and probability of detection assuming a Swerling 1 target model
+    beam_shape_loss_db = self.tx_beam.shape_loss(relative_az, relative_el)
+    snr_db = 10*np.log10(self.loop_gain) + 10*np.log10(rcs) - \
+        40*np.log10(r) - beam_shape_loss_db
+    snr_lin = 10**(snr_db/10)
+    pfa = self.false_alarm_rate
+    pd = pfa**(1/(1+snr_lin))
+    
+    # Filter out targets that have low SNR, are outside the radar's FOV, or are outside the main beam, then determine which targets are detected
+    pd[snr_db < 0] = 0
+    pd[~self.is_detectable(target_az, target_el, r)] = 0
+    pd[~self.is_in_beam(relative_az, relative_el)] = 0
+    is_detected = np.random.uniform(0, 1, size=n_targets) < pd
+    n_detections = np.count_nonzero(is_detected)
 
-      # Skip targets that are not detectable
-      if not self.is_detectable(target_az, target_el, r):
-        continue
+    if n_detections > 0:
+      # Use the SNR to compute the measurement accuracies in each dimension. These accuracies are set to the CRLB of each quantity (i.e., we assume we have efficient estimators)
+      single_pulse_snr = snr_lin / self.n_pulses
+      # The CRLB uses the RMS bandwidth. Assuming an LFM waveform with a rectangular spectrum, B_rms = B / sqrt(12)
+      rms_bandwidth = self.bandwidth / np.sqrt(12)
+      rms_range_res = constants.c / (2 * rms_bandwidth)
+      range_variance = range_crlb(
+          snr=single_pulse_snr[is_detected],
+          resolution=rms_range_res,
+          bias_fraction=0.05)
+      velocity_variance = velocity_crlb(
+          snr=snr_lin[is_detected],
+          resolution=self.velocity_resolution,
+          bias_fraction=0.05)
+      azimuth_variance = angle_crlb(
+          snr=snr_lin[is_detected],
+          resolution=self.rx_beam.azimuth_beamwidth,
+          bias_fraction=0.01)
+      elevation_variance = angle_crlb(
+          snr=snr_lin[is_detected],
+          resolution=self.rx_beam.elevation_beamwidth,
+          bias_fraction=0.01)
 
-      # Compute target's az/el relative to the beam center
-      relative_az = target_az - self.tx_beam.azimuth_steering_angle
-      relative_el = target_el - \
-          self.tx_beam.elevation_steering_angle
+      # Concatenate the measurement noise covariance matrices to pass them into the measurement model
+      if noise:
+        measurement_model.noise_covar = np.zeros(
+            (measurement_model.ndim_meas, measurement_model.ndim_meas, n_detections))
+        for i in range(n_detections):
+            measurement_model.noise_covar[..., i] = np.diag(
+                [elevation_variance[i],
+                azimuth_variance[i],
+                range_variance[i],
+                velocity_variance[i]])
+      measurements = measurement_model.function(
+          state_vectors[:, is_detected], noise=noise)
 
-      # Assume targets are not detectable outside the main beam
-      if abs(relative_az) > 0.5*self.tx_beam.azimuth_beamwidth or abs(relative_el) > 0.5*self.tx_beam.elevation_beamwidth:
-        continue
-
-      # Compute loss due to the target being off-centered in the beam
-      beam_shape_loss_db = self.tx_beam.shape_loss(relative_az, relative_el)
-
-      snr_db = 10*np.log10(self.loop_gain) + 10*np.log10(truth[-1].rcs) - \
-          40*np.log10(r) - beam_shape_loss_db
-      snr_lin = 10**(snr_db/10)
-
-      # Probability of detection
-      if snr_db > 0:
-        pfa = self.false_alarm_rate
-        pd = pfa**(1/(1+snr_lin))
-      else:
-        pd = 0  # Assume targets are not detected with negative SNR
-
-      # Add detections based on the probability of detection
-      if np.random.rand() <= pd:
-
-        # # Use the SNR to compute the measurement accuracies in each dimension. These accuracies are set to the CRLB of each quantity (i.e., we assume we have efficient estimators)
-        single_pulse_snr = snr_lin / self.n_pulses
-        # The CRLB uses the RMS bandwidth. Assuming an LFM waveform with a rectangular spectrum, B_rms = B / sqrt(12)
-        rms_bandwidth = self.bandwidth / np.sqrt(12)
-        rms_range_res = constants.c / (2 * rms_bandwidth)
-        range_variance = range_crlb(
-            snr=single_pulse_snr,
-            resolution=rms_range_res,
-            bias_fraction=0.05)
-        velocity_variance = velocity_crlb(
-            snr=snr_lin,
-            resolution=self.velocity_resolution,
-            bias_fraction=0.05)
-        azimuth_variance = angle_crlb(
-            snr=snr_lin,
-            resolution=self.rx_beam.azimuth_beamwidth,
-            bias_fraction=0.01)
-        elevation_variance = angle_crlb(
-            snr=snr_lin,
-            resolution=self.rx_beam.elevation_beamwidth,
-            bias_fraction=0.01)
-        measurement_model.noise_covar = np.diag(
-            [elevation_variance,
-             azimuth_variance,
-             range_variance,
-             velocity_variance])
-
-        measurement = measurement_model.function(state_vector, noise=noise)
-        detection = TrueDetection(state_vector=measurement,
-                                  snr=snr_db,
-                                  timestamp=truth[-1].timestamp,
+      detection_inds = is_detected.nonzero()[0]
+      for i in range(n_detections):
+        detection = TrueDetection(state_vector=measurements[:, i],
+                                  snr=snr_db[detection_inds[i]],
+                                  timestamp=timestamp,
                                   measurement_model=measurement_model,
-                                  groundtruth_path=truth)
-        detections.add(detection)
+                                  groundtruth_path=ground_truths[detection_inds[i]])
+        detections.append(detection)
 
     if self.include_false_alarms:
       # Generate uniformly distributed false alarms in the radar beam
@@ -334,9 +350,10 @@ class PhasedArrayRadar():
                                  [np.deg2rad(az[i])],
                                  [r[i]],
                                  [v[i]]])
-        detections.add(Clutter(state_vector=state_vector,
-                               snr=snr_db,
-                               timestamp=truth[-1].timestamp if truth else timestamp,
-                               measurement_model=measurement_model))
+        detection = Clutter(state_vector=state_vector,
+                            snr=snr_db,
+                            timestamp=timestamp if timestamp else None,
+                            measurement_model=measurement_model)
+        detections.append(detection)
 
     return detections

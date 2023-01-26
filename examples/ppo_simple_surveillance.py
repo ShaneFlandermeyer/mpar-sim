@@ -95,7 +95,6 @@ def make_env(env_id,
 
     # Wrappers
     env = gym.wrappers.FlattenObservation(env)
-    # env = gym.wrappers.FrameStack(env, 1)
     env = gym.wrappers.TimeLimit(env, max_episode_steps=max_episode_steps)
     env = gym.wrappers.ClipAction(env)
 

@@ -111,7 +111,6 @@ class CartesianToRangeAzElRangeRate(NonlinearMeasurementModel):
                # State mappings
                position_mapping: List[int] = [0, 2, 4],
                velocity_mapping: List[int] = [1, 3, 5],
-               ndim_state: int = 6,
                ):
     # Sensor kinematic information
     self.translation_offset = translation_offset
@@ -133,8 +132,8 @@ class CartesianToRangeAzElRangeRate(NonlinearMeasurementModel):
     # State mappings
     self.position_mapping = position_mapping
     self.velocity_mapping = velocity_mapping
-    self.ndim_state = ndim_state
     # This is constant
+    self.ndim_state = 6
     self.ndim_meas = self.ndim = 4
 
   def function(self, state: np.ndarray, noise: bool = False):
@@ -158,11 +157,17 @@ class CartesianToRangeAzElRangeRate(NonlinearMeasurementModel):
 
     """
     state = state.reshape((self.ndim_state, -1))
+    
     if noise:
-      meas_noise = self.rvs(
-          num_samples=state.shape[-1])
+      n_states = state.shape[-1]
+      meas_noise = np.zeros((self.ndim_meas, n_states))
+      for i in range(n_states):
+        covar = self.noise_covar[..., i]
+        meas_noise[:, i] = np.random.multivariate_normal(
+        np.zeros(self.ndim), covar)
     else:
       meas_noise = 0
+
 
     # Account for origin offset in position to enable range and angles to be determined
     xyz_pos = state[self.position_mapping, :] - \
@@ -223,14 +228,6 @@ class CartesianToRangeAzElRangeRate(NonlinearMeasurementModel):
 
   def jacobian(self, state) -> np.ndarray:
     return jacobian(self.function, state)
-
-  def rvs(self,
-          num_samples: int = 1) -> np.ndarray:
-    covar = self.noise_covar
-    noise = np.random.multivariate_normal(
-        np.zeros(self.ndim), covar, num_samples)
-    noise = np.atleast_2d(noise).T
-    return noise
 
   @clearable_cached_property('rotation_offset')
   def rotation_matrix(self) -> np.ndarray:
