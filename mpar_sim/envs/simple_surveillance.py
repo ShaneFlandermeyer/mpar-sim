@@ -7,7 +7,6 @@ import gymnasium as gym
 import numpy as np
 import pygame
 from gymnasium import spaces
-from pyswarms.base.base_single import SwarmOptimizer
 from stonesoup.types.state import GaussianState
 from mpar_sim.beam.common import beamwidth2aperture
 
@@ -17,6 +16,7 @@ from mpar_sim.defaults import default_gbest_pso, default_lbest_pso
 from mpar_sim.looks.look import Look
 from mpar_sim.looks.spoiled_look import SpoiledLook
 from mpar_sim.models.transition.base import TransitionModel
+from mpar_sim.particle.swarm import ParticleSwarm
 from mpar_sim.radar import PhasedArrayRadar
 from mpar_sim.types.detection import Clutter
 from mpar_sim.types.groundtruth import GroundTruthPath, GroundTruthState
@@ -35,7 +35,7 @@ class SimpleParticleSurveillance(gym.Env):
                preexisting_states: Collection[np.ndarray] = [],
                initial_number_targets: int = 0,
                # Particle swarm parameters
-               swarm_optim: SwarmOptimizer = None,
+               swarm: ParticleSwarm = None,
                mutation_rate: float = 0.01,
                # Environment parameters
                randomize_initial_state: bool = False,
@@ -43,7 +43,7 @@ class SimpleParticleSurveillance(gym.Env):
                max_random_el_covar: float = 10**2,
                n_confirm_detections: int = 3,
                # Gym-specific parameters
-               n_obs_bins: int = 25,
+               n_obs_bins: int = 50,
                image_shape: int = (84, 84),
                seed: int = None,
                render_mode: str = None,
@@ -69,7 +69,7 @@ class SimpleParticleSurveillance(gym.Env):
         A list of deterministic target states that are generated every time the scenario is initialized. This can be useful if you want to simulate a specific set of target trajectories, by default []
     initial_number_targets : int, optional
         Number of targets generated at the start of the simulation, by default 0
-    swarm_optim : SwarmOptimizer, optional
+    swarm : SwarmOptimizer, optional
         Particle swarm optimizer object used to generate the state images, by default None
     n_confirm_detections: int, optional
         Number of detections required to confirm a target, by default 2.
@@ -114,16 +114,25 @@ class SimpleParticleSurveillance(gym.Env):
     assert render_mode is None or render_mode in self.metadata["render_modes"]
     self.render_mode = render_mode
 
-    if swarm_optim is None:
-      self.swarm_optim = default_lbest_pso()
+    if swarm is None:
+      pos_bounds = np.array([[self.radar.az_fov[0], self.radar.el_fov[0]],
+                         [self.radar.az_fov[1], self.radar.el_fov[1]]])
+      # TODO: Enforce velocity bounds
+      vel_bounds = [-5, 5]
+      self.swarm = ParticleSwarm(n_particles=5000,
+                                 n_dimensions=2,
+                                 position_bounds=pos_bounds,
+                                 velocity_bounds=vel_bounds)
+    else:
+      self.swarm = swarm
     self.mutation_rate = mutation_rate
 
     # Pre-compute azimuth/elevation axis values needed to digitize the particles for the observation output
-    self.az_axis = np.linspace(self.swarm_optim.bounds[0][0],
-                               self.swarm_optim.bounds[1][0],
+    self.az_axis = np.linspace(self.swarm.position_bounds[0][0],
+                               self.swarm.position_bounds[1][0],
                                self.image_shape[0])
-    self.el_axis = np.linspace(self.swarm_optim.bounds[0][1],
-                               self.swarm_optim.bounds[1][1],
+    self.el_axis = np.linspace(self.swarm.position_bounds[0][1],
+                               self.swarm.position_bounds[1][1],
                                self.image_shape[1])
 
     # PyGame objects
@@ -176,28 +185,28 @@ class SimpleParticleSurveillance(gym.Env):
     max_el = look.elevation_steering_angle + look.elevation_beamwidth/2
     in_beam = np.logical_and(
         np.logical_and(
-            self.swarm_optim.swarm.position[:, 0] >= min_az,
-            self.swarm_optim.swarm.position[:, 0] <= max_az),
+            self.swarm.position[:, 0] >= min_az,
+            self.swarm.position[:, 0] <= max_az),
         np.logical_and(
-            self.swarm_optim.swarm.position[:, 1] >= min_el,
-            self.swarm_optim.swarm.position[:, 1] <= max_el))
+            self.swarm.position[:, 1] >= min_el,
+            self.swarm.position[:, 1] <= max_el))
     # Set the velocity of each mutated particle radially away from the beam
-    relative_pos = self.swarm_optim.swarm.position[in_beam] - steering_angles
+    relative_pos = self.swarm.position[in_beam] - steering_angles
     velocity = relative_pos / np.linalg.norm(relative_pos, axis=1)[:, None]
-    self.swarm_optim.swarm.velocity[in_beam] = velocity * \
+    self.swarm.velocity[in_beam] = velocity * \
         self.np_random.uniform(
         0, [look.azimuth_beamwidth, look.elevation_beamwidth], size=velocity.shape)
 
     # Invert the velocity if it would cause the particle to leave the search space.
-    position = self.swarm_optim.swarm.position
-    velocity = self.swarm_optim.swarm.velocity
-    self.swarm_optim.swarm.velocity = np.where(
+    position = self.swarm.position
+    velocity = self.swarm.velocity
+    self.swarm.velocity = np.where(
         np.logical_or(
-            (position + velocity) < self.swarm_optim.bounds[0],
-            (position + velocity) > self.swarm_optim.bounds[1]),
+            (position + velocity) < self.swarm.position_bounds[0],
+            (position + velocity) > self.swarm.position_bounds[1]),
         -velocity, velocity)
-    self.swarm_optim.swarm.position += self.swarm_optim.swarm.velocity
-    self.swarm_optim.swarm.velocity *= 0.9
+    self.swarm.position += self.swarm.velocity
+    self.swarm.velocity *= 0.95
 
     # Try to detect the remaining untracked targets
     detections = self.radar.measure(
@@ -222,29 +231,29 @@ class SimpleParticleSurveillance(gym.Env):
       if isinstance(detection, Clutter) or not is_tracked:
         az = detection.state_vector[1]
         el = detection.state_vector[0]
-        relative_pos = np.array([az, el]) - self.swarm_optim.swarm.position
+        relative_pos = np.array([az, el]) - self.swarm.position
         distance = np.linalg.norm(relative_pos, axis=1)[:, None]
         move_probability = np.exp(-0.05*distance).ravel()
         move_inds = self.np_random.uniform(
             0, 1, size=distance.size) < move_probability
         velocity = relative_pos / distance
-        w = 0.9
-        c1 = 1.0
-        self.swarm_optim.swarm.velocity[move_inds] = w*self.swarm_optim.swarm.velocity[move_inds] + \
+        w = 0.5
+        c1 = 2.0
+        self.swarm.velocity[move_inds] = w*self.swarm.velocity[move_inds] + \
             c1*velocity[move_inds] * \
             self.np_random.uniform(0, 1, size=velocity[move_inds].shape)
         # Invert the velocity if it would cause the particle to leave the search space.
-        position = self.swarm_optim.swarm.position
-        velocity = self.swarm_optim.swarm.velocity
-        self.swarm_optim.swarm.velocity = np.where(
+        position = self.swarm.position
+        velocity = self.swarm.velocity
+        self.swarm.velocity = np.where(
             np.logical_or(
-                (position + velocity) < self.swarm_optim.bounds[0],
-                (position + velocity) > self.swarm_optim.bounds[1]),
+                (position + velocity) < self.swarm.position_bounds[0],
+                (position + velocity) > self.swarm.position_bounds[1]),
             -velocity, velocity)
-        self.swarm_optim.swarm.position += self.swarm_optim.swarm.velocity
+        self.swarm.position += self.swarm.velocity
 
     # Apply a Gaussian mutation to a fraction of the swarm to improve exploration.
-    self._mutate_swarm(alpha=0.25)
+    # self._mutate_swarm(alpha=0.25)
 
     # If multiple subarrays are scheduled to execute at once, the timestep will be zero. In this case, don't update the environment just yet.
     # For the single-beam case, this will always execute
@@ -312,7 +321,7 @@ class SimpleParticleSurveillance(gym.Env):
           0, self.max_random_el_covar)
     self._initialize_targets()
 
-    self.swarm_optim.reset()
+    self.swarm.reset()
 
     # Reset metrics/helpful debug info
     self.target_history = set()
@@ -340,6 +349,16 @@ class SimpleParticleSurveillance(gym.Env):
   ############################################################################
   # Internal gym-specific methods
   ############################################################################
+  def _bin_count_image(self) -> np.ndarray:
+    az_indices = np.digitize(
+        self.swarm.position[:, 0], self.az_axis, right=True)
+    el_indices = np.digitize(
+        self.swarm.position[:, 1], self.el_axis, right=True)
+    flat_inds = az_indices * self.image_shape[0] + el_indices
+    bin_counts = np.clip(np.bincount(flat_inds, minlength=np.prod(self.image_shape)).reshape(self.image_shape),
+                         0, 255)
+    return bin_counts
+
   def _get_obs(self) -> np.ndarray:
     """
     Convert swarm positions to an observation image
@@ -349,13 +368,7 @@ class SimpleParticleSurveillance(gym.Env):
     np.ndarray
         Output image where each pixel has a value equal to the number of swarm particles in that pixel.
     """
-    az_indices = np.digitize(
-        self.swarm_optim.swarm.position[:, 0], self.az_axis, right=True)
-    el_indices = np.digitize(
-        self.swarm_optim.swarm.position[:, 1], self.el_axis, right=True)
-    flat_inds = az_indices * self.image_shape[0] + el_indices
-    bin_counts = np.clip(np.bincount(flat_inds, minlength=np.prod(self.image_shape)).reshape(self.image_shape),
-                         0, 255)
+    bin_counts = self._bin_count_image()
     best_inds = np.argsort(bin_counts, axis=None)[:-self.n_obs_bins-1:-1]
     best_inds = np.unravel_index(best_inds, self.image_shape)
     az = self.az_axis[best_inds[0]] / max(self.az_axis)
@@ -397,7 +410,7 @@ class SimpleParticleSurveillance(gym.Env):
 
     # Draw canvas from pixels
     # The observation gets inverted here because I want black pixels on a white background.
-    pixels = self._get_obs()[:, :, 0]
+    pixels = self._bin_count_image()
     pixels = np.flip(pixels.squeeze(), axis=1)
     pixels = cv2.resize(pixels, (256, 256), interpolation=cv2.INTER_NEAREST)
     canvas = pygame.surfarray.make_surface(pixels)
@@ -518,19 +531,19 @@ class SimpleParticleSurveillance(gym.Env):
         The mutation scaling factor, which dictates the fraction of the search space used in the standard deviation computation. By default 0.25
     """
     mutate_inds = self.np_random.uniform(
-        0, 1, size=self.swarm_optim.n_particles) < self.mutation_rate
+        0, 1, size=self.swarm.n_particles) < self.mutation_rate
     if mutate_inds.any():
-      sigma = alpha*(self.swarm_optim.bounds[1] -
-                     self.swarm_optim.bounds[0]).reshape(1, -1)
+      sigma = alpha*(self.swarm.position_bounds[1] -
+                     self.swarm.position_bounds[0]).reshape(1, -1)
       sigma = np.repeat(sigma, np.count_nonzero(mutate_inds), axis=0)
 
-      self.swarm_optim.swarm.position[mutate_inds] += self.np_random.normal(
+      self.swarm.position[mutate_inds] += self.np_random.normal(
           np.zeros_like(sigma), sigma)
 
       # If the particle position exceeds the az/el bounds, wrap it back into the range on the other side. This improves diversity when detections are at the edge of the space compared to simple clipping.
-      self.swarm_optim.swarm.position[mutate_inds] = wrap_to_interval(
-          self.swarm_optim.swarm.position[mutate_inds],
-          self.swarm_optim.bounds[0], self.swarm_optim.bounds[1])
+      self.swarm.position[mutate_inds] = wrap_to_interval(
+          self.swarm.position[mutate_inds],
+          self.swarm.position_bounds[0], self.swarm.position_bounds[1])
 
   def _distance_objective(self,
                           swarm_pos: np.ndarray,
