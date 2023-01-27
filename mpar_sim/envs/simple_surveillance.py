@@ -33,7 +33,9 @@ class SimpleParticleSurveillance(gym.Env):
                birth_rate: float = 1.0,
                death_probability: float = 0.01,
                preexisting_states: Collection[np.ndarray] = [],
-               initial_number_targets: int = 0,
+               #    initial_number_targets: int = 0,
+               min_initial_n_targets: int = 50,
+               max_initial_n_targets: int = 50,
                # Particle swarm parameters
                swarm: ParticleSwarm = None,
                mutation_rate: float = 0.01,
@@ -92,13 +94,15 @@ class SimpleParticleSurveillance(gym.Env):
     self.birth_rate = birth_rate
     self.death_probability = death_probability
     self.preexisting_states = preexisting_states
-    self.initial_number_targets = initial_number_targets
+    # self.initial_number_targets = initial_number_targets
+    self.min_initial_n_targets = min_initial_n_targets
+    self.max_initial_n_targets = max_initial_n_targets
     self.n_confirm_detections = n_confirm_detections
     self.randomize_initial_state = randomize_initial_state
     self.max_random_az_covar = max_random_az_covar
     self.max_random_el_covar = max_random_el_covar
     self.n_obs_bins = n_obs_bins
-    self.feature_size = self.n_obs_bins*2
+    self.feature_size = self.n_obs_bins*3
     self.image_shape = image_shape
     self.seed = seed
 
@@ -116,10 +120,10 @@ class SimpleParticleSurveillance(gym.Env):
 
     if swarm is None:
       pos_bounds = np.array([[self.radar.az_fov[0], self.radar.el_fov[0]],
-                         [self.radar.az_fov[1], self.radar.el_fov[1]]])
-      # TODO: Enforce velocity bounds
-      vel_bounds = [-5, 5]
-      self.swarm = ParticleSwarm(n_particles=5000,
+                             [self.radar.az_fov[1], self.radar.el_fov[1]]])
+      # TODO: Enforce velocity bounds in the swarm update
+      vel_bounds = [-1, 1]
+      self.swarm = ParticleSwarm(n_particles=5_000,
                                  n_dimensions=2,
                                  position_bounds=pos_bounds,
                                  velocity_bounds=vel_bounds)
@@ -237,11 +241,12 @@ class SimpleParticleSurveillance(gym.Env):
         move_inds = self.np_random.uniform(
             0, 1, size=distance.size) < move_probability
         velocity = relative_pos / distance
-        w = 0.5
+        w = 0.25
         c1 = 2.0
         self.swarm.velocity[move_inds] = w*self.swarm.velocity[move_inds] + \
             c1*velocity[move_inds] * \
-            self.np_random.uniform(0, 1, size=velocity[move_inds].shape)
+            self.np_random.uniform(
+                0, 1, size=velocity[move_inds].shape)
         # Invert the velocity if it would cause the particle to leave the search space.
         position = self.swarm.position
         velocity = self.swarm.velocity
@@ -349,14 +354,14 @@ class SimpleParticleSurveillance(gym.Env):
   ############################################################################
   # Internal gym-specific methods
   ############################################################################
-  def _bin_count_image(self) -> np.ndarray:
+  def bin_count_image(self) -> np.ndarray:
     az_indices = np.digitize(
         self.swarm.position[:, 0], self.az_axis, right=True)
     el_indices = np.digitize(
         self.swarm.position[:, 1], self.el_axis, right=True)
     flat_inds = az_indices * self.image_shape[0] + el_indices
-    bin_counts = np.clip(np.bincount(flat_inds, minlength=np.prod(self.image_shape)).reshape(self.image_shape),
-                         0, 255)
+    bin_counts = np.bincount(flat_inds, minlength=np.prod(
+        self.image_shape)).reshape(self.image_shape)
     return bin_counts
 
   def _get_obs(self) -> np.ndarray:
@@ -368,12 +373,13 @@ class SimpleParticleSurveillance(gym.Env):
     np.ndarray
         Output image where each pixel has a value equal to the number of swarm particles in that pixel.
     """
-    bin_counts = self._bin_count_image()
+    bin_counts = self.bin_count_image()
     best_inds = np.argsort(bin_counts, axis=None)[:-self.n_obs_bins-1:-1]
     best_inds = np.unravel_index(best_inds, self.image_shape)
     az = self.az_axis[best_inds[0]] / max(self.az_axis)
     el = self.el_axis[best_inds[1]] / max(self.az_axis)
-    obs = np.array([az, el]).ravel()
+    counts = bin_counts[best_inds] / np.max(bin_counts[best_inds])
+    obs = np.array([az, el, counts]).T.ravel()
     return obs
 
   def _get_info(self):
@@ -410,7 +416,7 @@ class SimpleParticleSurveillance(gym.Env):
 
     # Draw canvas from pixels
     # The observation gets inverted here because I want black pixels on a white background.
-    pixels = self._bin_count_image()
+    pixels = self.bin_count_image()
     pixels = np.flip(pixels.squeeze(), axis=1)
     pixels = cv2.resize(pixels, (256, 256), interpolation=cv2.INTER_NEAREST)
     canvas = pygame.surfarray.make_surface(pixels)
@@ -433,8 +439,9 @@ class SimpleParticleSurveillance(gym.Env):
     """
     Create new targets based on the initial state and preexisting states specified in the environment's input arguments
     """
-    n_initial_targets = self.initial_number_targets
-    if self.preexisting_states or self.initial_number_targets:
+    n_initial_targets = self.np_random.integers(
+        self.min_initial_n_targets, self.max_initial_n_targets, endpoint=True)
+    if self.preexisting_states or n_initial_targets > 0:
       # Use preexisting_states to make some ground truth paths
       preexisting_paths = [self._new_target(
           self.time, state_vector=state) for state in self.preexisting_states]
@@ -474,9 +481,9 @@ class SimpleParticleSurveillance(gym.Env):
         state_vector[self.radar.position_mapping],
         [self.radar.az_fov[0], self.radar.el_fov[0], self.radar.min_range],
         [self.radar.az_fov[1], self.radar.el_fov[1], self.radar.max_range])
-    # TODO: This creates a bimodal distribution from the input state vector to test how the agent handles multiple target sources.
-    # if self.np_random.uniform(0, 1) < 0.5:
-    #   state_vector[self.radar.position_mapping[0:2]] *= -1
+    # # TODO: This creates a bimodal distribution from the input state vector to test how the agent handles multiple target sources.
+    if self.np_random.uniform(0, 1) < 0.5:
+      state_vector[self.radar.position_mapping[0:2]] *= -1
 
     # Convert state vector from spherical to cartesian
     x, y, z = sph2cart(

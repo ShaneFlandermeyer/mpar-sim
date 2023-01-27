@@ -85,15 +85,17 @@ def make_env(env_id,
                    initial_state=initial_state,
                    birth_rate=0,
                    death_probability=0,
-                   initial_number_targets=50,
+                   min_initial_n_targets=50,
+                   max_initial_n_targets=50,
                    n_confirm_detections=3,
                    randomize_initial_state=True,
-                   max_random_az_covar=5**2,
-                   max_random_el_covar=5**2,
+                   max_random_az_covar=10**2,
+                   max_random_el_covar=10**2,
                    render_mode='rgb_array',
                    )
 
     # Wrappers
+    # env = gym.wrappers.FrameStack(env, 4)
     env = gym.wrappers.FlattenObservation(env)
     env = gym.wrappers.TimeLimit(env, max_episode_steps=max_episode_steps)
     env = gym.wrappers.ClipAction(env)
@@ -119,6 +121,7 @@ class PPOSurveillanceAgent(PPO):
                pulsewidth: float,
                prf: float,
                n_pulses: int,
+               rpo_alpha: float = 0.1,
                **kwargs):
     super().__init__(env=env, **kwargs)
     # Populate look parameters
@@ -129,33 +132,37 @@ class PPOSurveillanceAgent(PPO):
     self.prf = prf
     self.n_pulses = n_pulses
 
-    self.rpo_alpha = 0
+    self.rpo_alpha = rpo_alpha
     self.stochastic_action_inds = [0, 1]
     self.critic = nn.Sequential(
         ortho_init(
-            nn.Linear(np.array(self.observation_space.shape).prod(), 128)),
+            nn.Linear(np.array(self.observation_space.shape).prod(), 64)),
         nn.Tanh(),
-        ortho_init(nn.Linear(128, 128)),
+        ortho_init(nn.Linear(64, 64)),
         nn.Tanh(),
-        ortho_init(nn.Linear(128, 1), std=1.0),
+        ortho_init(nn.Linear(64, 1), std=1.0),
     )
-    self.actor_mean = nn.Sequential(
+    self.actor_features = nn.Sequential(
         ortho_init(
-            nn.Linear(np.array(self.observation_space.shape).prod(), 128)),
+            nn.Linear(np.array(self.observation_space.shape).prod(), 64)),
         nn.Tanh(),
-        ortho_init(nn.Linear(128, 128)),
+        ortho_init(nn.Linear(64, 64)),
         nn.Tanh(),
-        ortho_init(nn.Linear(128, len(self.stochastic_action_inds)), std=0.01),
     )
-    self.actor_logstd = nn.Parameter(torch.zeros(1, 2))
+    self.actor_mean = ortho_init(
+        nn.Linear(64, len(self.stochastic_action_inds)), std=0.01)
+    self.actor_std = nn.Sequential(
+        ortho_init(nn.Linear(64, len(self.stochastic_action_inds)), std=0.01),
+        nn.Softplus(),
+    )
 
     self.save_hyperparameters()
 
   def forward(self, x: torch.Tensor):
     # Sample the action from its distribution
-    mean = self.actor_mean(x)
-    std = torch.exp(self.actor_logstd)
-
+    actor_features = self.actor_features(x)
+    mean = self.actor_mean(actor_features)
+    std = self.actor_std(actor_features)
     # Compute the value of the state
     value = self.critic(x).flatten()
 
@@ -166,24 +173,25 @@ class PPOSurveillanceAgent(PPO):
     action_dist = torch.distributions.Normal(mean, std)
     stochastic_actions = action_dist.sample()
     # TODO: Use the stochastic action indices to determine the action order
+    n_envs = observations.shape[0] if observations.ndim == 2 else 1
     deterministic_actions = (
         # Azimuth beamwidth
-        torch.full((observations.shape[0], 1), self.azimuth_beamwidth).to(
+        torch.full((n_envs, 1), self.azimuth_beamwidth).to(
             stochastic_actions.device),
         # Elevation beamwidth
-        torch.full((observations.shape[0], 1), self.elevation_beamwidth).to(
+        torch.full((n_envs, 1), self.elevation_beamwidth).to(
             stochastic_actions.device),
         # Bandwidth
-        torch.full((observations.shape[0], 1), self.bandwidth).to(
+        torch.full((n_envs, 1), self.bandwidth).to(
             stochastic_actions.device),
         # Pulsewidth
-        torch.full((observations.shape[0], 1), self.pulsewidth).to(
+        torch.full((n_envs, 1), self.pulsewidth).to(
             stochastic_actions.device),
         # PRF
-        torch.full((observations.shape[0], 1), self.prf).to(
+        torch.full((n_envs, 1), self.prf).to(
             stochastic_actions.device),
         # Number of pulses
-        torch.full((observations.shape[0], 1), self.n_pulses).to(
+        torch.full((n_envs, 1), self.n_pulses).to(
             stochastic_actions.device),
     )
     action = torch.cat((stochastic_actions,) + deterministic_actions, 1)
@@ -238,7 +246,7 @@ ppo_agent = PPOSurveillanceAgent(env,
                                  gamma=0.99,
                                  gae_lambda=0.95,
                                  value_coef=0.5,
-                                 entropy_coef=0.01,
+                                 entropy_coef=0,
                                  seed=seed,
                                  normalize_advantage=True,
                                  policy_clip_range=0.2,
@@ -253,17 +261,17 @@ ppo_agent = PPOSurveillanceAgent(env,
                                  )
 
 
-# checkpoint_filename = "/home/shane/src/mpar-sim/lightning_logs/version_741/checkpoints/epoch=99-step=12000.ckpt"
+# checkpoint_filename = "/home/shane/src/mpar-sim/lightning_logs/version_752/checkpoints/epoch=149-step=18000.ckpt"
 # ppo_agent = PPOSurveillanceAgent.load_from_checkpoint(
 #     checkpoint_filename, env=env, seed=seed)
 
-trainer = pl.Trainer(
-    max_epochs=100,
-    gradient_clip_val=0.5,
-    accelerator='gpu',
-    devices=1,
-)
-trainer.fit(ppo_agent)
+# trainer = pl.Trainer(
+#     max_epochs=100,
+#     gradient_clip_val=0.5,
+#     accelerator='gpu',
+#     devices=1,
+# )
+# trainer.fit(ppo_agent)
 
 
 # %% [markdown]
@@ -288,6 +296,8 @@ raster_agent = RasterScanAgent(
 # ## Simulate each agent
 
 # %%
+env = make_env(env_id,  max_episode_steps)()
+
 ppo_init_ratio = np.ones((max_episode_steps, n_env))
 ppo_tracks_init = np.zeros((max_episode_steps, n_env))
 raster_init_ratio = np.ones((max_episode_steps, n_env))
@@ -300,76 +310,129 @@ el_axis = np.linspace(-45, 45, beam_coverage_map.shape[0])
 plt.ion()
 
 fig, ax = plt.subplots()
-im = ax.imshow(np.zeros((64, 64)))
+ax.set_xlabel('Azimuth (deg)')
+ax.set_ylabel('Elevation (deg)')
+# image = env.unwrapped.bin_count_image()
+im = ax.imshow(np.zeros((84, 84)), interpolation='nearest',
+               extent=[-45, 45, -45, 45])
 cb = fig.colorbar(im)
 fig.canvas.draw()
 # Test the PPO agent
 tic = time.time()
 obs, info = env.reset(seed=seed)
 dones = np.zeros(n_env, dtype=bool)
+done = False
 i = 0
-with torch.no_grad():
-  while not np.all(dones):
-    obs_tensor = torch.as_tensor(obs).to(
-        device=ppo_agent.device, dtype=torch.float32)
-    action_tensor = ppo_agent.act(obs_tensor)[0]
-    actions = action_tensor.cpu().numpy()
-    # Repeat actions for all environments
-    obs, reward, terminated, truncated, info = env.step(actions)
-    dones = np.logical_or(dones, np.logical_or(terminated, truncated))
 
-    # ax.clear()
+plt.pause(0.0001)
+plt.show()
+# with torch.no_grad():
+#   while not done:
+#     obs_tensor = torch.as_tensor(obs).to(
+#         device=ppo_agent.device, dtype=torch.float32)
+#     action_tensor = ppo_agent.act(obs_tensor)[0]
+#     actions = action_tensor.cpu().numpy()
+#     if actions.shape[0] == 1:
+#       actions = actions.ravel()
+#     # Repeat actions for all environments
+#     obs, reward, terminated, truncated, info = env.step(actions)
+#     # dones = np.logical_or(dones, np.logical_or(terminated, truncated))
+#     done = terminated or truncated
 
-    # vmin = np.min(obs[0, 0, :, :])
-    # vmax = np.max(obs[0, 0, :, :])
-    # im.set_data(obs[0, 0, :, :])
-    # im.set_clim(vmin, vmax)
-    # fig.canvas.flush_events()
-    # time.sleep(0.01)
+#     image = env.unwrapped.bin_count_image()
+#     im.set_data(image)
+#     im.autoscale()
+#     # In interactive mode, need a small delay to get the plot to appear
+#     plt.pause(0.005)
+#     plt.draw()
+#     x = 1
 
-    ppo_init_ratio[i, ~dones] = info['initiation_ratio'][~dones]
-    ppo_tracks_init[i:, ~np.logical_or(
-        terminated, truncated)] = info['n_tracks_initiated'][~np.logical_or(terminated, truncated)]
-    # if i == 100:
-    #   plt.imshow(obs[0, 3, :, :])
-    #   plt.show()
+#     # ppo_init_ratio[i, ~dones] = info['initiation_ratio'][~dones]
+#     # ppo_tracks_init[i:, ~np.logical_or(
+#     #     terminated, truncated)] = info['n_tracks_initiated'][~np.logical_or(terminated, truncated)]
+#     # if i == 100:
+#     #   plt.imshow(obs[0, 3, :, :])
+#     #   plt.show()
 
-    # Add 1 to the pixels illuminated by the current beam using np.digitize
-    if not dones[0]:
-      actions[0, :2] = actions[0, :2]*45
-      az = np.digitize(actions[0, 0], az_axis, right=True)
-      el = np.digitize(actions[0, 1], el_axis[::-1], right=True)
-      beam_coverage_map[max(el-2, 0):min(el+2, len(el_axis)),
-                        max(az-2, 0):min(az+2, len(az_axis))] += 1
-    # beam_coverage_map *= 0.99
+#     # Add 1 to the pixels illuminated by the current beam using np.digitize
+#     # if not dones[0]:
+#     #   actions[0, :2] = actions[0, :2]*45
+#     #   az = np.digitize(actions[0, 0], az_axis, right=True)
+#     #   el = np.digitize(actions[0, 1], el_axis[::-1], right=True)
+#     #   beam_coverage_map[max(el-2, 0):min(el+2, len(el_axis)),
+#     #                     max(az-2, 0):min(az+2, len(az_axis))] += 1
+#     # beam_coverage_map *= 0.99
 
-    i += 1
-toc = time.time()
-print("PPO agent done")
-print(f"Time elapsed: {toc-tic:.2f} seconds")
+#     i += 1
+# toc = time.time()
+# print("PPO agent done")
+# print(f"Time elapsed: {toc-tic:.2f} seconds")
 
-# # Test the raster agent
+# Test the raster agent
+# tic = time.time()
+# obs, info = env.reset(seed=seed)
+# dones = np.zeros(n_env, dtype=bool)
+# i = 0
+# while not np.all(dones):
+#   look = raster_agent.act(obs)
+#   actions = np.array([[look.azimuth_steering_angle / 45,
+#                      look.elevation_steering_angle / 45,
+#                      look.azimuth_beamwidth,
+#                      look.elevation_beamwidth,
+#                      look.bandwidth,
+#                      look.pulsewidth,
+#                      look.prf,
+#                      look.n_pulses]])
+#   actions = np.repeat(actions, n_env, axis=0)
+#   # Repeat actions for all environments
+#   obs, reward, terminated, truncated, info = env.step(actions)
+#   dones = np.logical_or(dones, np.logical_or(terminated, truncated))
+#   raster_init_ratio[i, ~dones] = info['initiation_ratio'][~dones]
+#   raster_tracks_init[i:, ~np.logical_or(
+#       terminated, truncated)] = info['n_tracks_initiated'][~np.logical_or(terminated, truncated)]
+# #   if i == 200:
+# #       plt.imshow(obs[0, 3, :, :])
+# #       plt.show()
+#   i += 1
+
+# toc = time.time()
+# print("Raster agent done")
+# print(f"Time elapsed: {toc-tic:.2f} seconds")
+
+# Test the deterministic PSO agent
 tic = time.time()
 obs, info = env.reset(seed=seed)
-dones = np.zeros(n_env, dtype=bool)
+done = False
 i = 0
-while not np.all(dones):
+while not done:
   look = raster_agent.act(obs)
-  actions = np.array([[look.azimuth_steering_angle / 45,
-                     look.elevation_steering_angle / 45,
+  # TODO: Select the az/el bin with the most particles
+  az_steer = obs[0]
+  el_steer = obs[1]
+#   print(az_steer*45, el_steer*45)
+  actions = np.array([[az_steer,
+                     el_steer,
                      look.azimuth_beamwidth,
                      look.elevation_beamwidth,
                      look.bandwidth,
                      look.pulsewidth,
                      look.prf,
                      look.n_pulses]])
-  actions = np.repeat(actions, n_env, axis=0)
+  actions = actions.ravel()
+#   actions = np.repeat(actions, n_env, axis=0)
   # Repeat actions for all environments
   obs, reward, terminated, truncated, info = env.step(actions)
-  dones = np.logical_or(dones, np.logical_or(terminated, truncated))
-  raster_init_ratio[i, ~dones] = info['initiation_ratio'][~dones]
-  raster_tracks_init[i:, ~np.logical_or(
-      terminated, truncated)] = info['n_tracks_initiated'][~np.logical_or(terminated, truncated)]
+  done = terminated or truncated
+  image = env.unwrapped.bin_count_image()
+  im.set_data(np.flip(image.squeeze(), axis=1))
+  im.autoscale()
+  # In interactive mode, need a small delay to get the plot to appear
+  plt.pause(0.005)
+  plt.draw()
+  x = 1
+#   raster_init_ratio[i, ~dones] = info['initiation_ratio'][~dones]
+#   raster_tracks_init[i:, ~np.logical_or(
+#       terminated, truncated)] = info['n_tracks_initiated'][~np.logical_or(terminated, truncated)]
 #   if i == 200:
 #       plt.imshow(obs[0, 3, :, :])
 #       plt.show()
@@ -378,7 +441,7 @@ while not np.all(dones):
 toc = time.time()
 print("Raster agent done")
 print(f"Time elapsed: {toc-tic:.2f} seconds")
-env.close()
+
 
 # %% [markdown]
 # Plot the results
