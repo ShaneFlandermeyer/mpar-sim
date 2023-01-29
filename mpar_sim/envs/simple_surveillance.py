@@ -38,7 +38,12 @@ class SimpleParticleSurveillance(gym.Env):
                max_initial_n_targets: int = 50,
                # Particle swarm parameters
                swarm: ParticleSwarm = None,
+               beta_g: float = 0.05,
+               w_disp: float = 0.95,
+               w_det: float = 0.25,
+               c_det: float = 1.0,
                mutation_rate: float = 0.01,
+               mutation_alpha: float = 0.25,
                # Environment parameters
                randomize_initial_state: bool = False,
                max_random_az_covar: float = 10**2,
@@ -123,13 +128,18 @@ class SimpleParticleSurveillance(gym.Env):
                              [self.radar.az_fov[1], self.radar.el_fov[1]]])
       # TODO: Enforce velocity bounds in the swarm update
       vel_bounds = [-1, 1]
-      self.swarm = ParticleSwarm(n_particles=5_000,
+      self.swarm = ParticleSwarm(n_particles=10_000,
                                  n_dimensions=2,
                                  position_bounds=pos_bounds,
                                  velocity_bounds=vel_bounds)
     else:
       self.swarm = swarm
+    self.beta_g = beta_g
+    self.w_disp = w_disp
+    self.w_det = w_det
+    self.c_det = c_det
     self.mutation_rate = mutation_rate
+    self.mutation_alpha = mutation_alpha
 
     # Pre-compute azimuth/elevation axis values needed to digitize the particles for the observation output
     self.az_axis = np.linspace(self.swarm.position_bounds[0][0],
@@ -204,13 +214,14 @@ class SimpleParticleSurveillance(gym.Env):
     # Invert the velocity if it would cause the particle to leave the search space.
     position = self.swarm.position
     velocity = self.swarm.velocity
+    
     self.swarm.velocity = np.where(
         np.logical_or(
             (position + velocity) < self.swarm.position_bounds[0],
             (position + velocity) > self.swarm.position_bounds[1]),
         -velocity, velocity)
     self.swarm.position += self.swarm.velocity
-    self.swarm.velocity *= 0.95
+    self.swarm.velocity *= self.w_disp
 
     # Try to detect the remaining untracked targets
     detections = self.radar.measure(
@@ -237,14 +248,11 @@ class SimpleParticleSurveillance(gym.Env):
         el = detection.state_vector[0]
         relative_pos = np.array([az, el]) - self.swarm.position
         distance = np.linalg.norm(relative_pos, axis=1)[:, None]
-        move_probability = np.exp(-0.05*distance).ravel()
+        move_probability = np.exp(-self.beta_g*distance).ravel()
         move_inds = self.np_random.uniform(
             0, 1, size=distance.size) < move_probability
         velocity = relative_pos / distance
-        w = 0.25
-        c1 = 2.0
-        self.swarm.velocity[move_inds] = w*self.swarm.velocity[move_inds] + \
-            c1*velocity[move_inds] * \
+        self.swarm.velocity[move_inds] = self.w_det*self.swarm.velocity[move_inds] + self.c_det*velocity[move_inds] * \
             self.np_random.uniform(
                 0, 1, size=velocity[move_inds].shape)
         # Invert the velocity if it would cause the particle to leave the search space.
@@ -258,7 +266,8 @@ class SimpleParticleSurveillance(gym.Env):
         self.swarm.position += self.swarm.velocity
 
     # Apply a Gaussian mutation to a fraction of the swarm to improve exploration.
-    # self._mutate_swarm(alpha=0.25)
+    if self.mutation_rate > 0:
+      self._mutate_swarm(alpha=self.mutation_alpha)
 
     # If multiple subarrays are scheduled to execute at once, the timestep will be zero. In this case, don't update the environment just yet.
     # For the single-beam case, this will always execute
@@ -473,17 +482,21 @@ class SimpleParticleSurveillance(gym.Env):
     GroundTruthPath
         A new ground truth path starting at the target's initial state
     """
-    state_vector = state_vector or self.np_random.multivariate_normal(
-        mean=self.initial_state.state_vector.ravel(),
-        cov=self.initial_state.covar)
+    # state_vector = state_vector or self.np_random.multivariate_normal(
+    #     mean=self.initial_state.state_vector.ravel(),
+    #     cov=self.initial_state.covar)
+    # Currently generating targets uniformly in the range given by the covariance matrix
+    initial_state_range = np.sqrt(np.diag(np.array(self.initial_state.covar)))
+    state_vector = self.np_random.uniform(-initial_state_range,
+                                          initial_state_range) + self.initial_state.state_vector.ravel()
     state_vector = state_vector.ravel()
     state_vector[self.radar.position_mapping] = np.clip(
         state_vector[self.radar.position_mapping],
         [self.radar.az_fov[0], self.radar.el_fov[0], self.radar.min_range],
         [self.radar.az_fov[1], self.radar.el_fov[1], self.radar.max_range])
-    # # TODO: This creates a bimodal distribution from the input state vector to test how the agent handles multiple target sources.
-    if self.np_random.uniform(0, 1) < 0.5:
-      state_vector[self.radar.position_mapping[0:2]] *= -1
+    # TODO: This creates a bimodal distribution from the input state vector to test how the agent handles multiple target sources.
+    # if self.np_random.uniform(0, 1) < 0.5:
+    #   state_vector[self.radar.position_mapping[0:2]] *= -1
 
     # Convert state vector from spherical to cartesian
     x, y, z = sph2cart(

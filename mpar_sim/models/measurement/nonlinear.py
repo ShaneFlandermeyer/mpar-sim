@@ -1,5 +1,5 @@
 
-from typing import List
+from typing import List, Optional
 import numpy as np
 # TODO: Replicate this and remove the dependency on stonesoup
 from stonesoup.base import clearable_cached_property
@@ -157,17 +157,21 @@ class CartesianToRangeAzElRangeRate(NonlinearMeasurementModel):
 
     """
     state = state.reshape((self.ndim_state, -1))
-    
+    if state.ndim == 1:
+      state = state.reshape((-1, 1))
+
     if noise:
       n_states = state.shape[-1]
       meas_noise = np.zeros((self.ndim_meas, n_states))
       for i in range(n_states):
-        covar = self.noise_covar[..., i]
+        if self.noise_covar.ndim > 2:
+          covar = self.noise_covar[..., i]
+        else:
+          covar = self.noise_covar
         meas_noise[:, i] = np.random.multivariate_normal(
-        np.zeros(self.ndim), covar)
+            np.zeros(self.ndim), covar)
     else:
       meas_noise = 0
-
 
     # Account for origin offset in position to enable range and angles to be determined
     xyz_pos = state[self.position_mapping, :] - \
@@ -226,13 +230,36 @@ class CartesianToRangeAzElRangeRate(NonlinearMeasurementModel):
   def covar(self):
     return self.noise_covar
 
-  def jacobian(self, state) -> np.ndarray:
-    return jacobian(self.function, state)
+  def jacobian(self, state: Optional[np.ndarray]) -> np.ndarray:
+    # TODO: Have not debugged this
+    x, y, z = state[self.position_mapping, ...]
+    r = np.sqrt(x**2 + y**2 + z**2)
+    x_vel, y_vel, z_vel = state[self.velocity_mapping, ...]
+
+    # Compute the Jacobian (manually derived)
+    J = np.zeros((self.ndim_meas, self.ndim_state))
+    J[0, 0] = -x*z/(r**3*np.sqrt(1 - z**2/r**2))
+    J[0, 2] = -y*z/(r**3*np.sqrt(1 - z**2/r**2))
+    J[0, 4] = (r**(-1.0) - z**2/r**3)/np.sqrt(1 - z**2/r**2)
+
+    J[1, 0] = -y/(x**2 + y**2)
+    J[1, 2] = x/(x**2 + y**2)
+
+    J[2, :] = [x/r, 0, y/r, 0, z/r, 0]
+
+    J[3, 0] = x_vel/r - x*(x*x_vel + y*y_vel + z*z_vel)/r**3
+    J[3, 1] = x/r
+    J[3, 2] = y_vel/r - y*(x*x_vel + y*y_vel + z*z_vel)/r**3
+    J[3, 3] = y/r
+    J[3, 4] = z_vel/r - z*(x*x_vel + y*y_vel + z*z_vel)/r**3
+    J[3, 5] = z/r
+    
+    return J
 
   @clearable_cached_property('rotation_offset')
   def rotation_matrix(self) -> np.ndarray:
     """3D axis rotation matrix"""
-    theta_x = -self.rotation_offset[0, 0]  # roll
-    theta_y = self.rotation_offset[1, 0]  # pitch#elevation
-    theta_z = -self.rotation_offset[2, 0]  # yaw#azimuth
+    theta_x = -self.rotation_offset.ravel()[0]  # roll
+    theta_y = self.rotation_offset.ravel()[1]  # pitch#elevation
+    theta_z = -self.rotation_offset.ravel()[2]  # yaw#azimuth
     return rotz(theta_z) @ roty(theta_y) @ rotx(theta_x)

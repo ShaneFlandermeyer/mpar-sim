@@ -91,6 +91,12 @@ def make_env(env_id,
                    randomize_initial_state=True,
                    max_random_az_covar=10**2,
                    max_random_el_covar=10**2,
+                   beta_g=0.10,
+                   w_disp=0.95,
+                   w_det=0.25,
+                   c_det=2.0,
+                   mutation_rate=0.01,
+                   mutation_alpha=0.25,
                    render_mode='rgb_array',
                    )
 
@@ -265,13 +271,13 @@ ppo_agent = PPOSurveillanceAgent(env,
 # ppo_agent = PPOSurveillanceAgent.load_from_checkpoint(
 #     checkpoint_filename, env=env, seed=seed)
 
-# trainer = pl.Trainer(
-#     max_epochs=100,
-#     gradient_clip_val=0.5,
-#     accelerator='gpu',
-#     devices=1,
-# )
-# trainer.fit(ppo_agent)
+trainer = pl.Trainer(
+    max_epochs=150,
+    gradient_clip_val=0.5,
+    accelerator='gpu',
+    devices=1,
+)
+trainer.fit(ppo_agent)
 
 
 # %% [markdown]
@@ -310,8 +316,8 @@ el_axis = np.linspace(-45, 45, beam_coverage_map.shape[0])
 plt.ion()
 
 fig, ax = plt.subplots()
-ax.set_xlabel('Azimuth (deg)')
-ax.set_ylabel('Elevation (deg)')
+ax.set_xlabel('Azimuth (degrees)')
+ax.set_ylabel('Elevation (degrees)')
 # image = env.unwrapped.bin_count_image()
 im = ax.imshow(np.zeros((84, 84)), interpolation='nearest',
                extent=[-45, 45, -45, 45])
@@ -409,6 +415,8 @@ while not done:
   # TODO: Select the az/el bin with the most particles
   az_steer = obs[0]
   el_steer = obs[1]
+  # az_steer = 30
+  # el_steer = -20
 #   print(az_steer*45, el_steer*45)
   actions = np.array([[az_steer,
                      el_steer,
@@ -429,14 +437,14 @@ while not done:
   # In interactive mode, need a small delay to get the plot to appear
   plt.pause(0.005)
   plt.draw()
-  x = 1
+  i += 1
 #   raster_init_ratio[i, ~dones] = info['initiation_ratio'][~dones]
 #   raster_tracks_init[i:, ~np.logical_or(
 #       terminated, truncated)] = info['n_tracks_initiated'][~np.logical_or(terminated, truncated)]
 #   if i == 200:
 #       plt.imshow(obs[0, 3, :, :])
 #       plt.show()
-  i += 1
+
 
 toc = time.time()
 print("Raster agent done")
