@@ -39,7 +39,9 @@ class SimpleParticleSurveillance(gym.Env):
                # Particle swarm parameters
                swarm: ParticleSwarm = None,
                beta_g: float = 0.05,
-               w_disp: float = 0.95,
+               w_disp_min: float = 0.25,
+               w_disp_max: float = 0.95,
+               c_disp: float = 1.5,
                w_det: float = 0.25,
                c_det: float = 1.0,
                mutation_rate: float = 0.01,
@@ -135,11 +137,14 @@ class SimpleParticleSurveillance(gym.Env):
     else:
       self.swarm = swarm
     self.beta_g = beta_g
-    self.w_disp = w_disp
+    self.w_disp_min = w_disp_min
+    self.w_disp_max = w_disp_max
+    self.c_disp = c_disp
     self.w_det = w_det
     self.c_det = c_det
     self.mutation_rate = mutation_rate
     self.mutation_alpha = mutation_alpha
+    self.w_disps = np.ones_like(self.swarm.position)*w_disp_max
 
     # Pre-compute azimuth/elevation axis values needed to digitize the particles for the observation output
     self.az_axis = np.linspace(self.swarm.position_bounds[0][0],
@@ -210,18 +215,12 @@ class SimpleParticleSurveillance(gym.Env):
     self.swarm.velocity[in_beam] = velocity * \
         self.np_random.uniform(
         0, [look.azimuth_beamwidth, look.elevation_beamwidth], size=velocity.shape)
+    # Adaptively set the w_disp
+    self.w_disps[in_beam] = np.clip(
+        self.c_disp*self.w_disps[in_beam], 0, self.w_disp_max)
 
-    # Invert the velocity if it would cause the particle to leave the search space.
-    position = self.swarm.position
-    velocity = self.swarm.velocity
-    
-    self.swarm.velocity = np.where(
-        np.logical_or(
-            (position + velocity) < self.swarm.position_bounds[0],
-            (position + velocity) > self.swarm.position_bounds[1]),
-        -velocity, velocity)
-    self.swarm.position += self.swarm.velocity
-    self.swarm.velocity *= self.w_disp
+    self.swarm.update_position()
+    self.swarm.velocity *= self.w_disps
 
     # Try to detect the remaining untracked targets
     detections = self.radar.measure(
@@ -240,13 +239,13 @@ class SimpleParticleSurveillance(gym.Env):
           self.n_tracks_initiated += 1
           reward += 1
 
-      # Update the swarm if an untracked target is detected.
-      # The probability that a particle gets updated decays exponentially with its distance from the latest detection. If an update occurs, the particle moves radially towards the detection
-      is_tracked = self.detection_count[detection.groundtruth_path.id] >= self.n_confirm_detections
+        # Update the swarm if an untracked target is detected.
+        # The probability that a particle gets updated decays exponentially with its distance from the latest detection. If an update occurs, the particle moves radially towards the detection
+        is_tracked = self.detection_count[detection.groundtruth_path.id] >= self.n_confirm_detections
       if isinstance(detection, Clutter) or not is_tracked:
         az = detection.state_vector[1]
         el = detection.state_vector[0]
-        relative_pos = np.array([az, el]) - self.swarm.position
+        relative_pos = np.array([az, el]).reshape((1, -1)) - self.swarm.position
         distance = np.linalg.norm(relative_pos, axis=1)[:, None]
         move_probability = np.exp(-self.beta_g*distance).ravel()
         move_inds = self.np_random.uniform(
@@ -255,15 +254,8 @@ class SimpleParticleSurveillance(gym.Env):
         self.swarm.velocity[move_inds] = self.w_det*self.swarm.velocity[move_inds] + self.c_det*velocity[move_inds] * \
             self.np_random.uniform(
                 0, 1, size=velocity[move_inds].shape)
-        # Invert the velocity if it would cause the particle to leave the search space.
-        position = self.swarm.position
-        velocity = self.swarm.velocity
-        self.swarm.velocity = np.where(
-            np.logical_or(
-                (position + velocity) < self.swarm.position_bounds[0],
-                (position + velocity) > self.swarm.position_bounds[1]),
-            -velocity, velocity)
-        self.swarm.position += self.swarm.velocity
+        self.w_disps[move_inds] = self.w_disp_min
+        self.swarm.update_position()
 
     # Apply a Gaussian mutation to a fraction of the swarm to improve exploration.
     if self.mutation_rate > 0:

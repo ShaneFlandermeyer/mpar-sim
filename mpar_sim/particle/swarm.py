@@ -12,6 +12,15 @@ class ParticleSwarm():
     self.position_bounds = position_bounds
     self.velocity_bounds = velocity_bounds
     self.reset()
+    
+  def update_position(self):
+    self.velocity = np.where(
+        np.logical_or(
+            (self.position + self.velocity) < self.position_bounds[0],
+            (self.position + self.velocity) > self.position_bounds[1]),
+        -self.velocity, self.velocity)
+    self.position += self.velocity
+    
 
   def reset(self):
     self.position = np.random.uniform(
