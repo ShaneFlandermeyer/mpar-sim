@@ -196,31 +196,7 @@ class SimpleParticleSurveillance(gym.Env):
       path.states[-1].rcs = 10
 
     # Bias particles away from the current look direction
-    steering_angles = np.array(
-        [look.azimuth_steering_angle, look.elevation_steering_angle])
-    min_az = look.azimuth_steering_angle - look.azimuth_beamwidth/2
-    max_az = look.azimuth_steering_angle + look.azimuth_beamwidth/2
-    min_el = look.elevation_steering_angle - look.elevation_beamwidth/2
-    max_el = look.elevation_steering_angle + look.elevation_beamwidth/2
-    in_beam = np.logical_and(
-        np.logical_and(
-            self.swarm.position[:, 0] >= min_az,
-            self.swarm.position[:, 0] <= max_az),
-        np.logical_and(
-            self.swarm.position[:, 1] >= min_el,
-            self.swarm.position[:, 1] <= max_el))
-    # Set the velocity of each mutated particle radially away from the beam
-    relative_pos = self.swarm.position[in_beam] - steering_angles
-    velocity = relative_pos / np.linalg.norm(relative_pos, axis=1)[:, None]
-    self.swarm.velocity[in_beam] = velocity * \
-        self.np_random.uniform(
-        0, [look.azimuth_beamwidth, look.elevation_beamwidth], size=velocity.shape)
-    # Adaptively set the w_disp
-    self.w_disps[in_beam] = np.clip(
-        self.c_disp*self.w_disps[in_beam], 0, self.w_disp_max)
-
-    self.swarm.update_position()
-    self.swarm.velocity *= self.w_disps
+    self._dispersion_phase(look)
 
     # Try to detect the remaining untracked targets
     detections = self.radar.measure(
@@ -228,6 +204,7 @@ class SimpleParticleSurveillance(gym.Env):
 
     reward = 0
     for detection in detections:
+      # TODO: Compute distance of detection from targets that are in the beam.
       # Update the detection count for this target. If a non-clutter target that has not been tracked (n_detections < n_confirm_detections), the agent receives a reward.
       if not isinstance(detection, Clutter):
         target_id = detection.groundtruth_path.id
@@ -243,19 +220,7 @@ class SimpleParticleSurveillance(gym.Env):
         # The probability that a particle gets updated decays exponentially with its distance from the latest detection. If an update occurs, the particle moves radially towards the detection
         is_tracked = self.detection_count[detection.groundtruth_path.id] >= self.n_confirm_detections
       if isinstance(detection, Clutter) or not is_tracked:
-        az = detection.state_vector[1]
-        el = detection.state_vector[0]
-        relative_pos = np.array([az, el]).reshape((1, -1)) - self.swarm.position
-        distance = np.linalg.norm(relative_pos, axis=1)[:, None]
-        move_probability = np.exp(-self.beta_g*distance).ravel()
-        move_inds = self.np_random.uniform(
-            0, 1, size=distance.size) < move_probability
-        velocity = relative_pos / distance
-        self.swarm.velocity[move_inds] = self.w_det*self.swarm.velocity[move_inds] + self.c_det*velocity[move_inds] * \
-            self.np_random.uniform(
-                0, 1, size=velocity[move_inds].shape)
-        self.w_disps[move_inds] = self.w_disp_min
-        self.swarm.update_position()
+        self._detection_phase(detection)
 
     # Apply a Gaussian mutation to a fraction of the swarm to improve exploration.
     if self.mutation_rate > 0:
@@ -527,13 +492,52 @@ class SimpleParticleSurveillance(gym.Env):
   ############################################################################
   # Particle swarm methods
   ############################################################################
+  def _dispersion_phase(self, look: Look):
+    steering_angles = np.array(
+        [look.azimuth_steering_angle, look.elevation_steering_angle])
+    min_az = look.azimuth_steering_angle - look.azimuth_beamwidth/2
+    max_az = look.azimuth_steering_angle + look.azimuth_beamwidth/2
+    min_el = look.elevation_steering_angle - look.elevation_beamwidth/2
+    max_el = look.elevation_steering_angle + look.elevation_beamwidth/2
+    in_beam = np.logical_and(
+        np.logical_and(
+            self.swarm.position[:, 0] >= min_az,
+            self.swarm.position[:, 0] <= max_az),
+        np.logical_and(
+            self.swarm.position[:, 1] >= min_el,
+            self.swarm.position[:, 1] <= max_el))
+    # Set the velocity of each mutated particle radially away from the beam
+    relative_pos = self.swarm.position[in_beam] - steering_angles
+    velocity = relative_pos / np.linalg.norm(relative_pos, axis=1)[:, None]
+    self.swarm.velocity[in_beam] = velocity * \
+        self.np_random.uniform(
+        0, [look.azimuth_beamwidth, look.elevation_beamwidth], size=velocity.shape)
+    # Adaptively set the w_disp
+    self.w_disps[in_beam] = np.clip(
+        self.c_disp*self.w_disps[in_beam], 0, self.w_disp_max)
 
-  # Mutate all particles that are in the current beam. Since the density of particles represents a sort of untracked target density, this represents the idea that we have searched this az/el region and unseen targets are unlikely to exist there. If lots of detections are found, many optimization steps will be carried out to bring particles back into the beam. Otherwise, the beam region should be mostly empty.
+    self.swarm.update_position()
+    self.swarm.velocity *= self.w_disps
+    
+  def _detection_phase(self, detection):
+    az = detection.state_vector[1]
+    el = detection.state_vector[0]
+    relative_pos = np.array([az, el]).reshape(
+        (1, -1)) - self.swarm.position
+    distance = np.linalg.norm(relative_pos, axis=1)[:, None]
+    move_probability = np.exp(-self.beta_g*distance).ravel()
+    move_inds = self.np_random.uniform(
+        0, 1, size=distance.size) < move_probability
+    velocity = relative_pos / distance
+    self.swarm.velocity[move_inds] = self.w_det*self.swarm.velocity[move_inds] + self.c_det*velocity[move_inds] * \
+        self.np_random.uniform(
+            0, 1, size=velocity[move_inds].shape)
+    self.w_disps[move_inds] = self.w_disp_min
+    self.swarm.update_position()
+    
   def _mutate_swarm(self, alpha: float = 0.25):
     """
-    Perform a Gaussian mutation on all particles that are in the current beam.
-
-    Since the density of particles represents the density of untracked targets, this mutation means that areas that have recently been searched are not likely to contain unseen targets. If lots of detections are found after this step, particles will be drawn back to the beam region, which should encourage the agent to search there again. Otherwise, the agent will be encouraged to search other areas that have not been searched recently.
+    Perform a Gaussian mutation on all particles
 
     Parameters
     ----------
