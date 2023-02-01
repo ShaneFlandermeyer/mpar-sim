@@ -91,7 +91,7 @@ def make_env(env_id,
                    randomize_initial_state=True,
                    max_random_az_covar=10**2,
                    max_random_el_covar=10**2,
-                   beta_g=0.10,
+                   beta_g=0.075,
                    w_disp_min=0.25,
                    w_disp_max=0.95,
                    w_det=0.25,
@@ -101,7 +101,7 @@ def make_env(env_id,
                    )
 
     # Wrappers
-    # env = gym.wrappers.FrameStack(env, 4)
+    env = gym.wrappers.FrameStack(env, 2)
     env = gym.wrappers.FlattenObservation(env)
     env = gym.wrappers.TimeLimit(env, max_episode_steps=max_episode_steps)
     env = gym.wrappers.ClipAction(env)
@@ -127,7 +127,7 @@ class PPOSurveillanceAgent(PPO):
                pulsewidth: float,
                prf: float,
                n_pulses: int,
-               rpo_alpha: float = 0.1,
+               rpo_alpha: float = 0,
                **kwargs):
     super().__init__(env=env, **kwargs)
     # Populate look parameters
@@ -138,8 +138,14 @@ class PPOSurveillanceAgent(PPO):
     self.prf = prf
     self.n_pulses = n_pulses
 
-    self.rpo_alpha = rpo_alpha
     self.stochastic_action_inds = [0, 1]
+    self.actor = nn.Sequential(
+        ortho_init(nn.Linear(np.array(self.observation_space.shape).prod(), 64)),
+        nn.Tanh(),
+        ortho_init(nn.Linear(64, 64)),
+        nn.Tanh(),
+        ortho_init(nn.Linear(64, 2 * len(self.stochastic_action_inds)), std=0.01)
+    )
     self.critic = nn.Sequential(
         ortho_init(
             nn.Linear(np.array(self.observation_space.shape).prod(), 64)),
@@ -148,35 +154,23 @@ class PPOSurveillanceAgent(PPO):
         nn.Tanh(),
         ortho_init(nn.Linear(64, 1), std=1.0),
     )
-    self.actor_features = nn.Sequential(
-        ortho_init(
-            nn.Linear(np.array(self.observation_space.shape).prod(), 64)),
-        nn.Tanh(),
-        ortho_init(nn.Linear(64, 64)),
-        nn.Tanh(),
-    )
-    self.actor_mean = ortho_init(
-        nn.Linear(64, len(self.stochastic_action_inds)), std=0.01)
-    self.actor_std = nn.Sequential(
-        ortho_init(nn.Linear(64, len(self.stochastic_action_inds)), std=0.01),
-        nn.Softplus(),
-    )
 
     self.save_hyperparameters()
 
   def forward(self, x: torch.Tensor):
     # Sample the action from its distribution
-    actor_features = self.actor_features(x)
-    mean = self.actor_mean(actor_features)
-    std = self.actor_std(actor_features)
+    actor_out = self.actor(x)
+    actor_out = list(torch.chunk(actor_out, 2, dim=1))
+    mean, var = actor_out[0], actor_out[1]
+    cov = torch.diag_embed(torch.exp(0.5*torch.clamp(var, -5, 5)))
     # Compute the value of the state
     value = self.critic(x).flatten()
 
-    return mean, std, value
+    return mean, cov, value
 
   def act(self, observations: torch.Tensor):
-    mean, std, value = self.forward(observations)
-    action_dist = torch.distributions.Normal(mean, std)
+    mean, cov, value = self.forward(observations)
+    action_dist = torch.distributions.MultivariateNormal(mean, cov)
     stochastic_actions = action_dist.sample()
     # TODO: Use the stochastic action indices to determine the action order
     n_envs = observations.shape[0] if observations.ndim == 2 else 1
@@ -201,22 +195,23 @@ class PPOSurveillanceAgent(PPO):
             stochastic_actions.device),
     )
     action = torch.cat((stochastic_actions,) + deterministic_actions, 1)
-    return action, value, action_dist.log_prob(stochastic_actions).sum(1), action_dist.entropy().sum(1)
+    return action, value, action_dist.log_prob(stochastic_actions), action_dist.entropy()
 
   def evaluate_actions(self,
                        observations: torch.Tensor,
                        actions: torch.Tensor):
     # Only evaluate stochastic actions
     actions = actions[:, self.stochastic_action_inds]
-    mean, std, value = self.forward(observations)
+    mean, cov, value = self.forward(observations)
     # Apply RPO to improve exploration
-    z = torch.FloatTensor(mean.shape).uniform_(-self.rpo_alpha, self.rpo_alpha)
-    mean = mean + z.to(mean.device)
-    action_dist = torch.distributions.Normal(mean, std)
-    return action_dist.log_prob(actions).sum(1), action_dist.entropy().sum(1), value
+    if self.rpo_alpha > 0:
+        z = torch.FloatTensor(mean.shape).uniform_(-self.rpo_alpha, self.rpo_alpha)
+        mean = mean + z.to(mean.device)
+    action_dist = torch.distributions.MultivariateNormal(mean, cov)
+    return action_dist.log_prob(actions), action_dist.entropy(), value
 
   def configure_optimizers(self):
-    optimizer = torch.optim.Adam(self.parameters(), lr=3e-4, eps=1e-5)
+    optimizer = torch.optim.Adam(self.parameters(), lr=5e-4, eps=1e-5)
     return optimizer
 
 
@@ -237,8 +232,8 @@ env = gym.wrappers.RecordEpisodeStatistics(env=env, deque_size=20)
 # ## Training loop
 
 # %%
-az_bw = 3
-el_bw = 3
+az_bw = 4
+el_bw = 4
 bw = 100e6
 pulsewidth = 10e-6
 prf = 5e3
@@ -255,7 +250,7 @@ ppo_agent = PPOSurveillanceAgent(env,
                                  entropy_coef=0,
                                  seed=seed,
                                  normalize_advantage=True,
-                                 policy_clip_range=0.2, 
+                                 policy_clip_range=0.2,
                                  target_kl=None,
                                  # Radar parameters
                                  azimuth_beamwidth=az_bw,
@@ -267,7 +262,7 @@ ppo_agent = PPOSurveillanceAgent(env,
                                  )
 
 
-# checkpoint_filename = "/home/shane/src/mpar-sim/lightning_logs/version_752/checkpoints/epoch=149-step=18000.ckpt"
+# checkpoint_filename = "/home/shane/src/mpar-sim/lightning_logs/version_462/checkpoints/epoch=49-step=6000.ckpt"
 # ppo_agent = PPOSurveillanceAgent.load_from_checkpoint(
 #     checkpoint_filename, env=env, seed=seed)
 

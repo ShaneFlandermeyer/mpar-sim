@@ -83,8 +83,8 @@ class PhasedArrayRadar():
     aperture_height = self.n_elements_y * self.element_spacing * self.wavelength
     beamwidths = aperture2beamwidth(
         np.array([aperture_width, aperture_height]), self.wavelength)
-    self.max_az_beamwidth = beamwidths[0]
-    self.max_el_beamwidth = beamwidths[1]
+    self.min_az_beamwidth = beamwidths[0]
+    self.min_el_beamwidth = beamwidths[1]
 
   def load_look(self, look: Look):
     """
@@ -128,8 +128,8 @@ class PhasedArrayRadar():
     tx_el_beamwidth = look.elevation_beamwidth * el_broadening
     # If the transmit beam is spoiled, use the full aperture to form the receive beam. Otherwise, use the requested beamwidth for both transmit and receive
     if isinstance(look, SpoiledLook):
-      rx_az_beamwidth = self.max_az_beamwidth * az_broadening
-      rx_el_beamwidth = self.max_el_beamwidth * el_broadening
+      rx_az_beamwidth = self.min_az_beamwidth * az_broadening
+      rx_el_beamwidth = self.min_el_beamwidth * el_broadening
     else:
       rx_az_beamwidth = tx_az_beamwidth
       rx_el_beamwidth = tx_el_beamwidth

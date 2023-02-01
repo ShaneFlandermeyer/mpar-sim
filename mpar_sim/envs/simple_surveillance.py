@@ -18,7 +18,7 @@ from mpar_sim.looks.spoiled_look import SpoiledLook
 from mpar_sim.models.transition.base import TransitionModel
 from mpar_sim.particle.swarm import ParticleSwarm
 from mpar_sim.radar import PhasedArrayRadar
-from mpar_sim.types.detection import Clutter
+from mpar_sim.types.detection import Clutter, TrueDetection
 from mpar_sim.types.groundtruth import GroundTruthPath, GroundTruthState
 
 
@@ -109,7 +109,7 @@ class SimpleParticleSurveillance(gym.Env):
     self.max_random_az_covar = max_random_az_covar
     self.max_random_el_covar = max_random_el_covar
     self.n_obs_bins = n_obs_bins
-    self.feature_size = self.n_obs_bins*3
+    self.feature_size = 2*self.n_obs_bins
     self.image_shape = image_shape
     self.seed = seed
 
@@ -200,11 +200,10 @@ class SimpleParticleSurveillance(gym.Env):
 
     # Try to detect the remaining untracked targets
     detections = self.radar.measure(
-        self.target_paths, noise=True, timestamp=self.time)
-
+        self.target_paths, noise=False, timestamp=self.time)
+    
     reward = 0
     for detection in detections:
-      # TODO: Compute distance of detection from targets that are in the beam.
       # Update the detection count for this target. If a non-clutter target that has not been tracked (n_detections < n_confirm_detections), the agent receives a reward.
       if not isinstance(detection, Clutter):
         target_id = detection.groundtruth_path.id
@@ -216,10 +215,7 @@ class SimpleParticleSurveillance(gym.Env):
           self.n_tracks_initiated += 1
           reward += 1
 
-        # Update the swarm if an untracked target is detected.
-        # The probability that a particle gets updated decays exponentially with its distance from the latest detection. If an update occurs, the particle moves radially towards the detection
-        is_tracked = self.detection_count[detection.groundtruth_path.id] >= self.n_confirm_detections
-      if isinstance(detection, Clutter) or not is_tracked:
+      if 2 <= self.detection_count[target_id] <= self.n_confirm_detections:
         self._detection_phase(detection)
 
     # Apply a Gaussian mutation to a fraction of the swarm to improve exploration.
@@ -344,8 +340,7 @@ class SimpleParticleSurveillance(gym.Env):
     best_inds = np.unravel_index(best_inds, self.image_shape)
     az = self.az_axis[best_inds[0]] / max(self.az_axis)
     el = self.el_axis[best_inds[1]] / max(self.az_axis)
-    counts = bin_counts[best_inds] / np.max(bin_counts[best_inds])
-    obs = np.array([az, el, counts]).T.ravel()
+    obs = np.array([az, el]).T.ravel()
     return obs
 
   def _get_info(self):
@@ -518,7 +513,7 @@ class SimpleParticleSurveillance(gym.Env):
 
     self.swarm.update_position()
     self.swarm.velocity *= self.w_disps
-    
+
   def _detection_phase(self, detection):
     az = detection.state_vector[1]
     el = detection.state_vector[0]
@@ -534,7 +529,7 @@ class SimpleParticleSurveillance(gym.Env):
             0, 1, size=velocity[move_inds].shape)
     self.w_disps[move_inds] = self.w_disp_min
     self.swarm.update_position()
-    
+
   def _mutate_swarm(self, alpha: float = 0.25):
     """
     Perform a Gaussian mutation on all particles

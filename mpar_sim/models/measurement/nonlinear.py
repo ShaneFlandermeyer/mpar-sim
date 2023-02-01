@@ -202,14 +202,14 @@ class CartesianToRangeAzElRangeRate(NonlinearMeasurementModel):
     return out
 
   def inverse_function(self, detection) -> np.ndarray:
-    theta, phi, rho, rho_rate = detection.state_vector
+    elevation, azimuth, range, range_rate = detection.state_vector
 
-    x, y, z = sph2cart(rho, phi, theta, degrees=True)
+    x, y, z = sph2cart(azimuth, elevation, range, degrees=True)
     # because only rho_rate is known, only the components in
     # x,y and z of the range rate can be found.
-    x_rate = np.cos(phi) * np.cos(theta) * rho_rate
-    y_rate = np.cos(phi) * np.sin(theta) * rho_rate
-    z_rate = np.sin(phi) * rho_rate
+    x_rate = np.cos(azimuth) * np.cos(elevation) * range_rate
+    y_rate = np.cos(azimuth) * np.sin(elevation) * range_rate
+    z_rate = np.sin(azimuth) * range_rate
 
     inv_rotation_matrix = np.linalg.inv(self.rotation_matrix)
 
