@@ -43,7 +43,6 @@ class SimpleParticleSurveillance(gym.Env):
                w_disp_max: float = 0.95,
                c_disp: float = 1.5,
                w_det: float = 0.25,
-               c_det: float = 1.0,
                mutation_rate: float = 0.01,
                mutation_alpha: float = 0.25,
                # Environment parameters
@@ -119,7 +118,7 @@ class SimpleParticleSurveillance(gym.Env):
     self.action_space = spaces.Box(
         low=np.array(
             [-1, -1, 0, 0, 0, 0, 0, 0]),
-        high=np.array([1, 1, np.Inf, np.Inf, np.Inf, np.Inf, np.Inf, np.Inf]),
+        high=np.array([1, 1, 1, 1, np.Inf, np.Inf, np.Inf, np.Inf]),
         shape=(8,),
         dtype=np.float32)
     assert render_mode is None or render_mode in self.metadata["render_modes"]
@@ -141,7 +140,6 @@ class SimpleParticleSurveillance(gym.Env):
     self.w_disp_max = w_disp_max
     self.c_disp = c_disp
     self.w_det = w_det
-    self.c_det = c_det
     self.mutation_rate = mutation_rate
     self.mutation_alpha = mutation_alpha
     self.w_disps = np.ones_like(self.swarm.position)*w_disp_max
@@ -159,32 +157,8 @@ class SimpleParticleSurveillance(gym.Env):
     self.clock = None
 
   def step(self, action: np.ndarray):
-    # Squash the actions into the range [-1, 1] then scale by the max/min az and el values
-    az_steering_angle = action[0] * \
-        (self.radar.az_fov[1] - self.radar.az_fov[0]) / 2
-    el_steering_angle = action[1] * \
-        (self.radar.el_fov[1] - self.radar.el_fov[0]) / 2
 
-    # Compute the number of elements used to form the Tx beam. Assuming the total Tx power is equal to the # of tx elements times the max element power
-    tx_beamwidths = np.array([action[2], action[3]])
-    tx_aperture_size = beamwidth2aperture(
-        tx_beamwidths, self.radar.wavelength) / self.radar.wavelength
-    n_tx_elements = np.prod(np.ceil(
-        tx_aperture_size / self.radar.element_spacing).astype(int))
-    tx_power = n_tx_elements * self.radar.element_tx_power
-
-    look = SpoiledLook(
-        azimuth_steering_angle=az_steering_angle,
-        elevation_steering_angle=el_steering_angle,
-        azimuth_beamwidth=action[2],
-        elevation_beamwidth=action[3],
-        bandwidth=action[4],
-        pulsewidth=action[5],
-        prf=action[6],
-        n_pulses=action[7],
-        tx_power=tx_power,
-        start_time=self.time,
-    )
+    look = self._action_to_look(action)
 
     # Point the radar in the right direction
     self.radar.load_look(look)
@@ -201,7 +175,7 @@ class SimpleParticleSurveillance(gym.Env):
     # Try to detect the remaining untracked targets
     detections = self.radar.measure(
         self.target_paths, noise=False, timestamp=self.time)
-    
+
     reward = 0
     for detection in detections:
       # Update the detection count for this target. If a non-clutter target that has not been tracked (n_detections < n_confirm_detections), the agent receives a reward.
@@ -316,14 +290,51 @@ class SimpleParticleSurveillance(gym.Env):
   ############################################################################
   # Internal gym-specific methods
   ############################################################################
-  def bin_count_image(self) -> np.ndarray:
+  def _action_to_look(self, action):
+    # TODO: Convert action array to a radar look object
+    # Squash the actions into the range [-1, 1] then scale by the max/min az and el values
+    az_steering_angle = action[0] * \
+        (self.radar.az_fov[1] - self.radar.az_fov[0]) / 2
+    el_steering_angle = action[1] * \
+        (self.radar.el_fov[1] - self.radar.el_fov[0]) / 2
+
+    # Convert the azimuth and elevation beamwidth inputs from the range [0, 1]
+    az_beamwidth = action[2] * (self.radar.max_az_beamwidth -
+                                self.radar.min_az_beamwidth) + self.radar.min_az_beamwidth
+    el_beamwidth = action[3] * (self.radar.max_el_beamwidth -
+                                self.radar.min_el_beamwidth) + self.radar.min_el_beamwidth
+    self.c_det = min(az_beamwidth, el_beamwidth) / 2
+
+    # Compute the number of elements used to form the Tx beam. Assuming the total Tx power is equal to the # of tx elements times the max element power
+    # tx_beamwidths =
+    tx_aperture_size = beamwidth2aperture(
+        np.array([az_beamwidth, el_beamwidth]), self.radar.wavelength) / self.radar.wavelength
+    n_tx_elements = np.prod(np.ceil(
+        tx_aperture_size / self.radar.element_spacing).astype(int))
+    tx_power = n_tx_elements * self.radar.element_tx_power
+
+    look = SpoiledLook(
+        azimuth_steering_angle=az_steering_angle,
+        elevation_steering_angle=el_steering_angle,
+        azimuth_beamwidth=az_beamwidth,
+        elevation_beamwidth=el_beamwidth,
+        bandwidth=action[4],
+        pulsewidth=action[5],
+        prf=action[6],
+        n_pulses=action[7],
+        tx_power=tx_power,
+        start_time=self.time,
+    )
+    return look
+
+  def _particle_histogram(self) -> np.ndarray:
     az_indices = np.digitize(
         self.swarm.position[:, 0], self.az_axis, right=True)
     el_indices = np.digitize(
         self.swarm.position[:, 1], self.el_axis, right=True)
     flat_inds = az_indices * self.image_shape[0] + el_indices
-    bin_counts = np.bincount(flat_inds, minlength=np.prod(
-        self.image_shape)).reshape(self.image_shape)
+    bin_counts = np.histogram(flat_inds, bins=np.arange(0, np.prod(self.image_shape)+1))[
+        0].reshape(self.image_shape)
     return bin_counts
 
   def _get_obs(self) -> np.ndarray:
@@ -335,7 +346,7 @@ class SimpleParticleSurveillance(gym.Env):
     np.ndarray
         Output image where each pixel has a value equal to the number of swarm particles in that pixel.
     """
-    bin_counts = self.bin_count_image()
+    bin_counts = self._particle_histogram()
     best_inds = np.argsort(bin_counts, axis=None)[:-self.n_obs_bins-1:-1]
     best_inds = np.unravel_index(best_inds, self.image_shape)
     az = self.az_axis[best_inds[0]] / max(self.az_axis)
@@ -377,7 +388,7 @@ class SimpleParticleSurveillance(gym.Env):
 
     # Draw canvas from pixels
     # The observation gets inverted here because I want black pixels on a white background.
-    pixels = self.bin_count_image()
+    pixels = self._particle_histogram()
     pixels = np.flip(pixels.squeeze(), axis=1)
     pixels = cv2.resize(pixels, (256, 256), interpolation=cv2.INTER_NEAREST)
     canvas = pygame.surfarray.make_surface(pixels)

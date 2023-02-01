@@ -38,6 +38,8 @@ class PhasedArrayRadar():
                n_elements_y: int = 16,
                element_spacing: float = 0.5,
                element_tx_power: float = 10,
+               max_az_beamwidth: float = np.Inf,
+               max_el_beamwidth: float = np.Inf,
                # System parameters
                center_frequency: float = 3e9,
                system_temperature: float = 290,
@@ -81,10 +83,12 @@ class PhasedArrayRadar():
     # Compute the maximum possible beamwidth in az/el for the array geometry
     aperture_width = self.n_elements_x * self.element_spacing * self.wavelength
     aperture_height = self.n_elements_y * self.element_spacing * self.wavelength
-    beamwidths = aperture2beamwidth(
+    min_beamwidths = aperture2beamwidth(
         np.array([aperture_width, aperture_height]), self.wavelength)
-    self.min_az_beamwidth = beamwidths[0]
-    self.min_el_beamwidth = beamwidths[1]
+    self.min_az_beamwidth = min_beamwidths[0]
+    self.min_el_beamwidth = min_beamwidths[1]
+    self.max_az_beamwidth = max_az_beamwidth
+    self.max_el_beamwidth = max_el_beamwidth
 
   def load_look(self, look: Look):
     """
@@ -253,7 +257,7 @@ class PhasedArrayRadar():
     [target_az, target_el, r] = cart2sph(*relative_pos, degrees=True)
     relative_az = target_az - self.tx_beam.azimuth_steering_angle
     relative_el = target_el - self.tx_beam.elevation_steering_angle
-    
+
     # Compute SNR and probability of detection assuming a Swerling 1 target model
     beam_shape_loss_db = self.tx_beam.shape_loss(relative_az, relative_el)
     snr_db = 10*np.log10(self.loop_gain) + 10*np.log10(rcs) - \
@@ -261,7 +265,7 @@ class PhasedArrayRadar():
     snr_lin = 10**(snr_db/10)
     pfa = self.false_alarm_rate
     pd = pfa**(1/(1+snr_lin))
-    
+
     # Filter out targets that have low SNR, are outside the radar's FOV, or are outside the main beam, then determine which targets are detected
     pd[snr_db < 0] = 0
     pd[~self.is_detectable(target_az, target_el, r)] = 0
@@ -297,11 +301,11 @@ class PhasedArrayRadar():
         measurement_model.noise_covar = np.zeros(
             (measurement_model.ndim_meas, measurement_model.ndim_meas, n_detections))
         for i in range(n_detections):
-            measurement_model.noise_covar[..., i] = np.diag(
-                [elevation_variance[i],
-                azimuth_variance[i],
-                range_variance[i],
-                velocity_variance[i]])
+          measurement_model.noise_covar[..., i] = np.diag(
+              [elevation_variance[i],
+               azimuth_variance[i],
+               range_variance[i],
+               velocity_variance[i]])
       measurements = measurement_model.function(
           state_vectors[:, is_detected], noise=noise)
 

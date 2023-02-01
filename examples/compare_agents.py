@@ -34,35 +34,13 @@ plt.rcParams["axes.labelweight"] = "bold"
 
 
 def make_env(env_id,
+             radar,
              max_episode_steps):
   def thunk():
     # In this experiment, targets move according to a constant velocity, white noise acceleration model.
     # http://www.control.isy.liu.se/student/graduate/targettracking/file/le2_handout.pdf
     transition_model = ConstantVelocity(ndim_pos=3, noise_diff_coeff=10)
-    # Radar system object
-    radar = PhasedArrayRadar(
-        ndim_state=6,
-        position_mapping=[0, 2, 4],
-        velocity_mapping=[1, 3, 5],
-        position=np.array([[0], [0], [0]]),
-        rotation_offset=np.array([[0], [0], [0]]),
-        # Array parameters
-        n_elements_x=32,
-        n_elements_y=32,
-        element_spacing=0.5,  # Wavelengths
-        element_tx_power=10,
-        # System parameters
-        center_frequency=3e9,
-        system_temperature=290,
-        noise_figure=4,
-        # Scan settings
-        beam_shape=SincBeam,
-        az_fov=[-45, 45],
-        el_fov=[-45, 45],
-        # Detection settings
-        false_alarm_rate=1e-6,
-        include_false_alarms=False
-    )
+
     # Gaussian parameters used to initialize the states of new targets in the scene. Here, elements (0, 2, 4) of the state vector/covariance are the az/el/range of the target (angles in degrees), and (1, 3, 5) are the x/y/z velocities in m/s. If randomize_initial_state is set to True in the environment, the mean az/el are uniformly sampled across the radar field of view, and the variance is uniformly sampled from [0, max_random_az_covar] and [0, max_random_el_covar] for the az/el, respectively
     initial_state = GaussianState(
         state_vector=[-30,   0,  20,   0, 10e3, 0],
@@ -85,9 +63,9 @@ def make_env(env_id,
                    w_disp_min=0.25,
                    w_disp_max=0.95,
                    w_det=0.25,
-                   c_det=2.0,
                    mutation_rate=0,
                    render_mode='rgb_array',
+                   n_obs_bins=50,
                    )
 
     # Wrappers
@@ -101,17 +79,45 @@ def make_env(env_id,
   return thunk
 
 
+# Radar system object
+radar = PhasedArrayRadar(
+    ndim_state=6,
+    position_mapping=[0, 2, 4],
+    velocity_mapping=[1, 3, 5],
+    position=np.array([[0], [0], [0]]),
+    rotation_offset=np.array([[0], [0], [0]]),
+    # Array parameters
+    n_elements_x=32,
+    n_elements_y=32,
+    element_spacing=0.5,  # Wavelengths
+    element_tx_power=10,
+    max_az_beamwidth=10,
+    max_el_beamwidth=10,
+    # System parameters
+    center_frequency=3e9,
+    system_temperature=290,
+    noise_figure=4,
+    # Scan settings
+    beam_shape=SincBeam,
+    az_fov=[-45, 45],
+    el_fov=[-45, 45],
+    # Detection settings
+    false_alarm_rate=1e-6,
+    include_false_alarms=False
+)
+
+
 env_id = 'mpar_sim/SimpleParticleSurveillance-v0'
 n_env = 20
 max_episode_steps = 1000
 env = gym.vector.AsyncVectorEnv(
-    [make_env(env_id,  max_episode_steps) for _ in range(n_env)])
+    [make_env(env_id,  radar, max_episode_steps) for _ in range(n_env)])
 
 #############################
 # Agent definitions
 #############################
-az_bw = 3
-el_bw = 3
+az_bw = 10
+el_bw = 10
 bw = 100e6
 pulsewidth = 10e-6
 prf = 5e3
@@ -130,29 +136,26 @@ raster_agent = RasterScanAgent(
     n_pulses=n_pulses,
 )
 
+
 class PPOSurveillanceAgent(PPO):
   def __init__(self,
                env: gym.Env,
                # Look parameters
-               azimuth_beamwidth: float,
-               elevation_beamwidth: float,
                bandwidth: float,
                pulsewidth: float,
                prf: float,
                n_pulses: int,
-               rpo_alpha: float = 0.0,
+               rpo_alpha: float = 0,
                **kwargs):
     super().__init__(env=env, **kwargs)
     # Populate look parameters
-    self.azimuth_beamwidth = azimuth_beamwidth
-    self.elevation_beamwidth = elevation_beamwidth
     self.bandwidth = bandwidth
     self.pulsewidth = pulsewidth
     self.prf = prf
     self.n_pulses = n_pulses
 
     self.rpo_alpha = rpo_alpha
-    self.stochastic_action_inds = [0, 1]
+    self.stochastic_action_inds = [0, 1, 2, 3]
     self.actor = nn.Sequential(
         ortho_init(nn.Linear(np.array(self.observation_space.shape).prod(), 64)),
         nn.Tanh(),
@@ -182,22 +185,13 @@ class PPOSurveillanceAgent(PPO):
 
     return mean, cov, value
 
-  def act(self, observations: torch.Tensor, deterministic = False):
+  def act(self, observations: torch.Tensor):
     mean, cov, value = self.forward(observations)
     action_dist = torch.distributions.MultivariateNormal(mean, cov)
-    if deterministic:
-      stochastic_actions = mean
-    else:
-      stochastic_actions = action_dist.sample()
+    stochastic_actions = action_dist.sample()
     # TODO: Use the stochastic action indices to determine the action order
     n_envs = observations.shape[0] if observations.ndim == 2 else 1
     deterministic_actions = (
-        # Azimuth beamwidth
-        torch.full((n_envs, 1), self.azimuth_beamwidth).to(
-            stochastic_actions.device),
-        # Elevation beamwidth
-        torch.full((n_envs, 1), self.elevation_beamwidth).to(
-            stochastic_actions.device),
         # Bandwidth
         torch.full((n_envs, 1), self.bandwidth).to(
             stochastic_actions.device),
@@ -220,17 +214,20 @@ class PPOSurveillanceAgent(PPO):
     # Only evaluate stochastic actions
     actions = actions[:, self.stochastic_action_inds]
     mean, cov, value = self.forward(observations)
+    # Apply RPO to improve exploration
     if self.rpo_alpha > 0:
-        z = torch.FloatTensor(mean.shape).uniform_(-self.rpo_alpha, self.rpo_alpha)
-        mean = mean + z.to(mean.device)
+      z = torch.FloatTensor(
+          mean.shape).uniform_(-self.rpo_alpha, self.rpo_alpha)
+      mean = mean + z.to(mean.device)
     action_dist = torch.distributions.MultivariateNormal(mean, cov)
     return action_dist.log_prob(actions), action_dist.entropy(), value
 
   def configure_optimizers(self):
     optimizer = torch.optim.Adam(self.parameters(), lr=5e-4, eps=1e-5)
     return optimizer
-  
-checkpoint_filename = "/home/shane/src/mpar-sim/lightning_logs/version_488/checkpoints/epoch=49-step=6000.ckpt"
+
+
+checkpoint_filename = "/home/shane/src/mpar-sim/lightning_logs/version_499/checkpoints/epoch=49-step=6000.ckpt"
 ppo_agent = PPOSurveillanceAgent.load_from_checkpoint(
     checkpoint_filename, env=env, seed=seed)
 
@@ -258,10 +255,8 @@ with torch.no_grad():
   while not np.all(dones):
     obs_tensor = torch.as_tensor(obs).to(
         device=ppo_agent.device, dtype=torch.float32)
-    action_tensor = ppo_agent.act(obs_tensor, False)[0]
-    actions = action_tensor.cpu().numpy()
-    # if actions.shape[0] == 1:
-    #   actions = actions.ravel()
+    action_tensor = ppo_agent.act(obs_tensor)[0]
+    actions = action_tensor.detach().cpu().numpy()
     # Repeat actions for all environments
     obs, reward, terminated, truncated, info = env.step(actions)
     dones = np.logical_or(dones, np.logical_or(terminated, truncated))
@@ -273,7 +268,7 @@ toc = time.time()
 print("PPO agent done")
 print(f"Time elapsed: {toc-tic:.2f} seconds")
 
-# Deterministic swarm agent
+# # Deterministic swarm agent
 tic = time.time()
 obs, info = env.reset(seed=seed)
 dones = np.zeros(n_env, dtype=bool)
@@ -281,14 +276,17 @@ i = 0
 while not np.all(dones):
   # Perform an environment step
   look = raster_agent.act(obs)
-  actions = np.array([[look.azimuth_steering_angle / 45,
-                     look.elevation_steering_angle / 45,
-                     look.azimuth_beamwidth,
-                     look.elevation_beamwidth,
-                     look.bandwidth,
-                     look.pulsewidth,
-                     look.prf,
-                     look.n_pulses]])
+  az_beamwidth = (look.azimuth_beamwidth - radar.min_az_beamwidth) / \
+      (radar.max_az_beamwidth - radar.min_az_beamwidth)
+  el_beamwidth = (look.elevation_beamwidth - radar.min_el_beamwidth) / \
+      (radar.max_el_beamwidth - radar.min_el_beamwidth)
+  actions = np.array([[0, 0,
+                     az_beamwidth,
+                     el_beamwidth,
+                       look.bandwidth,
+                       look.pulsewidth,
+                       look.prf,
+                       look.n_pulses]])
   actions = np.repeat(actions, n_env, axis=0)
   actions[:, 0] = obs[:, 0]
   actions[:, 1] = obs[:, 1]
@@ -311,7 +309,7 @@ toc = time.time()
 print("Deterministic swarm agent done")
 print(f"Time elapsed: {toc-tic:.2f} seconds")
 
-# Raster agent
+# # Raster agent
 tic = time.time()
 obs, info = env.reset(seed=seed)
 dones = np.zeros(n_env, dtype=bool)
@@ -319,10 +317,14 @@ i = 0
 while not np.all(dones):
   # Perform an environment step
   look = raster_agent.act(obs)
+  az_beamwidth = (look.azimuth_beamwidth - radar.min_az_beamwidth) / \
+      (radar.max_az_beamwidth - radar.min_az_beamwidth)
+  el_beamwidth = (look.elevation_beamwidth - radar.min_el_beamwidth) / \
+      (radar.max_el_beamwidth - radar.min_el_beamwidth)
   actions = np.array([[look.azimuth_steering_angle / 45,
                      look.elevation_steering_angle / 45,
-                     look.azimuth_beamwidth,
-                     look.elevation_beamwidth,
+                     az_beamwidth,
+                     el_beamwidth,
                      look.bandwidth,
                      look.pulsewidth,
                      look.prf,
@@ -346,10 +348,14 @@ i = 0
 while not np.all(dones):
   # Perform an environment step
   look = raster_agent.act(obs)
+  az_beamwidth = (look.azimuth_beamwidth - radar.min_az_beamwidth) / \
+      (radar.max_az_beamwidth - radar.min_az_beamwidth)
+  el_beamwidth = (look.elevation_beamwidth - radar.min_el_beamwidth) / \
+      (radar.max_el_beamwidth - radar.min_el_beamwidth)
   actions = np.array([[np.random.uniform(-1, 1),
                      np.random.uniform(-1, 1),
-                     look.azimuth_beamwidth,
-                     look.elevation_beamwidth,
+                     az_beamwidth,
+                     el_beamwidth,
                      look.bandwidth,
                      look.pulsewidth,
                      look.prf,
@@ -388,3 +394,5 @@ plt.colorbar()
 
 plt.show()
 env.close()
+
+# %%

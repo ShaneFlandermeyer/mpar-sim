@@ -61,6 +61,8 @@ def make_env(env_id,
         n_elements_y=32,
         element_spacing=0.5,  # Wavelengths
         element_tx_power=10,
+        max_az_beamwidth=10,
+        max_el_beamwidth=10,
         # System parameters
         center_frequency=3e9,
         system_temperature=290,
@@ -95,9 +97,9 @@ def make_env(env_id,
                    w_disp_min=0.25,
                    w_disp_max=0.95,
                    w_det=0.25,
-                   c_det=2.0,
                    mutation_rate=0,
                    render_mode='rgb_array',
+                   n_obs_bins=50,
                    )
 
     # Wrappers
@@ -120,9 +122,7 @@ def make_env(env_id,
 class PPOSurveillanceAgent(PPO):
   def __init__(self,
                env: gym.Env,
-               # Look parameters
-               azimuth_beamwidth: float,
-               elevation_beamwidth: float,
+               # Look parameters 
                bandwidth: float,
                pulsewidth: float,
                prf: float,
@@ -131,14 +131,13 @@ class PPOSurveillanceAgent(PPO):
                **kwargs):
     super().__init__(env=env, **kwargs)
     # Populate look parameters
-    self.azimuth_beamwidth = azimuth_beamwidth
-    self.elevation_beamwidth = elevation_beamwidth
     self.bandwidth = bandwidth
     self.pulsewidth = pulsewidth
     self.prf = prf
     self.n_pulses = n_pulses
 
-    self.stochastic_action_inds = [0, 1]
+    self.rpo_alpha = rpo_alpha
+    self.stochastic_action_inds = [0, 1, 2, 3]
     self.actor = nn.Sequential(
         ortho_init(nn.Linear(np.array(self.observation_space.shape).prod(), 64)),
         nn.Tanh(),
@@ -175,12 +174,6 @@ class PPOSurveillanceAgent(PPO):
     # TODO: Use the stochastic action indices to determine the action order
     n_envs = observations.shape[0] if observations.ndim == 2 else 1
     deterministic_actions = (
-        # Azimuth beamwidth
-        torch.full((n_envs, 1), self.azimuth_beamwidth).to(
-            stochastic_actions.device),
-        # Elevation beamwidth
-        torch.full((n_envs, 1), self.elevation_beamwidth).to(
-            stochastic_actions.device),
         # Bandwidth
         torch.full((n_envs, 1), self.bandwidth).to(
             stochastic_actions.device),
@@ -205,8 +198,9 @@ class PPOSurveillanceAgent(PPO):
     mean, cov, value = self.forward(observations)
     # Apply RPO to improve exploration
     if self.rpo_alpha > 0:
-        z = torch.FloatTensor(mean.shape).uniform_(-self.rpo_alpha, self.rpo_alpha)
-        mean = mean + z.to(mean.device)
+      z = torch.FloatTensor(
+          mean.shape).uniform_(-self.rpo_alpha, self.rpo_alpha)
+      mean = mean + z.to(mean.device)
     action_dist = torch.distributions.MultivariateNormal(mean, cov)
     return action_dist.log_prob(actions), action_dist.entropy(), value
 
@@ -232,8 +226,6 @@ env = gym.wrappers.RecordEpisodeStatistics(env=env, deque_size=20)
 # ## Training loop
 
 # %%
-az_bw = 4
-el_bw = 4
 bw = 100e6
 pulsewidth = 10e-6
 prf = 5e3
@@ -248,13 +240,12 @@ ppo_agent = PPOSurveillanceAgent(env,
                                  gae_lambda=0.95,
                                  value_coef=0.5,
                                  entropy_coef=0,
+                                 rpo_alpha=0,
                                  seed=seed,
                                  normalize_advantage=True,
                                  policy_clip_range=0.2,
                                  target_kl=None,
                                  # Radar parameters
-                                 azimuth_beamwidth=az_bw,
-                                 elevation_beamwidth=el_bw,
                                  bandwidth=bw,
                                  pulsewidth=pulsewidth,
                                  prf=prf,
@@ -267,7 +258,7 @@ ppo_agent = PPOSurveillanceAgent(env,
 #     checkpoint_filename, env=env, seed=seed)
 
 trainer = pl.Trainer(
-    max_epochs=100,
+    max_epochs=50,
     gradient_clip_val=0.5,
     accelerator='gpu',
     devices=1,
