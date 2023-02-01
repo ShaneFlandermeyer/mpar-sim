@@ -125,6 +125,9 @@ class IncrementalLocalBestPSO(SwarmOptimizer):
       center=1.0,
       init_pos=None,
       pbest_reset_interval=None,
+      gbest_mutation_std=0,
+      static=False,
+      save_history=False
   ) -> None:
     super().__init__(
         n_particles=n_particles,
@@ -140,17 +143,21 @@ class IncrementalLocalBestPSO(SwarmOptimizer):
       oh_strategy = {}
     # Initialize logger
     self.rep = Reporter(logger=logging.getLogger(__name__))
+    # Assign k-neighbors and p-value as attributes
+    self.k, self.p = options["k"], options["p"]
+    self.gbest_mutation_std = gbest_mutation_std
     # Initialize the resettable attributes
     self.reset()
 
     # Initialize the topology
-    self.top = Ring(static=True)
+    self.top = Ring(static=static)
     self.bh = BoundaryHandler(strategy=bh_strategy)
     self.vh = VelocityHandler(strategy=vh_strategy)
     self.oh = OptionsHandler(strategy=oh_strategy)
     self.name = __name__
 
     # Reset memory-based items
+    self.save_history = save_history
     self.pbest_reset_interval = pbest_reset_interval
     self.swarm.pbest_cost = np.full(self.swarm_size[0], np.inf)
     self.iter_count = 0
@@ -174,17 +181,23 @@ class IncrementalLocalBestPSO(SwarmOptimizer):
     self.swarm.pbest_pos, self.swarm.pbest_cost = compute_pbest(self.swarm)
 
     self.swarm.best_pos, self.swarm.best_cost = self.top.compute_gbest(
-        self.swarm, k=int(self.n_particles/10), p=2)
+        self.swarm, k=self.k, p=self.p)
+    # Mutate the global best position of each particle
+    if self.gbest_mutation_std > 0:
+        self.swarm.best_pos += np.random.normal(
+            0, self.gbest_mutation_std, self.swarm.best_pos.shape)
+        self.swarm.best_pos = np.clip(self.swarm.best_pos, *self.bounds)
 
     # Save to history
-    hist = self.ToHistory(
-        best_cost=self.swarm.best_cost,
-        mean_pbest_cost=np.mean(self.swarm.pbest_cost),
-        mean_neighbor_cost=self.swarm.best_cost,
-        position=self.swarm.position,
-        velocity=self.swarm.velocity,
-    )
-    self._populate_history(hist)
+    if self.save_history:
+      hist = self.ToHistory(
+          best_cost=self.swarm.best_cost,
+          mean_pbest_cost=np.mean(self.swarm.pbest_cost),
+          mean_neighbor_cost=self.swarm.best_cost,
+          position=self.swarm.position,
+          velocity=self.swarm.velocity,
+      )
+      self._populate_history(hist)
 
     # Perform options update
     if iters is not None:

@@ -59,7 +59,7 @@ def default_raster_scan_agent():
 
 def default_gbest_pso():
   options = {'c1': 0, 'c2': 0.9, 'w': 0.3}
-  return IncrementalGlobalBestPSO(n_particles=2500,
+  return IncrementalGlobalBestPSO(n_particles=1000,
                                   dimensions=2,
                                   options=options,
                                   bounds=np.array([[-45, -45], [45, 45]]),
@@ -68,13 +68,15 @@ def default_gbest_pso():
 
 
 def default_lbest_pso():
-  # options = {'c1': 0.2, 'c2': 0.5, 'w': 0.8}
-  options = {'c1': 0.2, 'c2': 0.6, 'w': 0.5}
-  return IncrementalLocalBestPSO(n_particles=2500,
+  # TODO: Compare c2 = 0.1, 0.2, and 0.4
+  options = {'c1': 0, 'c2': 0.4, 'w': 0.9, 'k': 25, 'p': 2}
+  return IncrementalLocalBestPSO(n_particles=5000,
                                  dimensions=2,
                                  options=options,
                                  bounds=np.array([[-45, -45], [45, 45]]),
+                                 gbest_mutation_std=1,
                                  pbest_reset_interval=1000,
+                                 static=True,
                                  )
 
 

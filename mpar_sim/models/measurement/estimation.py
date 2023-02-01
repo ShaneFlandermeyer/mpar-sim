@@ -22,7 +22,7 @@ def range_crlb(snr: float, resolution: float, bias_fraction: float = 0) -> float
   improvement_factor = 1 / (8*np.pi**2*snr)
   improvement_factor += bias_fraction**2
   # Limit worst-case accuracy to uniformly distributed over resolution
-  improvement_factor = min(improvement_factor, 1/12)
+  improvement_factor = np.clip(improvement_factor, 0, 1/12)
   variance = resolution**2 * improvement_factor
 
   return variance
@@ -43,7 +43,7 @@ def velocity_crlb(snr: float, resolution: float, bias_fraction: float = 0):
   improvement_factor = 6 / ((2*np.pi)**2 * snr)
   improvement_factor += bias_fraction**2
   # Limit worst-case accuracy to uniformly distributed over resolution
-  improvement_factor = min(improvement_factor, 1/12)
+  improvement_factor = np.clip(improvement_factor, 0, 1/12)
   variance = resolution**2 * improvement_factor
   return variance
 
@@ -68,6 +68,6 @@ def angle_crlb(snr: float, resolution: float, bias_fraction: float = 0):
   improvement_factor = 6 / ((2*np.pi)**2 * snr * k**2)
   improvement_factor += bias_fraction**2
   # Limit worst-case accuracy to uniformly distributed over resolution
-  improvement_factor = min(improvement_factor, 1/12)
+  improvement_factor = np.clip(improvement_factor, 0, 1/12)
   variance = resolution**2 * improvement_factor
   return variance

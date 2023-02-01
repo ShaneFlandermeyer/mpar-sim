@@ -1,22 +1,25 @@
 import copy
 import datetime
 from typing import Collection, Dict, Optional
+import cv2
 
 import gymnasium as gym
 import numpy as np
 import pygame
 from gymnasium import spaces
-from ordered_set import OrderedSet
-from stonesoup.models.transition.base import TransitionModel
-from stonesoup.types.array import StateVector
-from stonesoup.types.groundtruth import GroundTruthPath, GroundTruthState
 from stonesoup.types.state import GaussianState
-from stonesoup.types.detection import Clutter
+from mpar_sim.beam.common import beamwidth2aperture
+
 from mpar_sim.common.coordinate_transform import sph2cart
+from mpar_sim.common.wrap_to_interval import wrap_to_interval
 from mpar_sim.defaults import default_gbest_pso, default_lbest_pso
 from mpar_sim.looks.look import Look
+from mpar_sim.looks.spoiled_look import SpoiledLook
+from mpar_sim.models.transition.base import TransitionModel
+from mpar_sim.particle.swarm import ParticleSwarm
 from mpar_sim.radar import PhasedArrayRadar
-from pyswarms.base.base_single import SwarmOptimizer
+from mpar_sim.types.detection import Clutter, TrueDetection
+from mpar_sim.types.groundtruth import GroundTruthPath, GroundTruthState
 
 
 class SimpleParticleSurveillance(gym.Env):
@@ -24,27 +27,32 @@ class SimpleParticleSurveillance(gym.Env):
 
   def __init__(self,
                radar: PhasedArrayRadar,
-               # Radar parameters
-               azimuth_beamwidth: float,
-               elevation_beamwidth: float,
-               bandwidth: float,
-               pulsewidth: float,
-               prf: float,
-               n_pulses: float,
                # Target generation parameters
                transition_model: TransitionModel,
                initial_state: GaussianState,
                birth_rate: float = 1.0,
                death_probability: float = 0.01,
-               preexisting_states: Collection[StateVector] = [],
-               initial_number_targets: int = 0,
+               preexisting_states: Collection[np.ndarray] = [],
+               #    initial_number_targets: int = 0,
+               min_initial_n_targets: int = 50,
+               max_initial_n_targets: int = 50,
                # Particle swarm parameters
-               swarm_optim: SwarmOptimizer = None,
+               swarm: ParticleSwarm = None,
+               beta_g: float = 0.05,
+               w_disp_min: float = 0.25,
+               w_disp_max: float = 0.95,
+               c_disp: float = 1.5,
+               w_det: float = 0.25,
+               mutation_rate: float = 0.01,
+               mutation_alpha: float = 0.25,
                # Environment parameters
                randomize_initial_state: bool = False,
-               max_random_az_covar: float = 10,
-               max_random_el_covar: float = 10,
-               n_confirm_detections: int = 2,
+               max_random_az_covar: float = 10**2,
+               max_random_el_covar: float = 10**2,
+               n_confirm_detections: int = 3,
+               # Gym-specific parameters
+               n_obs_bins: int = 50,
+               image_shape: int = (84, 84),
                seed: int = None,
                render_mode: str = None,
                ):
@@ -65,11 +73,11 @@ class SimpleParticleSurveillance(gym.Env):
         Lambda parameter of poisson target generation process that defines the rate of target generation per timestep, by default 1.0
     death_probability : float, optional
         Probability of death at each time step (per target), by default 0.01
-    preexisting_states : Collection[StateVector], optional
+    preexisting_states : Collection[np.ndarray], optional
         A list of deterministic target states that are generated every time the scenario is initialized. This can be useful if you want to simulate a specific set of target trajectories, by default []
     initial_number_targets : int, optional
         Number of targets generated at the start of the simulation, by default 0
-    swarm_optim : SwarmOptimizer, optional
+    swarm : SwarmOptimizer, optional
         Particle swarm optimizer object used to generate the state images, by default None
     n_confirm_detections: int, optional
         Number of detections required to confirm a target, by default 2.
@@ -92,43 +100,57 @@ class SimpleParticleSurveillance(gym.Env):
     self.birth_rate = birth_rate
     self.death_probability = death_probability
     self.preexisting_states = preexisting_states
-    self.initial_number_targets = initial_number_targets
+    # self.initial_number_targets = initial_number_targets
+    self.min_initial_n_targets = min_initial_n_targets
+    self.max_initial_n_targets = max_initial_n_targets
     self.n_confirm_detections = n_confirm_detections
     self.randomize_initial_state = randomize_initial_state
     self.max_random_az_covar = max_random_az_covar
     self.max_random_el_covar = max_random_el_covar
+    self.n_obs_bins = n_obs_bins
+    self.feature_size = 2*self.n_obs_bins
+    self.image_shape = image_shape
     self.seed = seed
-    # Radar parameters
-    self.azimuth_beamwidth = azimuth_beamwidth
-    self.elevation_beamwidth = elevation_beamwidth
-    self.bandwidth = bandwidth
-    self.pulsewidth = pulsewidth
-    self.prf = prf
-    self.n_pulses = n_pulses
 
     self.observation_space = spaces.Box(
-        low=0, high=255, shape=(128, 128, 1), dtype=np.uint8)
+        low=0, high=1, shape=(self.feature_size,), dtype=np.float32)
 
-    # Currently, actions are limited to beam steering angles in azimuth and elevation
     self.action_space = spaces.Box(
-        low=np.array([self.radar.az_fov[0], self.radar.el_fov[0]]),
-        high=np.array([self.radar.az_fov[1], self.radar.el_fov[1]]),
-        shape=(2,),
+        low=np.array(
+            [-1, -1, 0, 0, 0, 0, 0, 0]),
+        high=np.array([1, 1, 1, 1, np.Inf, np.Inf, np.Inf, np.Inf]),
+        shape=(8,),
         dtype=np.float32)
-    # TODO: Add the other look parameters to the action space.
     assert render_mode is None or render_mode in self.metadata["render_modes"]
     self.render_mode = render_mode
 
-    if swarm_optim is None:
-      self.swarm_optim = default_gbest_pso()
+    if swarm is None:
+      pos_bounds = np.array([[self.radar.az_fov[0], self.radar.el_fov[0]],
+                             [self.radar.az_fov[1], self.radar.el_fov[1]]])
+      # TODO: Enforce velocity bounds in the swarm update
+      vel_bounds = [-1, 1]
+      self.swarm = ParticleSwarm(n_particles=10_000,
+                                 n_dimensions=2,
+                                 position_bounds=pos_bounds,
+                                 velocity_bounds=vel_bounds)
+    else:
+      self.swarm = swarm
+    self.beta_g = beta_g
+    self.w_disp_min = w_disp_min
+    self.w_disp_max = w_disp_max
+    self.c_disp = c_disp
+    self.w_det = w_det
+    self.mutation_rate = mutation_rate
+    self.mutation_alpha = mutation_alpha
+    self.w_disps = np.ones_like(self.swarm.position)*w_disp_max
 
     # Pre-compute azimuth/elevation axis values needed to digitize the particles for the observation output
-    self.az_axis = np.linspace(self.swarm_optim.bounds[0][0],
-                               self.swarm_optim.bounds[1][0],
-                               self.observation_space.shape[0])
-    self.el_axis = np.linspace(self.swarm_optim.bounds[0][1],
-                               self.swarm_optim.bounds[1][1],
-                               self.observation_space.shape[1])
+    self.az_axis = np.linspace(self.swarm.position_bounds[0][0],
+                               self.swarm.position_bounds[1][0],
+                               self.image_shape[0])
+    self.el_axis = np.linspace(self.swarm.position_bounds[0][1],
+                               self.swarm.position_bounds[1][1],
+                               self.image_shape[1])
 
     # PyGame objects
     self.window = None
@@ -136,20 +158,7 @@ class SimpleParticleSurveillance(gym.Env):
 
   def step(self, action: np.ndarray):
 
-    # TODO: Add a resource management component here
-    look = Look(
-        azimuth_steering_angle=action[0],
-        elevation_steering_angle=action[1],
-        azimuth_beamwidth=self.azimuth_beamwidth,
-        elevation_beamwidth=self.elevation_beamwidth,
-        bandwidth=self.bandwidth,
-        pulsewidth=self.pulsewidth,
-        prf=self.prf,
-        n_pulses=self.n_pulses,
-        tx_power=self.radar.n_elements_x *
-        self.radar.n_elements_y*self.radar.element_tx_power,
-        start_time=self.time,
-    )
+    look = self._action_to_look(action)
 
     # Point the radar in the right direction
     self.radar.load_look(look)
@@ -160,69 +169,55 @@ class SimpleParticleSurveillance(gym.Env):
     for path in self.target_paths:
       path.states[-1].rcs = 10
 
-    detections = self.radar.measure(self.target_paths, noise=True)
+    # Bias particles away from the current look direction
+    self._dispersion_phase(look)
+
+    # Try to detect the remaining untracked targets
+    detections = self.radar.measure(
+        self.target_paths, noise=False, timestamp=self.time)
 
     reward = 0
     for detection in detections:
-      # Update the detection count for this target
-      # In practice, we won't know if the detection is from clutter or not. However, for the first simulation I'm assuming no false alarms so this is to make the reward calculation still work when the false alarm switch is on
+      # Update the detection count for this target. If a non-clutter target that has not been tracked (n_detections < n_confirm_detections), the agent receives a reward.
       if not isinstance(detection, Clutter):
         target_id = detection.groundtruth_path.id
         if target_id not in self.detection_count.keys():
           self.detection_count[target_id] = 0
         self.detection_count[target_id] += 1
-        # Give a reward if a "track" is initiated.
+
         if self.detection_count[target_id] == self.n_confirm_detections:
           self.n_tracks_initiated += 1
           reward += 1
-          
-          # az = detection.state_vector[1].degrees
-          # el = detection.state_vector[0].degrees
-          # TODO: Consider updating this every step, even if a new detection has not been made
-          # self.swarm_optim.optimize(
-          #     self._distance_objective, detection_pos=np.array([az, el]))
 
-      # Only update the swarm state for particles that have not been confirmed
-      if isinstance(detection, Clutter) or self.detection_count[target_id] <= self.n_confirm_detections:
-        az = detection.state_vector[1].degrees
-        el = detection.state_vector[0].degrees
-        self.swarm_optim.optimize(
-            self._distance_objective, detection_pos=np.array([az, el]))
+      if 2 <= self.detection_count[target_id] <= self.n_confirm_detections:
+        self._detection_phase(detection)
 
-    # Mutate particles based on Engelbrecht equations (16.66-16.67)
-    Pm = 0.001
-    mutate = self.np_random.uniform(
-        0, 1, size=len(self.swarm_optim.swarm.position)) < Pm
-    sigma = 0.1*(self.swarm_optim.bounds[1] -
-                 self.swarm_optim.bounds[0])[np.newaxis, :]
-    sigma = np.repeat(sigma, np.count_nonzero(mutate), axis=0)
-    self.swarm_optim.swarm.position[mutate] += self.np_random.normal(
-        np.zeros_like(sigma), sigma)
+    # Apply a Gaussian mutation to a fraction of the swarm to improve exploration.
+    if self.mutation_rate > 0:
+      self._mutate_swarm(alpha=self.mutation_alpha)
 
     # If multiple subarrays are scheduled to execute at once, the timestep will be zero. In this case, don't update the environment just yet.
     # For the single-beam case, this will always execute
     if timestep > datetime.timedelta(seconds=0):
       # Randomly drop targets
-      deleted_targets = [path for path in self.target_paths if self.np_random.uniform(
-          0, 1) <= self.death_probability]
-      # Delete the targets from the detection count
-      for path in deleted_targets:
-        if path.id in self.detection_count.keys():
-          del self.detection_count[path.id]
-      self.target_paths.difference_update(deleted_targets)
+      for path in self.target_paths.copy():
+        if self.np_random.uniform(0, 1) <= self.death_probability:
+          self.target_paths.remove(path)
+          if path.id in self.detection_count.keys():
+            del self.detection_count[path.id]
 
       # Move targets forward in time
-      self._move_targets(timestep)
+      # self._move_targets(timestep)
 
       # Randomly create new targets
       for _ in range(self.np_random.poisson(self.birth_rate)):
         target = self._new_target(self.time)
-        self.target_paths.add(target)
+        self.target_paths.append(target)
 
       self.time += timestep
 
     # Update useful info
-    self.target_history |= self.target_paths
+    self.target_history |= set(self.target_paths)
     self.detection_history.append(detections)
 
     # Create outputs
@@ -235,7 +230,7 @@ class SimpleParticleSurveillance(gym.Env):
       terminated = True
     else:
       terminated = False
-
+      # terminated = False
     truncated = False
 
     if self.render_mode == "human":
@@ -265,13 +260,12 @@ class SimpleParticleSurveillance(gym.Env):
           0, self.max_random_az_covar)
       self.initial_state.covar[el_idx, el_idx] = self.np_random.uniform(
           0, self.max_random_el_covar)
-    # print(self.initial_state.state_vector)
     self._initialize_targets()
 
-    self.swarm_optim.reset()
+    self.swarm.reset()
 
     # Reset metrics/helpful debug info
-    self.target_history = []
+    self.target_history = set()
     self.detection_history = []
     self.detection_count = dict()
     self.n_tracks_initiated = 0
@@ -296,6 +290,53 @@ class SimpleParticleSurveillance(gym.Env):
   ############################################################################
   # Internal gym-specific methods
   ############################################################################
+  def _action_to_look(self, action):
+    # TODO: Convert action array to a radar look object
+    # Squash the actions into the range [-1, 1] then scale by the max/min az and el values
+    az_steering_angle = action[0] * \
+        (self.radar.az_fov[1] - self.radar.az_fov[0]) / 2
+    el_steering_angle = action[1] * \
+        (self.radar.el_fov[1] - self.radar.el_fov[0]) / 2
+
+    # Convert the azimuth and elevation beamwidth inputs from the range [0, 1]
+    az_beamwidth = action[2] * (self.radar.max_az_beamwidth -
+                                self.radar.min_az_beamwidth) + self.radar.min_az_beamwidth
+    el_beamwidth = action[3] * (self.radar.max_el_beamwidth -
+                                self.radar.min_el_beamwidth) + self.radar.min_el_beamwidth
+    self.c_det = min(az_beamwidth, el_beamwidth) / 2
+
+    # Compute the number of elements used to form the Tx beam. Assuming the total Tx power is equal to the # of tx elements times the max element power
+    # tx_beamwidths =
+    tx_aperture_size = beamwidth2aperture(
+        np.array([az_beamwidth, el_beamwidth]), self.radar.wavelength) / self.radar.wavelength
+    n_tx_elements = np.prod(np.ceil(
+        tx_aperture_size / self.radar.element_spacing).astype(int))
+    tx_power = n_tx_elements * self.radar.element_tx_power
+
+    look = SpoiledLook(
+        azimuth_steering_angle=az_steering_angle,
+        elevation_steering_angle=el_steering_angle,
+        azimuth_beamwidth=az_beamwidth,
+        elevation_beamwidth=el_beamwidth,
+        bandwidth=action[4],
+        pulsewidth=action[5],
+        prf=action[6],
+        n_pulses=action[7],
+        tx_power=tx_power,
+        start_time=self.time,
+    )
+    return look
+
+  def _particle_histogram(self) -> np.ndarray:
+    az_indices = np.digitize(
+        self.swarm.position[:, 0], self.az_axis, right=True)
+    el_indices = np.digitize(
+        self.swarm.position[:, 1], self.el_axis, right=True)
+    flat_inds = az_indices * self.image_shape[0] + el_indices
+    bin_counts = np.histogram(flat_inds, bins=np.arange(0, np.prod(self.image_shape)+1))[
+        0].reshape(self.image_shape)
+    return bin_counts
+
   def _get_obs(self) -> np.ndarray:
     """
     Convert swarm positions to an observation image
@@ -303,14 +344,14 @@ class SimpleParticleSurveillance(gym.Env):
     Returns
     -------
     np.ndarray
-        Output image where each pixel is 1 if a particle is in that pixel and 0 otherwise.
+        Output image where each pixel has a value equal to the number of swarm particles in that pixel.
     """
-    az_indices = np.digitize(
-        self.swarm_optim.swarm.position[:, 0], self.az_axis) - 1
-    el_indices = np.digitize(
-        self.swarm_optim.swarm.position[:, 1], self.el_axis) - 1
-    obs = np.zeros(self.observation_space.shape, dtype=np.uint8)
-    obs[az_indices, el_indices] = 255
+    bin_counts = self._particle_histogram()
+    best_inds = np.argsort(bin_counts, axis=None)[:-self.n_obs_bins-1:-1]
+    best_inds = np.unravel_index(best_inds, self.image_shape)
+    az = self.az_axis[best_inds[0]] / max(self.az_axis)
+    el = self.el_axis[best_inds[1]] / max(self.az_axis)
+    obs = np.array([az, el]).T.ravel()
     return obs
 
   def _get_info(self):
@@ -323,10 +364,8 @@ class SimpleParticleSurveillance(gym.Env):
     n_initiated_targets = np.sum(
         [count >= self.n_confirm_detections for count in self.detection_count.values()])
     initiation_ratio = n_initiated_targets / len(self.target_paths)
-    swarm_pos = self.swarm_optim.swarm.position
     return {
         "initiation_ratio": initiation_ratio,
-        "swarm_positions": swarm_pos,
         "n_tracks_initiated": self.n_tracks_initiated,
     }
 
@@ -342,16 +381,16 @@ class SimpleParticleSurveillance(gym.Env):
     if self.window is None and self.render_mode == "human":
       pygame.init()
       pygame.display.init()
-      self.window = pygame.display.set_mode(
-          self.observation_space.shape[:2])
+      self.window = pygame.display.set_mode((256, 256))
 
     if self.clock is None and self.render_mode == "human":
       self.clock = pygame.time.Clock()
 
     # Draw canvas from pixels
     # The observation gets inverted here because I want black pixels on a white background.
-    pixels = ~self._get_obs()
+    pixels = self._particle_histogram()
     pixels = np.flip(pixels.squeeze(), axis=1)
+    pixels = cv2.resize(pixels, (256, 256), interpolation=cv2.INTER_NEAREST)
     canvas = pygame.surfarray.make_surface(pixels)
 
     if self.render_mode == "human":
@@ -372,21 +411,25 @@ class SimpleParticleSurveillance(gym.Env):
     """
     Create new targets based on the initial state and preexisting states specified in the environment's input arguments
     """
-    if self.preexisting_states or self.initial_number_targets:
+    n_initial_targets = self.np_random.integers(
+        self.min_initial_n_targets, self.max_initial_n_targets, endpoint=True)
+    if self.preexisting_states or n_initial_targets > 0:
       # Use preexisting_states to make some ground truth paths
-      preexisting_paths = OrderedSet(
-          self._new_target(self.time, state_vector=state) for state in self.preexisting_states)
+      preexisting_paths = [self._new_target(
+          self.time, state_vector=state) for state in self.preexisting_states]
 
       # Simulate more groundtruth paths for the number of initial targets
-      initial_simulated_paths = OrderedSet(
-          self._new_target(self.time) for _ in range(self.initial_number_targets))
-      self.target_paths = preexisting_paths | initial_simulated_paths
+      n_initial_targets -= len(self.preexisting_states)
+      if n_initial_targets > 0:
+        initial_simulated_paths = [self._new_target(
+            self.time) for _ in range(n_initial_targets)]
+      self.target_paths = preexisting_paths + initial_simulated_paths
     else:
-      self.target_paths = OrderedSet()
+      self.target_paths = []
 
   def _new_target(self,
                   time: datetime.datetime,
-                  state_vector: Optional[StateVector] = None) -> GroundTruthPath:
+                  state_vector: Optional[np.ndarray] = None) -> GroundTruthPath:
     """
     Create a new target from the given state vector
 
@@ -394,7 +437,7 @@ class SimpleParticleSurveillance(gym.Env):
     ----------
     time : datetime.datetime
         Time of target creation
-    state_vector : StateVector, optional
+    state_vector : np.ndarray, optional
         Target state where the position components are given in az/el/range in degrees and the velocities are in m/s, by default None
 
     Returns
@@ -402,20 +445,32 @@ class SimpleParticleSurveillance(gym.Env):
     GroundTruthPath
         A new ground truth path starting at the target's initial state
     """
-    state = state_vector or \
-        self.initial_state.state_vector + \
-        self.initial_state.covar @ \
-        self.np_random.standard_normal(size=(self.initial_state.ndim, 1))
-    # Convert state vector from spherical to cartesian
-    x, y, z = sph2cart(*state[self.radar.position_mapping, :], degrees=True)
-    state[self.radar.position_mapping, :] = np.array([x, y, z])[:, np.newaxis]
+    # state_vector = state_vector or self.np_random.multivariate_normal(
+    #     mean=self.initial_state.state_vector.ravel(),
+    #     cov=self.initial_state.covar)
+    # Currently generating targets uniformly in the range given by the covariance matrix
+    initial_state_range = np.sqrt(np.diag(np.array(self.initial_state.covar)))
+    state_vector = self.np_random.uniform(-initial_state_range,
+                                          initial_state_range) + self.initial_state.state_vector.ravel()
+    state_vector = state_vector.ravel()
+    state_vector[self.radar.position_mapping] = np.clip(
+        state_vector[self.radar.position_mapping],
+        [self.radar.az_fov[0], self.radar.el_fov[0], self.radar.min_range],
+        [self.radar.az_fov[1], self.radar.el_fov[1], self.radar.max_range])
+    # TODO: This creates a bimodal distribution from the input state vector to test how the agent handles multiple target sources.
+    # if self.np_random.uniform(0, 1) < 0.5:
+    #   state_vector[self.radar.position_mapping[0:2]] *= -1
 
-    target_path = GroundTruthPath()
-    target_path.append(GroundTruthState(
-        state_vector=state,
+    # Convert state vector from spherical to cartesian
+    x, y, z = sph2cart(
+        *state_vector[self.radar.position_mapping], degrees=True)
+    state_vector[self.radar.position_mapping] = np.array([x, y, z])
+    state = GroundTruthState(
+        state_vector=state_vector,
         timestamp=time,
-        metadata={"index": self.index})
-    )
+        metadata={'index': self.index})
+
+    target_path = GroundTruthPath(states=[state])
     # Increment target index
     self.index += 1
     return target_path
@@ -424,24 +479,93 @@ class SimpleParticleSurveillance(gym.Env):
     """
     Move targets forward in time, removing targets that have left the radar's FOV
     """
-    stale_targets = set()
-    for path in self.target_paths:
-      index = path[-1].metadata.get("index")
-      updated_state = self.transition_model(np.asarray(path[-1].state_vector),
-                                            dt=dt.total_seconds())
-      path.append(GroundTruthState(
-          updated_state, timestamp=self.time,
-          metadata={"index": index}))
-      if not self.radar.is_detectable(path[-1]):
-        stale_targets.add(path)
-        if path.id in self.detection_count.keys():
-          del self.detection_count[path.id]
+    # Combine targets into one StateVectors object to vectorize transition update
+    # NOTE: Asssumes all targets have the same transition model
+    if len(self.target_paths) == 0:
+      return
+    state_vectors = np.hstack(
+        [path[-1].state_vector.reshape((-1, 1)) for path in self.target_paths])
+    updated_state_vectors = self.transition_model.function(
+        state_vectors, noise=True, time_interval=dt)
 
-    self.target_paths.difference_update(stale_targets)
+    for itarget in range(len(self.target_paths)):
+      updated_state = GroundTruthState(
+          state_vector=updated_state_vectors[:, itarget],
+          timestamp=self.time,
+          metadata=self.target_paths[itarget][-1].metadata)
+      self.target_paths[itarget].append(updated_state)
 
   ############################################################################
   # Particle swarm methods
   ############################################################################
+  def _dispersion_phase(self, look: Look):
+    steering_angles = np.array(
+        [look.azimuth_steering_angle, look.elevation_steering_angle])
+    min_az = look.azimuth_steering_angle - look.azimuth_beamwidth/2
+    max_az = look.azimuth_steering_angle + look.azimuth_beamwidth/2
+    min_el = look.elevation_steering_angle - look.elevation_beamwidth/2
+    max_el = look.elevation_steering_angle + look.elevation_beamwidth/2
+    in_beam = np.logical_and(
+        np.logical_and(
+            self.swarm.position[:, 0] >= min_az,
+            self.swarm.position[:, 0] <= max_az),
+        np.logical_and(
+            self.swarm.position[:, 1] >= min_el,
+            self.swarm.position[:, 1] <= max_el))
+    # Set the velocity of each mutated particle radially away from the beam
+    relative_pos = self.swarm.position[in_beam] - steering_angles
+    velocity = relative_pos / np.linalg.norm(relative_pos, axis=1)[:, None]
+    self.swarm.velocity[in_beam] = velocity * \
+        self.np_random.uniform(
+        0, [look.azimuth_beamwidth, look.elevation_beamwidth], size=velocity.shape)
+    # Adaptively set the w_disp
+    self.w_disps[in_beam] = np.clip(
+        self.c_disp*self.w_disps[in_beam], 0, self.w_disp_max)
+
+    self.swarm.update_position()
+    self.swarm.velocity *= self.w_disps
+
+  def _detection_phase(self, detection):
+    az = detection.state_vector[1]
+    el = detection.state_vector[0]
+    relative_pos = np.array([az, el]).reshape(
+        (1, -1)) - self.swarm.position
+    distance = np.linalg.norm(relative_pos, axis=1)[:, None]
+    move_probability = np.exp(-self.beta_g*distance).ravel()
+    move_inds = self.np_random.uniform(
+        0, 1, size=distance.size) < move_probability
+    velocity = relative_pos / distance
+    self.swarm.velocity[move_inds] = self.w_det*self.swarm.velocity[move_inds] + self.c_det*velocity[move_inds] * \
+        self.np_random.uniform(
+            0, 1, size=velocity[move_inds].shape)
+    self.w_disps[move_inds] = self.w_disp_min
+    self.swarm.update_position()
+
+  def _mutate_swarm(self, alpha: float = 0.25):
+    """
+    Perform a Gaussian mutation on all particles
+
+    Parameters
+    ----------
+    look : Look
+        Contains the azimuth/elevation steering angles and beamwidths
+    alpha : float, optional
+        The mutation scaling factor, which dictates the fraction of the search space used in the standard deviation computation. By default 0.25
+    """
+    mutate_inds = self.np_random.uniform(
+        0, 1, size=self.swarm.n_particles) < self.mutation_rate
+    if mutate_inds.any():
+      sigma = alpha*(self.swarm.position_bounds[1] -
+                     self.swarm.position_bounds[0]).reshape(1, -1)
+      sigma = np.repeat(sigma, np.count_nonzero(mutate_inds), axis=0)
+
+      self.swarm.position[mutate_inds] += self.np_random.normal(
+          np.zeros_like(sigma), sigma)
+
+      # If the particle position exceeds the az/el bounds, wrap it back into the range on the other side. This improves diversity when detections are at the edge of the space compared to simple clipping.
+      self.swarm.position[mutate_inds] = wrap_to_interval(
+          self.swarm.position[mutate_inds],
+          self.swarm.position_bounds[0], self.swarm.position_bounds[1])
 
   def _distance_objective(self,
                           swarm_pos: np.ndarray,

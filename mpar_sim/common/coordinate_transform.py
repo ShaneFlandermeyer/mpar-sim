@@ -1,3 +1,4 @@
+from functools import lru_cache
 import numpy as np
 from typing import Tuple, Union
 
@@ -80,7 +81,7 @@ def cart2sph(
   azimuth = np.arctan2(y, x)
   elevation = np.arctan2(z, np.sqrt(x**2 + y**2))
   r = np.sqrt(x**2 + y**2 + z**2)
-  
+
   if degrees:
     azimuth = np.rad2deg(azimuth)
     elevation = np.rad2deg(elevation)
@@ -162,6 +163,30 @@ def rotz(theta: Union[float, np.ndarray]):
   return np.array([[cos_theta, -sin_theta, zeros],
                    [sin_theta, cos_theta, zeros],
                    [zeros, zeros, ones]])
+
+@lru_cache()
+def rpy2rotmat(roll: float, pitch: float, yaw: float) -> np.ndarray:
+  """
+  Convert roll, pitch, yaw to rotation matrix
+
+  Parameters
+  ----------
+  r : float
+      roll angle (radians)
+  p : float
+      pitch angle (radians)
+  y : float
+      yaw angle (radians)
+
+  Returns
+  -------
+  np.ndarray
+      Rotation matrix
+  """
+  R_roll = rotx(roll)
+  R_pitch = roty(pitch)
+  R_yaw = rotz(yaw)
+  return R_yaw @ R_pitch @ R_roll
 
 
 def cart2sph_covar(cart_covar: np.ndarray, x: float, y: float, z: float) -> np.ndarray:
