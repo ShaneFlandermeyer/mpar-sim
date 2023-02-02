@@ -16,6 +16,7 @@ from mpar_sim.defaults import default_gbest_pso, default_lbest_pso
 from mpar_sim.looks.look import Look
 from mpar_sim.looks.spoiled_look import SpoiledLook
 from mpar_sim.models.transition.base import TransitionModel
+from mpar_sim.particle.surveillance_pso import SurveillanceSwarm
 from mpar_sim.particle.swarm import ParticleSwarm
 from mpar_sim.radar import PhasedArrayRadar
 from mpar_sim.types.detection import Clutter, TrueDetection
@@ -30,21 +31,14 @@ class SimpleParticleSurveillance(gym.Env):
                # Target generation parameters
                transition_model: TransitionModel,
                initial_state: GaussianState,
+               swarm: SurveillanceSwarm,
+               mutation_rate: float = 0.01,
+               mutation_alpha: float = 0.25,
                birth_rate: float = 1.0,
                death_probability: float = 0.01,
                preexisting_states: Collection[np.ndarray] = [],
-               #    initial_number_targets: int = 0,
                min_initial_n_targets: int = 50,
                max_initial_n_targets: int = 50,
-               # Particle swarm parameters
-               swarm: ParticleSwarm = None,
-               beta_g: float = 0.05,
-               w_disp_min: float = 0.25,
-               w_disp_max: float = 0.95,
-               c_disp: float = 1.5,
-               w_det: float = 0.25,
-               mutation_rate: float = 0.01,
-               mutation_alpha: float = 0.25,
                # Environment parameters
                randomize_initial_state: bool = False,
                max_random_az_covar: float = 10**2,
@@ -124,25 +118,9 @@ class SimpleParticleSurveillance(gym.Env):
     assert render_mode is None or render_mode in self.metadata["render_modes"]
     self.render_mode = render_mode
 
-    if swarm is None:
-      pos_bounds = np.array([[self.radar.az_fov[0], self.radar.el_fov[0]],
-                             [self.radar.az_fov[1], self.radar.el_fov[1]]])
-      # TODO: Enforce velocity bounds in the swarm update
-      vel_bounds = [-1, 1]
-      self.swarm = ParticleSwarm(n_particles=10_000,
-                                 n_dimensions=2,
-                                 position_bounds=pos_bounds,
-                                 velocity_bounds=vel_bounds)
-    else:
-      self.swarm = swarm
-    self.beta_g = beta_g
-    self.w_disp_min = w_disp_min
-    self.w_disp_max = w_disp_max
-    self.c_disp = c_disp
-    self.w_det = w_det
+    self.swarm = swarm
     self.mutation_rate = mutation_rate
     self.mutation_alpha = mutation_alpha
-    self.w_disps = np.ones_like(self.swarm.position)*w_disp_max
 
     # Pre-compute azimuth/elevation axis values needed to digitize the particles for the observation output
     self.az_axis = np.linspace(self.swarm.position_bounds[0][0],
@@ -170,7 +148,12 @@ class SimpleParticleSurveillance(gym.Env):
       path.states[-1].rcs = 10
 
     # Bias particles away from the current look direction
-    self._dispersion_phase(look)
+    self.swarm.dispersion_phase(
+        steering_angles=np.array(
+            [look.azimuth_steering_angle, look.elevation_steering_angle]),
+        beamwidths=np.array(
+            [look.azimuth_beamwidth, look.elevation_beamwidth]),
+    )
 
     # Try to detect the remaining untracked targets
     detections = self.radar.measure(
@@ -190,11 +173,13 @@ class SimpleParticleSurveillance(gym.Env):
           reward += 1
 
       if 2 <= self.detection_count[target_id] <= self.n_confirm_detections:
-        self._detection_phase(detection)
+        az = detection.state_vector[1]
+        el = detection.state_vector[0]
+        self.swarm.detection_phase(az, el)
 
     # Apply a Gaussian mutation to a fraction of the swarm to improve exploration.
     if self.mutation_rate > 0:
-      self._mutate_swarm(alpha=self.mutation_alpha)
+      self.swarm.gaussian_mutation(alpha=self.mutation_alpha)
 
     # If multiple subarrays are scheduled to execute at once, the timestep will be zero. In this case, don't update the environment just yet.
     # For the single-beam case, this will always execute
@@ -230,7 +215,7 @@ class SimpleParticleSurveillance(gym.Env):
       terminated = True
     else:
       terminated = False
-      # terminated = False
+
     truncated = False
 
     if self.render_mode == "human":
@@ -303,7 +288,6 @@ class SimpleParticleSurveillance(gym.Env):
                                 self.radar.min_az_beamwidth) + self.radar.min_az_beamwidth
     el_beamwidth = action[3] * (self.radar.max_el_beamwidth -
                                 self.radar.min_el_beamwidth) + self.radar.min_el_beamwidth
-    self.c_det = min(az_beamwidth, el_beamwidth) / 2
 
     # Compute the number of elements used to form the Tx beam. Assuming the total Tx power is equal to the # of tx elements times the max element power
     # tx_beamwidths =
@@ -347,10 +331,13 @@ class SimpleParticleSurveillance(gym.Env):
         Output image where each pixel has a value equal to the number of swarm particles in that pixel.
     """
     bin_counts = self._particle_histogram()
-    best_inds = np.argsort(bin_counts, axis=None)[:-self.n_obs_bins-1:-1]
-    best_inds = np.unravel_index(best_inds, self.image_shape)
-    az = self.az_axis[best_inds[0]] / max(self.az_axis)
-    el = self.el_axis[best_inds[1]] / max(self.az_axis)
+    best_inds = np.argpartition(
+        bin_counts, -self.n_obs_bins, axis=None)[-self.n_obs_bins:]
+    sorted_best_inds = best_inds[np.argsort(
+        bin_counts.flatten()[best_inds])][::-1]
+    sorted_best_inds = np.unravel_index(sorted_best_inds, self.image_shape)
+    az = self.az_axis[sorted_best_inds[0]] / max(self.az_axis)
+    el = self.el_axis[sorted_best_inds[1]] / max(self.az_axis)
     obs = np.array([az, el]).T.ravel()
     return obs
 
@@ -494,95 +481,3 @@ class SimpleParticleSurveillance(gym.Env):
           timestamp=self.time,
           metadata=self.target_paths[itarget][-1].metadata)
       self.target_paths[itarget].append(updated_state)
-
-  ############################################################################
-  # Particle swarm methods
-  ############################################################################
-  def _dispersion_phase(self, look: Look):
-    steering_angles = np.array(
-        [look.azimuth_steering_angle, look.elevation_steering_angle])
-    min_az = look.azimuth_steering_angle - look.azimuth_beamwidth/2
-    max_az = look.azimuth_steering_angle + look.azimuth_beamwidth/2
-    min_el = look.elevation_steering_angle - look.elevation_beamwidth/2
-    max_el = look.elevation_steering_angle + look.elevation_beamwidth/2
-    in_beam = np.logical_and(
-        np.logical_and(
-            self.swarm.position[:, 0] >= min_az,
-            self.swarm.position[:, 0] <= max_az),
-        np.logical_and(
-            self.swarm.position[:, 1] >= min_el,
-            self.swarm.position[:, 1] <= max_el))
-    # Set the velocity of each mutated particle radially away from the beam
-    relative_pos = self.swarm.position[in_beam] - steering_angles
-    velocity = relative_pos / np.linalg.norm(relative_pos, axis=1)[:, None]
-    self.swarm.velocity[in_beam] = velocity * \
-        self.np_random.uniform(
-        0, [look.azimuth_beamwidth, look.elevation_beamwidth], size=velocity.shape)
-    # Adaptively set the w_disp
-    self.w_disps[in_beam] = np.clip(
-        self.c_disp*self.w_disps[in_beam], 0, self.w_disp_max)
-
-    self.swarm.update_position()
-    self.swarm.velocity *= self.w_disps
-
-  def _detection_phase(self, detection):
-    az = detection.state_vector[1]
-    el = detection.state_vector[0]
-    relative_pos = np.array([az, el]).reshape(
-        (1, -1)) - self.swarm.position
-    distance = np.linalg.norm(relative_pos, axis=1)[:, None]
-    move_probability = np.exp(-self.beta_g*distance).ravel()
-    move_inds = self.np_random.uniform(
-        0, 1, size=distance.size) < move_probability
-    velocity = relative_pos / distance
-    self.swarm.velocity[move_inds] = self.w_det*self.swarm.velocity[move_inds] + self.c_det*velocity[move_inds] * \
-        self.np_random.uniform(
-            0, 1, size=velocity[move_inds].shape)
-    self.w_disps[move_inds] = self.w_disp_min
-    self.swarm.update_position()
-
-  def _mutate_swarm(self, alpha: float = 0.25):
-    """
-    Perform a Gaussian mutation on all particles
-
-    Parameters
-    ----------
-    look : Look
-        Contains the azimuth/elevation steering angles and beamwidths
-    alpha : float, optional
-        The mutation scaling factor, which dictates the fraction of the search space used in the standard deviation computation. By default 0.25
-    """
-    mutate_inds = self.np_random.uniform(
-        0, 1, size=self.swarm.n_particles) < self.mutation_rate
-    if mutate_inds.any():
-      sigma = alpha*(self.swarm.position_bounds[1] -
-                     self.swarm.position_bounds[0]).reshape(1, -1)
-      sigma = np.repeat(sigma, np.count_nonzero(mutate_inds), axis=0)
-
-      self.swarm.position[mutate_inds] += self.np_random.normal(
-          np.zeros_like(sigma), sigma)
-
-      # If the particle position exceeds the az/el bounds, wrap it back into the range on the other side. This improves diversity when detections are at the edge of the space compared to simple clipping.
-      self.swarm.position[mutate_inds] = wrap_to_interval(
-          self.swarm.position[mutate_inds],
-          self.swarm.position_bounds[0], self.swarm.position_bounds[1])
-
-  def _distance_objective(self,
-                          swarm_pos: np.ndarray,
-                          detection_pos: np.ndarray) -> np.ndarray:
-    """
-    Compute the distance between each particle and the detection
-
-    Parameters
-    ----------
-    swarm_pos : np.ndarray
-        N x D array of positions for each of the N particles in a D-dimensional search space
-    detection_pos : np.ndarray
-        1 x D array of the D-dimensional position of the detection
-
-    Returns
-    -------
-    np.ndarray
-        The distance of each particle from the detection
-    """
-    return np.linalg.norm(swarm_pos - detection_pos, axis=1)

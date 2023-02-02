@@ -23,6 +23,7 @@ import mpar_sim.envs
 from mpar_sim.agents.raster_scan import RasterScanAgent
 from mpar_sim.beam.beam import SincBeam
 from mpar_sim.common.wrap_to_interval import wrap_to_interval
+from mpar_sim.particle.surveillance_pso import SurveillanceSwarm
 from mpar_sim.radar import PhasedArrayRadar
 from mpar_sim.wrappers.squeeze_image import SqueezeImage
 from lightning_rl.common.layer_init import ortho_init
@@ -44,42 +45,30 @@ plt.rcParams["axes.labelweight"] = "bold"
 
 
 def make_env(env_id,
+             radar,
              max_episode_steps):
   def thunk():
     # In this experiment, targets move according to a constant velocity, white noise acceleration model.
     # http://www.control.isy.liu.se/student/graduate/targettracking/file/le2_handout.pdf
     transition_model = ConstantVelocity(ndim_pos=3, noise_diff_coeff=10)
-    # Radar system object
-    radar = PhasedArrayRadar(
-        ndim_state=6,
-        position_mapping=[0, 2, 4],
-        velocity_mapping=[1, 3, 5],
-        position=np.array([[0], [0], [0]]),
-        rotation_offset=np.array([[0], [0], [0]]),
-        # Array parameters
-        n_elements_x=32,
-        n_elements_y=32,
-        element_spacing=0.5,  # Wavelengths
-        element_tx_power=10,
-        max_az_beamwidth=10,
-        max_el_beamwidth=10,
-        # System parameters
-        center_frequency=3e9,
-        system_temperature=290,
-        noise_figure=4,
-        # Scan settings
-        beam_shape=SincBeam,
-        az_fov=[-45, 45],
-        el_fov=[-45, 45],
-        # Detection settings
-        false_alarm_rate=1e-6,
-        include_false_alarms=False
-    )
+    
     # Gaussian parameters used to initialize the states of new targets in the scene. Here, elements (0, 2, 4) of the state vector/covariance are the az/el/range of the target (angles in degrees), and (1, 3, 5) are the x/y/z velocities in m/s. If randomize_initial_state is set to True in the environment, the mean az/el are uniformly sampled across the radar field of view, and the variance is uniformly sampled from [0, max_random_az_covar] and [0, max_random_el_covar] for the az/el, respectively
     initial_state = GaussianState(
         state_vector=[30,   0,  -20,   0, 10e3, 0],
         covar=np.diag([3**2, 100**2, 3**2, 100**2,  1000**2, 100**2])
     )
+
+    pos_bounds = np.array([[radar.az_fov[0], radar.el_fov[0]],
+                           [radar.az_fov[1], radar.el_fov[1]]])
+    swarm = SurveillanceSwarm(n_particles=10_000,
+                            n_dimensions=2,
+                            position_bounds=pos_bounds,
+                            velocity_bounds=[-1, 1],
+                            gravity=0.075,
+                            min_dispersion_inertia=0.25,
+                            max_dispersion_inertia=0.95,
+                            detection_inertia=0.25,
+                            )
 
     env = gym.make(env_id,
                    radar=radar,
@@ -93,10 +82,7 @@ def make_env(env_id,
                    randomize_initial_state=True,
                    max_random_az_covar=10**2,
                    max_random_el_covar=10**2,
-                   beta_g=0.075,
-                   w_disp_min=0.25,
-                   w_disp_max=0.95,
-                   w_det=0.25,
+                   swarm=swarm,
                    mutation_rate=0,
                    render_mode='rgb_array',
                    n_obs_bins=50,
@@ -122,7 +108,7 @@ def make_env(env_id,
 class PPOSurveillanceAgent(PPO):
   def __init__(self,
                env: gym.Env,
-               # Look parameters 
+               # Look parameters
                bandwidth: float,
                pulsewidth: float,
                prf: float,
@@ -212,12 +198,38 @@ class PPOSurveillanceAgent(PPO):
 # %% [markdown]
 # ## Environment setup
 # %%
+# Radar system object
+radar = PhasedArrayRadar(
+    ndim_state=6,
+    position_mapping=[0, 2, 4],
+    velocity_mapping=[1, 3, 5],
+    position=np.array([[0], [0], [0]]),
+    rotation_offset=np.array([[0], [0], [0]]),
+    # Array parameters
+    n_elements_x=32,
+    n_elements_y=32,
+    element_spacing=0.5,  # Wavelengths
+    element_tx_power=10,
+    max_az_beamwidth=10,
+    max_el_beamwidth=10,
+    # System parameters
+    center_frequency=3e9,
+    system_temperature=290,
+    noise_figure=4,
+    # Scan settings
+    beam_shape=SincBeam,
+    az_fov=[-45, 45],
+    el_fov=[-45, 45],
+    # Detection settings
+    false_alarm_rate=1e-6,
+    include_false_alarms=False
+)
 # Create the environment
 env_id = 'mpar_sim/SimpleParticleSurveillance-v0'
 n_env = 16
 max_episode_steps = 1000
 env = gym.vector.AsyncVectorEnv(
-    [make_env(env_id,  max_episode_steps) for _ in range(n_env)])
+    [make_env(env_id,  radar, max_episode_steps) for _ in range(n_env)])
 env = gym.wrappers.RecordEpisodeStatistics(env=env, deque_size=20)
 # env = gym.wrappers.NormalizeReward(env)
 
