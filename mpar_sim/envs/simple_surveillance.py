@@ -173,8 +173,8 @@ class SimpleParticleSurveillance(gym.Env):
           reward += 1
 
       if 2 <= self.detection_count[target_id] <= self.n_confirm_detections:
-        az = detection.state_vector[1]
-        el = detection.state_vector[0]
+        az = detection.state_vector[0]
+        el = detection.state_vector[1]
         self.swarm.detection_phase(az, el)
 
     # Apply a Gaussian mutation to a fraction of the swarm to improve exploration.

@@ -187,7 +187,7 @@ class CartesianToRangeAzElRangeRate(NonlinearMeasurementModel):
     rr = np.einsum('ij, ij->j', xyz_pos, xyz_vel) / \
         np.linalg.norm(xyz_pos, axis=0)
 
-    out = np.array([el, az, rho, rr]) + meas_noise
+    out = np.array([az, el, rho, rr]) + meas_noise
     if self.alias_measurements:
       # Add aliasing to the range/range rate if it exceeds the unambiguous limits
       out[2] = wrap_to_interval(out[2], 0, self.max_unambiguous_range)
@@ -202,7 +202,7 @@ class CartesianToRangeAzElRangeRate(NonlinearMeasurementModel):
     return out
 
   def inverse_function(self, detection) -> np.ndarray:
-    elevation, azimuth, range, range_rate = detection.state_vector
+    azimuth, elevation, range, range_rate = detection.state_vector
 
     x, y, z = sph2cart(azimuth, elevation, range, degrees=True)
     # because only rho_rate is known, only the components in

@@ -279,14 +279,6 @@ class PhasedArrayRadar():
       # The CRLB uses the RMS bandwidth. Assuming an LFM waveform with a rectangular spectrum, B_rms = B / sqrt(12)
       rms_bandwidth = self.bandwidth / np.sqrt(12)
       rms_range_res = constants.c / (2 * rms_bandwidth)
-      range_variance = range_crlb(
-          snr=single_pulse_snr[is_detected],
-          resolution=rms_range_res,
-          bias_fraction=0.05)
-      velocity_variance = velocity_crlb(
-          snr=snr_lin[is_detected],
-          resolution=self.velocity_resolution,
-          bias_fraction=0.05)
       azimuth_variance = angle_crlb(
           snr=snr_lin[is_detected],
           resolution=self.rx_beam.azimuth_beamwidth,
@@ -295,15 +287,22 @@ class PhasedArrayRadar():
           snr=snr_lin[is_detected],
           resolution=self.rx_beam.elevation_beamwidth,
           bias_fraction=0.01)
-
+      range_variance = range_crlb(
+          snr=single_pulse_snr[is_detected],
+          resolution=rms_range_res,
+          bias_fraction=0.05)
+      velocity_variance = velocity_crlb(
+          snr=snr_lin[is_detected],
+          resolution=self.velocity_resolution,
+          bias_fraction=0.05)
       # Concatenate the measurement noise covariance matrices to pass them into the measurement model
       if noise:
         measurement_model.noise_covar = np.zeros(
             (measurement_model.ndim_meas, measurement_model.ndim_meas, n_detections))
         for i in range(n_detections):
           measurement_model.noise_covar[..., i] = np.diag(
-              [elevation_variance[i],
-               azimuth_variance[i],
+              [azimuth_variance[i],
+               elevation_variance[i],
                range_variance[i],
                velocity_variance[i]])
       measurements = measurement_model.function(
@@ -328,12 +327,12 @@ class PhasedArrayRadar():
       n_false_alarms = int(np.random.poisson(n_expected_false_alarms))
 
       # Generate random false alarm measurements
-      el = np.random.uniform(low=-self.tx_beam.elevation_beamwidth/2,
-                             high=self.tx_beam.elevation_beamwidth/2,
-                             size=n_false_alarms) + self.tx_beam.elevation_steering_angle
       az = np.random.uniform(low=-self.tx_beam.azimuth_beamwidth/2,
                              high=self.tx_beam.azimuth_beamwidth/2,
                              size=n_false_alarms) + self.tx_beam.azimuth_steering_angle
+      el = np.random.uniform(low=-self.tx_beam.elevation_beamwidth/2,
+                             high=self.tx_beam.elevation_beamwidth/2,
+                             size=n_false_alarms) + self.tx_beam.elevation_steering_angle
       r = np.random.uniform(low=0,
                             high=self.max_unambiguous_range,
                             size=n_false_alarms)
@@ -350,8 +349,8 @@ class PhasedArrayRadar():
       # Add false alarms to the detection report
       snr_db = 20*np.log10(gammaincinv(1, 1 - self.false_alarm_rate))
       for i in range(n_false_alarms):
-        state_vector = np.array([[np.deg2rad(el[i])],
-                                 [np.deg2rad(az[i])],
+        state_vector = np.array([[az[i]],
+                                 [el[i]],
                                  [r[i]],
                                  [v[i]]])
         detection = Clutter(state_vector=state_vector,
