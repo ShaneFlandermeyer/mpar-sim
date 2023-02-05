@@ -102,7 +102,7 @@ class SimpleParticleSurveillance(gym.Env):
     self.max_random_az_covar = max_random_az_covar
     self.max_random_el_covar = max_random_el_covar
     self.n_obs_bins = n_obs_bins
-    self.feature_size = 2*self.n_obs_bins
+    self.feature_size = 3*self.n_obs_bins
     self.image_shape = image_shape
     self.seed = seed
 
@@ -175,7 +175,8 @@ class SimpleParticleSurveillance(gym.Env):
       if 2 <= self.detection_count[target_id] <= self.n_confirm_detections:
         az = detection.state_vector[0]
         el = detection.state_vector[1]
-        self.swarm.detection_phase(az, el)
+        rng = detection.state_vector[2]
+        self.swarm.detection_phase(az, el, rng)
 
     # Apply a Gaussian mutation to a fraction of the swarm to improve exploration.
     if self.mutation_rate > 0:
@@ -330,7 +331,17 @@ class SimpleParticleSurveillance(gym.Env):
     np.ndarray
         Output image where each pixel has a value equal to the number of swarm particles in that pixel.
     """
-    bin_counts = self._particle_histogram()
+    # bin_counts = self._particle_histogram()
+    az_indices = np.digitize(
+        self.swarm.position[:, 0], self.az_axis, right=True)
+    el_indices = np.digitize(
+        self.swarm.position[:, 1], self.el_axis, right=True)
+    flat_inds = az_indices * self.image_shape[0] + el_indices
+    # range_indices = np.digitize(
+    #     self.swarm.range, self.range_axis, right=True) - 1
+    bin_counts = np.histogram(flat_inds, bins=np.arange(0, np.prod(self.image_shape)+1))[
+        0].reshape(self.image_shape)
+
     best_inds = np.argpartition(
         bin_counts, -self.n_obs_bins, axis=None)[-self.n_obs_bins:]
     sorted_best_inds = best_inds[np.argsort(
@@ -338,7 +349,18 @@ class SimpleParticleSurveillance(gym.Env):
     sorted_best_inds = np.unravel_index(sorted_best_inds, self.image_shape)
     az = self.az_axis[sorted_best_inds[0]] / max(self.az_axis)
     el = self.el_axis[sorted_best_inds[1]] / max(self.az_axis)
-    obs = np.array([az, el]).T.ravel()
+    # rng = self.range_axis[range_indices] / max(self.range_axis)
+
+    # Compute the mean SNR of the bins with the most particles.
+    mean_range = np.zeros(self.n_obs_bins)
+    
+    for i in range(self.n_obs_bins):
+      ranges = self.swarm.range[np.logical_and(
+          az_indices == sorted_best_inds[0][i], el_indices == sorted_best_inds[1][i])]
+      mean_range[i] = np.mean(ranges)
+    mean_range /= 10e3
+
+    obs = np.array([az, el, mean_range]).T.ravel()
     return obs
 
   def _get_info(self):
