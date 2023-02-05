@@ -21,11 +21,13 @@ from mpar_sim.particle.swarm import ParticleSwarm
 from mpar_sim.radar import PhasedArrayRadar
 from mpar_sim.types.detection import Clutter, TrueDetection
 from mpar_sim.types.groundtruth import GroundTruthPath, GroundTruthState
+import numba as nb
 
 
 class SimpleParticleSurveillance(gym.Env):
   metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 60}
   # TODO: Add initial state parameter back into the arguments list
+
   def __init__(self,
                radar: PhasedArrayRadar,
                swarm: SurveillanceSwarm,
@@ -322,6 +324,46 @@ class SimpleParticleSurveillance(gym.Env):
         0].reshape(self.image_shape)
     return bin_counts, az_indices, el_indices
 
+  @staticmethod
+  @nb.njit
+  def _make_state_vector(n_bins: int, 
+                         positions: np.ndarray, 
+                         ranges: np.ndarray, 
+                         az_indices: np.ndarray, 
+                         el_indices: np.ndarray, 
+                         sorted_best_inds: np.ndarray) -> np.ndarray:
+    """
+    Compute the state vector from the bins with the most particles
+    Parameters
+    ----------
+    n_bins : int
+        _description_
+    positions : np.ndarray
+        _description_
+    ranges : np.ndarray
+        _description_
+    az_indices : np.ndarray
+        _description_
+    el_indices : np.ndarray
+        _description_
+    sorted_best_inds : np.ndarray
+        _description_
+
+    Returns
+    -------
+    _type_
+        _description_
+    """
+    state = np.zeros((n_bins, 3))
+    for i in range(n_bins):
+      mask = np.logical_and(
+          az_indices == sorted_best_inds[0][i], el_indices == sorted_best_inds[1][i])
+      state[i, 0] = np.mean(positions[mask, 0])
+      state[i, 1] = np.mean(positions[mask, 1])
+      state[i, 2] = np.mean(ranges[mask])
+
+    return state
+
   def _get_obs(self) -> np.ndarray:
     """
     Convert swarm positions to an observation image
@@ -338,18 +380,15 @@ class SimpleParticleSurveillance(gym.Env):
     sorted_best_inds = best_inds[np.argsort(
         bin_counts.flatten()[best_inds])][::-1]
     sorted_best_inds = np.unravel_index(sorted_best_inds, self.image_shape)
-    az = self.az_axis[sorted_best_inds[0]] / max(self.az_axis)
-    el = self.el_axis[sorted_best_inds[1]] / max(self.az_axis)
 
-    # Compute the mean range for each of the best bins. The result is divided by 10e3 to reduce the scale of the neural network input.
-    mean_range = np.zeros(self.n_obs_bins)
-    for i in range(self.n_obs_bins):
-      ranges = self.swarm.range[np.logical_and(
-          az_indices == sorted_best_inds[0][i], el_indices == sorted_best_inds[1][i])]
-      mean_range[i] = np.mean(ranges)
-
-    obs = np.array([az, el, mean_range/10e3]).T.ravel()
-    return obs
+    obs = self._make_state_vector(n_bins=self.n_obs_bins,
+                                  positions=self.swarm.position,
+                                  ranges=self.swarm.range,
+                                  az_indices=az_indices,
+                                  el_indices=el_indices,
+                                  sorted_best_inds=sorted_best_inds)
+    obs = obs / np.array([np.max(self.az_axis), np.max(self.el_axis), 10e3])
+    return obs.ravel()
 
   def _get_info(self):
     """
@@ -446,7 +485,7 @@ class SimpleParticleSurveillance(gym.Env):
     state_vector = np.empty((6,))
     state_vector[self.radar.velocity_mapping] = self.np_random.uniform(
         self.velocity_span[0], self.velocity_span[1], size=3)
-    
+
     # Randomly generate the target position based on the random cluster parameters
     az_span = [self.cluster_center[0] - self.cluster_span[0],
                self.cluster_center[0] + self.cluster_span[0]]

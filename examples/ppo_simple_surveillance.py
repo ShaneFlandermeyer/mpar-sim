@@ -72,7 +72,7 @@ def make_env(env_id,
                    max_initial_n_targets=50,
                    max_az_span=40,
                    max_el_span=40,
-                   range_span=[10e3, 30e3],
+                   range_span=[10e3, 25e3],
                    velocity_span=[-100, 100],
                    birth_rate=0,
                    death_probability=0,
@@ -81,6 +81,7 @@ def make_env(env_id,
                    mutation_rate=0,
                    render_mode='rgb_array',
                    n_obs_bins=100,
+                  #  image_shape=(32, 32)
                    )
 
     # Wrappers
@@ -223,7 +224,7 @@ radar = PhasedArrayRadar(
 # Create the environment
 env_id = 'mpar_sim/SimpleParticleSurveillance-v0'
 n_env = 16
-max_episode_steps = 1000
+max_episode_steps = 2000
 env = gym.vector.AsyncVectorEnv(
     [make_env(env_id,  radar, max_episode_steps) for _ in range(n_env)])
 env = gym.wrappers.RecordEpisodeStatistics(env=env, deque_size=20)

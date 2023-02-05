@@ -124,8 +124,8 @@ env = gym.wrappers.RecordEpisodeStatistics(env=env, deque_size=20)
 #############################
 # Agent definitions
 #############################
-az_bw = 5
-el_bw = 5
+az_bw = 3
+el_bw = 3
 bw = 100e6
 pulsewidth = 10e-6
 prf = 5e3
@@ -236,7 +236,7 @@ class PPOSurveillanceAgent(PPO):
     return optimizer
 
 
-checkpoint_filename = "/home/shane/src/mpar-sim/lightning_logs/version_540/checkpoints/epoch=84-step=10200.ckpt"
+checkpoint_filename = "/home/shane/src/mpar-sim/lightning_logs/version_549/checkpoints/epoch=84-step=10200.ckpt"
 ppo_agent = PPOSurveillanceAgent.load_from_checkpoint(
     checkpoint_filename, env=env, seed=seed)
 

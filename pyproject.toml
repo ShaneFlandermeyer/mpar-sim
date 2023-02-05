@@ -21,6 +21,7 @@ Gymnasium = "^0.26.3"
 pygame = "^2.1.0"
 filterpy = "^1.4.5"
 pytest = "^7.2.1"
+numba = "^0.56.4"
 
 
 [tool.poetry.dev-dependencies]
