@@ -51,12 +51,6 @@ def make_env(env_id,
     # In this experiment, targets move according to a constant velocity, white noise acceleration model.
     # http://www.control.isy.liu.se/student/graduate/targettracking/file/le2_handout.pdf
     transition_model = ConstantVelocity(ndim_pos=3, noise_diff_coeff=10)
-    
-    # Gaussian parameters used to initialize the states of new targets in the scene. Here, elements (0, 2, 4) of the state vector/covariance are the az/el/range of the target (angles in degrees), and (1, 3, 5) are the x/y/z velocities in m/s. If randomize_initial_state is set to True in the environment, the mean az/el are uniformly sampled across the radar field of view, and the variance is uniformly sampled from [0, max_random_az_covar] and [0, max_random_el_covar] for the az/el, respectively
-    initial_state = GaussianState(
-        state_vector=[30,   0,  -20,   0, 20e3, 0],
-        covar=np.diag([3**2, 100**2, 3**2, 100**2,  10e3**2, 100**2])
-    )
 
     pos_bounds = np.array([[radar.az_fov[0], radar.el_fov[0]],
                            [radar.az_fov[1], radar.el_fov[1]]])
@@ -68,21 +62,22 @@ def make_env(env_id,
                               min_dispersion_inertia=0.25,
                               max_dispersion_inertia=0.95,
                               detection_inertia=0.25,
-                            )
+                              )
 
     env = gym.make(env_id,
                    radar=radar,
+                   swarm=swarm,
                    transition_model=transition_model,
-                   initial_state=initial_state,
-                   birth_rate=0,
-                   death_probability=0,
                    min_initial_n_targets=50,
                    max_initial_n_targets=50,
-                   n_confirm_detections=3,
+                   max_az_span=40,
+                   max_el_span=40,
+                   range_span=[10e3, 30e3],
+                   velocity_span=[-100, 100],
+                   birth_rate=0,
+                   death_probability=0,
                    randomize_initial_state=True,
-                   max_random_az_covar=20**2,
-                   max_random_el_covar=20**2,
-                   swarm=swarm,
+                   n_confirm_detections=3,
                    mutation_rate=0,
                    render_mode='rgb_array',
                    n_obs_bins=100,

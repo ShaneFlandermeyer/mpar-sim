@@ -1,6 +1,6 @@
 import copy
 import datetime
-from typing import Collection, Dict, Optional
+from typing import Collection, Dict, List, Optional
 import cv2
 
 import gymnasium as gym
@@ -25,24 +25,27 @@ from mpar_sim.types.groundtruth import GroundTruthPath, GroundTruthState
 
 class SimpleParticleSurveillance(gym.Env):
   metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 60}
-
+  # TODO: Add initial state parameter back into the arguments list
   def __init__(self,
                radar: PhasedArrayRadar,
+               swarm: SurveillanceSwarm,
                # Target generation parameters
                transition_model: TransitionModel,
-               initial_state: GaussianState,
-               swarm: SurveillanceSwarm,
-               mutation_rate: float = 0.01,
-               mutation_alpha: float = 0.25,
-               birth_rate: float = 1.0,
-               death_probability: float = 0.01,
                preexisting_states: Collection[np.ndarray] = [],
                min_initial_n_targets: int = 50,
                max_initial_n_targets: int = 50,
+               max_az_span: float = 20,
+               max_el_span: float = 20,
+               range_span: List[float] = [10e3, 20e3],
+               velocity_span: List[float] = [-100, 100],
+               birth_rate: float = 0,
+               death_probability: float = 0,
+               start_time: Optional[datetime.datetime] = None,
+               # Swarm parameters
+               mutation_rate: float = 0.01,
+               mutation_alpha: float = 0.25,
                # Environment parameters
                randomize_initial_state: bool = False,
-               max_random_az_covar: float = 10**2,
-               max_random_el_covar: float = 10**2,
                n_confirm_detections: int = 3,
                # Gym-specific parameters
                n_obs_bins: int = 50,
@@ -61,8 +64,6 @@ class SimpleParticleSurveillance(gym.Env):
         Radar used to simulate detections
     transition_model : TransitionModel
         Target state transition model
-    initial_state : GaussianState
-        Gaussian mean vector/covariance matrix that defines the initial state distribution for targets
     birth_rate : float, optional
         Lambda parameter of poisson target generation process that defines the rate of target generation per timestep, by default 1.0
     death_probability : float, optional
@@ -87,24 +88,38 @@ class SimpleParticleSurveillance(gym.Env):
     render_mode : str, optional
         If 'rgb_array', the observations are given as numpy arrays. If 'human', an additional PyGame window is created to show the observations in real time, by default None
     """
-    # Define environment-specific parameters
     self.radar = radar
+    self.swarm = swarm
+    # Target generation parameters
     self.transition_model = transition_model
-    self.initial_state = initial_state
-    self.birth_rate = birth_rate
-    self.death_probability = death_probability
     self.preexisting_states = preexisting_states
-    # self.initial_number_targets = initial_number_targets
     self.min_initial_n_targets = min_initial_n_targets
     self.max_initial_n_targets = max_initial_n_targets
-    self.n_confirm_detections = n_confirm_detections
+    self.max_az_span = max_az_span
+    self.max_el_span = max_el_span
+    self.range_span = range_span
+    self.velocity_span = velocity_span
+    self.birth_rate = birth_rate
+    self.death_probability = death_probability
+    self.start_time = start_time
+    # Swarm parameters
+    self.mutation_rate = mutation_rate
+    self.mutation_alpha = mutation_alpha
+    # Environment parameters
     self.randomize_initial_state = randomize_initial_state
-    self.max_random_az_covar = max_random_az_covar
-    self.max_random_el_covar = max_random_el_covar
+    self.n_confirm_detections = n_confirm_detections
     self.n_obs_bins = n_obs_bins
     self.feature_size = 3*self.n_obs_bins
     self.image_shape = image_shape
     self.seed = seed
+
+    # Pre-compute azimuth/elevation axis values needed to digitize the particles for the observation output
+    self.az_axis = np.linspace(self.swarm.position_bounds[0][0],
+                               self.swarm.position_bounds[1][0],
+                               self.image_shape[0])
+    self.el_axis = np.linspace(self.swarm.position_bounds[0][1],
+                               self.swarm.position_bounds[1][1],
+                               self.image_shape[1])
 
     self.observation_space = spaces.Box(
         low=0, high=1, shape=(self.feature_size,), dtype=np.float32)
@@ -117,18 +132,6 @@ class SimpleParticleSurveillance(gym.Env):
         dtype=np.float32)
     assert render_mode is None or render_mode in self.metadata["render_modes"]
     self.render_mode = render_mode
-
-    self.swarm = swarm
-    self.mutation_rate = mutation_rate
-    self.mutation_alpha = mutation_alpha
-
-    # Pre-compute azimuth/elevation axis values needed to digitize the particles for the observation output
-    self.az_axis = np.linspace(self.swarm.position_bounds[0][0],
-                               self.swarm.position_bounds[1][0],
-                               self.image_shape[0])
-    self.el_axis = np.linspace(self.swarm.position_bounds[0][1],
-                               self.swarm.position_bounds[1][1],
-                               self.image_shape[1])
 
     # PyGame objects
     self.window = None
@@ -227,25 +230,22 @@ class SimpleParticleSurveillance(gym.Env):
   def reset(self, seed=None, options=None):
     super().reset(seed=seed)
 
-    self.time = self.initial_state.timestamp or datetime.datetime.now()
+    self.time = self.start_time or datetime.datetime.now()
     self.radar.timestamp = self.time
     self.index = 0
 
-    # Reset targets
+    # Reset target cluster
     if self.randomize_initial_state:
-      az_idx, el_idx, range_idx = self.radar.position_mapping
-      # Randomize the mean state vector
-      self.initial_state.state_vector[az_idx] = self.np_random.uniform(
-          self.radar.az_fov[0],
-          self.radar.az_fov[1])
-      self.initial_state.state_vector[el_idx] = self.np_random.uniform(
-          self.radar.el_fov[0],
-          self.radar.el_fov[1])
-      # Randomize the covariance
-      self.initial_state.covar[az_idx, az_idx] = self.np_random.uniform(
-          0, self.max_random_az_covar)
-      self.initial_state.covar[el_idx, el_idx] = self.np_random.uniform(
-          0, self.max_random_el_covar)
+      self.cluster_center = np.empty((2,))
+      self.cluster_center[0] = self.np_random.uniform(
+          self.radar.az_fov[0], self.radar.az_fov[1])
+      self.cluster_center[1] = self.np_random.uniform(
+          self.radar.el_fov[0], self.radar.el_fov[1])
+
+      self.cluster_span = np.empty((2,))
+      self.cluster_span[0] = self.np_random.uniform(0, self.max_az_span)
+      self.cluster_span[1] = self.np_random.uniform(0, self.max_el_span)
+
     self._initialize_targets()
 
     self.swarm.reset()
@@ -320,7 +320,7 @@ class SimpleParticleSurveillance(gym.Env):
     flat_inds = az_indices * self.image_shape[0] + el_indices
     bin_counts = np.histogram(flat_inds, bins=np.arange(0, np.prod(self.image_shape)+1))[
         0].reshape(self.image_shape)
-    return bin_counts
+    return bin_counts, az_indices, el_indices
 
   def _get_obs(self) -> np.ndarray:
     """
@@ -331,17 +331,8 @@ class SimpleParticleSurveillance(gym.Env):
     np.ndarray
         Output image where each pixel has a value equal to the number of swarm particles in that pixel.
     """
-    # bin_counts = self._particle_histogram()
-    az_indices = np.digitize(
-        self.swarm.position[:, 0], self.az_axis, right=True)
-    el_indices = np.digitize(
-        self.swarm.position[:, 1], self.el_axis, right=True)
-    flat_inds = az_indices * self.image_shape[0] + el_indices
-    # range_indices = np.digitize(
-    #     self.swarm.range, self.range_axis, right=True) - 1
-    bin_counts = np.histogram(flat_inds, bins=np.arange(0, np.prod(self.image_shape)+1))[
-        0].reshape(self.image_shape)
-
+    # Compute the azimuths and elevations of the best bins (normalized to the range [-1, 1])
+    bin_counts, az_indices, el_indices = self._particle_histogram()
     best_inds = np.argpartition(
         bin_counts, -self.n_obs_bins, axis=None)[-self.n_obs_bins:]
     sorted_best_inds = best_inds[np.argsort(
@@ -349,18 +340,15 @@ class SimpleParticleSurveillance(gym.Env):
     sorted_best_inds = np.unravel_index(sorted_best_inds, self.image_shape)
     az = self.az_axis[sorted_best_inds[0]] / max(self.az_axis)
     el = self.el_axis[sorted_best_inds[1]] / max(self.az_axis)
-    # rng = self.range_axis[range_indices] / max(self.range_axis)
 
-    # Compute the mean SNR of the bins with the most particles.
+    # Compute the mean range for each of the best bins. The result is divided by 10e3 to reduce the scale of the neural network input.
     mean_range = np.zeros(self.n_obs_bins)
-    
     for i in range(self.n_obs_bins):
       ranges = self.swarm.range[np.logical_and(
           az_indices == sorted_best_inds[0][i], el_indices == sorted_best_inds[1][i])]
       mean_range[i] = np.mean(ranges)
-    mean_range /= 10e3
 
-    obs = np.array([az, el, mean_range]).T.ravel()
+    obs = np.array([az, el, mean_range/10e3]).T.ravel()
     return obs
 
   def _get_info(self):
@@ -397,7 +385,7 @@ class SimpleParticleSurveillance(gym.Env):
 
     # Draw canvas from pixels
     # The observation gets inverted here because I want black pixels on a white background.
-    pixels = self._particle_histogram()
+    pixels, _, _ = self._particle_histogram()
     pixels = np.flip(pixels.squeeze(), axis=1)
     pixels = cv2.resize(pixels, (256, 256), interpolation=cv2.INTER_NEAREST)
     canvas = pygame.surfarray.make_surface(pixels)
@@ -454,14 +442,20 @@ class SimpleParticleSurveillance(gym.Env):
     GroundTruthPath
         A new ground truth path starting at the target's initial state
     """
-    # state_vector = state_vector or self.np_random.multivariate_normal(
-    #     mean=self.initial_state.state_vector.ravel(),
-    #     cov=self.initial_state.covar)
-    # Currently generating targets uniformly in the range given by the covariance matrix
-    initial_state_range = np.sqrt(np.diag(np.array(self.initial_state.covar)))
-    state_vector = self.np_random.uniform(-initial_state_range,
-                                          initial_state_range) + self.initial_state.state_vector.ravel()
-    state_vector = state_vector.ravel()
+
+    state_vector = np.empty((6,))
+    state_vector[self.radar.velocity_mapping] = self.np_random.uniform(
+        self.velocity_span[0], self.velocity_span[1], size=3)
+    
+    # Randomly generate the target position based on the random cluster parameters
+    az_span = [self.cluster_center[0] - self.cluster_span[0],
+               self.cluster_center[0] + self.cluster_span[0]]
+    el_span = [self.cluster_center[1] - self.cluster_span[1],
+               self.cluster_center[1] + self.cluster_span[1]]
+    state_vector[self.radar.position_mapping] = self.np_random.uniform(
+        [az_span[0], el_span[0], self.range_span[0]],
+        [az_span[1], el_span[1], self.range_span[1]])
+
     state_vector[self.radar.position_mapping] = np.clip(
         state_vector[self.radar.position_mapping],
         [self.radar.az_fov[0], self.radar.el_fov[0], self.radar.min_range],
@@ -470,7 +464,7 @@ class SimpleParticleSurveillance(gym.Env):
     # if self.np_random.uniform(0, 1) < 0.5:
     #   state_vector[self.radar.position_mapping[0:2]] *= -1
 
-    # Convert state vector from spherical to cartesian
+    # Convert target position from spherical to cartesian
     x, y, z = sph2cart(
         *state_vector[self.radar.position_mapping], degrees=True)
     state_vector[self.radar.position_mapping] = np.array([x, y, z])
@@ -480,7 +474,6 @@ class SimpleParticleSurveillance(gym.Env):
         metadata={'index': self.index})
 
     target_path = GroundTruthPath(states=[state])
-    # Increment target index
     self.index += 1
     return target_path
 

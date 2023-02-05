@@ -50,7 +50,7 @@ class SurveillanceSwarm(ParticleSwarm):
     # When a new beam is transmitted, set the magnitude of the detection velocity proportionally
     self.detection_velocity_scale = beamwidths/2
 
-  def detection_phase(self, az: float, el: float, range: float):
+  def detection_phase(self, az: float, el: float, rng: float):
     relative_pos = np.array([[az, el]]) - self.position
     distance = np.linalg.norm(relative_pos, axis=1)[:, np.newaxis]
     move_probability = np.exp(-self.gravity*distance).ravel()
@@ -60,5 +60,5 @@ class SurveillanceSwarm(ParticleSwarm):
     self.velocity[move_inds] += velocity[move_inds] * np.random.uniform(
         0, self.detection_velocity_scale, size=velocity[move_inds].shape)
     self.inertia[move_inds] = self.min_dispersion_inertia
-    self.range[move_inds] = range
+    self.range[move_inds] = rng
     self.update_position()
