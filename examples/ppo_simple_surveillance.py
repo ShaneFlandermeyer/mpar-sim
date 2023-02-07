@@ -51,46 +51,42 @@ def make_env(env_id,
     # In this experiment, targets move according to a constant velocity, white noise acceleration model.
     # http://www.control.isy.liu.se/student/graduate/targettracking/file/le2_handout.pdf
     transition_model = ConstantVelocity(ndim_pos=3, noise_diff_coeff=10)
-    
-    # Gaussian parameters used to initialize the states of new targets in the scene. Here, elements (0, 2, 4) of the state vector/covariance are the az/el/range of the target (angles in degrees), and (1, 3, 5) are the x/y/z velocities in m/s. If randomize_initial_state is set to True in the environment, the mean az/el are uniformly sampled across the radar field of view, and the variance is uniformly sampled from [0, max_random_az_covar] and [0, max_random_el_covar] for the az/el, respectively
-    initial_state = GaussianState(
-        state_vector=[30,   0,  -20,   0, 10e3, 0],
-        covar=np.diag([3**2, 100**2, 3**2, 100**2,  1000**2, 100**2])
-    )
 
     pos_bounds = np.array([[radar.az_fov[0], radar.el_fov[0]],
                            [radar.az_fov[1], radar.el_fov[1]]])
-    swarm = SurveillanceSwarm(n_particles=10_000,
-                            n_dimensions=2,
-                            position_bounds=pos_bounds,
-                            velocity_bounds=[-1, 1],
-                            gravity=0.075,
-                            min_dispersion_inertia=0.25,
-                            max_dispersion_inertia=0.95,
-                            detection_inertia=0.25,
-                            )
+    swarm = SurveillanceSwarm(n_particles=5_000,
+                              n_dimensions=2,
+                              position_bounds=pos_bounds,
+                              velocity_bounds=[-1, 1],
+                              gravity=0.075,
+                              min_dispersion_inertia=0.25,
+                              max_dispersion_inertia=0.95,
+                              detection_inertia=0.25,
+                              )
 
     env = gym.make(env_id,
                    radar=radar,
+                   swarm=swarm,
                    transition_model=transition_model,
-                   initial_state=initial_state,
-                   birth_rate=0,
-                   death_probability=0,
                    min_initial_n_targets=50,
                    max_initial_n_targets=50,
-                   n_confirm_detections=3,
+                   max_az_span=40,
+                   max_el_span=40,
+                   range_span=[10e3, 25e3],
+                   velocity_span=[-100, 100],
+                   birth_rate=0,
+                   death_probability=0,
                    randomize_initial_state=True,
-                   max_random_az_covar=10**2,
-                   max_random_el_covar=10**2,
-                   swarm=swarm,
+                   n_confirm_detections=3,
                    mutation_rate=0,
                    render_mode='rgb_array',
-                   n_obs_bins=50,
+                   n_obs_bins=100,
+                  #  image_shape=(32, 32)
                    )
 
     # Wrappers
-    env = gym.wrappers.FrameStack(env, 2)
     env = gym.wrappers.FlattenObservation(env)
+    env = gym.wrappers.FrameStack(env, 4)
     env = gym.wrappers.TimeLimit(env, max_episode_steps=max_episode_steps)
     env = gym.wrappers.ClipAction(env)
 
@@ -125,17 +121,18 @@ class PPOSurveillanceAgent(PPO):
     self.rpo_alpha = rpo_alpha
     self.stochastic_action_inds = [0, 1, 2, 3]
     self.actor = nn.Sequential(
-        ortho_init(nn.Linear(np.array(self.observation_space.shape).prod(), 64)),
+        ortho_init(nn.Conv1d(self.observation_space.shape[0], 1, 1)),
+        nn.Flatten(start_dim=1, end_dim=-1),
         nn.Tanh(),
-        ortho_init(nn.Linear(64, 64)),
+        ortho_init(nn.Linear(self.observation_space.shape[1], 64)),
         nn.Tanh(),
         ortho_init(nn.Linear(64, 2 * len(self.stochastic_action_inds)), std=0.01)
     )
     self.critic = nn.Sequential(
-        ortho_init(
-            nn.Linear(np.array(self.observation_space.shape).prod(), 64)),
+        ortho_init(nn.Conv1d(self.observation_space.shape[0], 1, 1)),
+        # nn.Flatten(start_dim=1, end_dim=-1),
         nn.Tanh(),
-        ortho_init(nn.Linear(64, 64)),
+        ortho_init(nn.Linear(self.observation_space.shape[1], 64)),
         nn.Tanh(),
         ortho_init(nn.Linear(64, 1), std=1.0),
     )
@@ -158,7 +155,7 @@ class PPOSurveillanceAgent(PPO):
     action_dist = torch.distributions.MultivariateNormal(mean, cov)
     stochastic_actions = action_dist.sample()
     # TODO: Use the stochastic action indices to determine the action order
-    n_envs = observations.shape[0] if observations.ndim == 2 else 1
+    n_envs = observations.shape[0]
     deterministic_actions = (
         # Bandwidth
         torch.full((n_envs, 1), self.bandwidth).to(
@@ -227,7 +224,7 @@ radar = PhasedArrayRadar(
 # Create the environment
 env_id = 'mpar_sim/SimpleParticleSurveillance-v0'
 n_env = 16
-max_episode_steps = 1000
+max_episode_steps = 2000
 env = gym.vector.AsyncVectorEnv(
     [make_env(env_id,  radar, max_episode_steps) for _ in range(n_env)])
 env = gym.wrappers.RecordEpisodeStatistics(env=env, deque_size=20)
@@ -270,7 +267,7 @@ ppo_agent = PPOSurveillanceAgent(env,
 #     checkpoint_filename, env=env, seed=seed)
 
 trainer = pl.Trainer(
-    max_epochs=50,
+    max_epochs=85,
     gradient_clip_val=0.5,
     accelerator='gpu',
     devices=1,
