@@ -37,13 +37,13 @@ def extended_kalman_update(prior_state: np.ndarray,
   """
   # Compute the residual
   prior_measurement = measurement_model.function(prior_state)
-  residual = measurement - prior_measurement
+  residual = measurement - prior_measurement.ravel()
 
   # Compute the Kalman gain
   if isinstance(measurement_model, LinearMeasurementModel):
     measurement_matrix = measurement_model.matrix()
   else:
-    measurement_matrix = measurement_model.jacobian()
+    measurement_matrix = measurement_model.jacobian(prior_state)
   measurement_covar = measurement_model.covar()
   measurement_cross_covar = prior_covar @ measurement_matrix.T
   innovation_covar = measurement_matrix @ measurement_cross_covar + measurement_covar
