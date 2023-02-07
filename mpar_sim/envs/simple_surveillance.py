@@ -60,35 +60,29 @@ class SimpleParticleSurveillance(gym.Env):
 
     The action space the environment includes all parameters needed to specify a look, and the observation space is a 256x256x1 grayscale image representing the particle swarm in az/el space. That is, each pixel is 255 if a particle is present at that location, and 0 otherwise.
 
-    Parameters
-    ----------
-    radar : PhasedArrayRadar
-        Radar used to simulate detections
-    transition_model : TransitionModel
-        Target state transition model
-    birth_rate : float, optional
-        Lambda parameter of poisson target generation process that defines the rate of target generation per timestep, by default 1.0
-    death_probability : float, optional
-        Probability of death at each time step (per target), by default 0.01
-    preexisting_states : Collection[np.ndarray], optional
-        A list of deterministic target states that are generated every time the scenario is initialized. This can be useful if you want to simulate a specific set of target trajectories, by default []
-    initial_number_targets : int, optional
-        Number of targets generated at the start of the simulation, by default 0
-    swarm : SwarmOptimizer, optional
-        Particle swarm optimizer object used to generate the state images, by default None
-    n_confirm_detections: int, optional
-        Number of detections required to confirm a target, by default 2.
-        If every target in the current scenario has been confirmed this many times, the episode is terminated.
-    randomize_initial_state: bool, optional
-        If true, the initial state is randomized on every call to reset(), by default false
-    max_random_az_covar: float, optional
-        Specifies the maximum azimuth covariance when the initial state is randomized, by default 10
-    max_random_el_covar: float, optional
-        Specifies the maximum elevation covariance when the initial state is randomized, by default 10
-    seed : int, optional
-        Random seed used for the env's np_random member, by default None
-    render_mode : str, optional
-        If 'rgb_array', the observations are given as numpy arrays. If 'human', an additional PyGame window is created to show the observations in real time, by default None
+    Parameters:
+    -----------
+    - radar (PhasedArrayRadar): Radar used to simulate detections
+    - swarm (SurveillanceSwarm): Particle swarm optimization algorithm used to generate the state images
+    - transition_model (TransitionModel): Target state transition model
+    - preexisting_states (Collection[np.ndarray], optional): A list of deterministic target states that are generated every time the scenario is initialized. Defaults to []
+    - min_initial_n_targets (int, optional): Minimum number of targets generated at the start of the simulation. Defaults to 50
+    - max_initial_n_targets (int, optional): Maximum number of targets generated at the start of the simulation. Defaults to 50
+    - max_az_span (float, optional): Maximum azimuth covariance when the initial state is randomized. Defaults to 20
+    - max_el_span (float, optional): Maximum elevation covariance when the initial state is randomized. Defaults to 20
+    - range_span (List[float], optional): Range span of target generation. Defaults to [10e3, 20e3]
+    - velocity_span (List[float], optional): Velocity span of target generation. Defaults to [-100, 100]
+    - birth_rate (float, optional): Lambda parameter of the Poisson target generation process that defines the rate of target generation per time step. Defaults to 0
+    - death_probability (float, optional): Probability of death at each time step (per target). Defaults to 0
+    - start_time (datetime.datetime, optional): Start time of the simulation. Defaults to None
+    - mutation_rate (float, optional): Mutation rate of the particle swarm optimization algorithm. Defaults to 0.01
+    - mutation_alpha (float, optional): Mutation alpha of the particle swarm optimization algorithm. Defaults to 0.25
+    - randomize_initial_state (bool, optional): If True, the initial state is randomized on every call to reset(). Defaults to False
+    - n_confirm_detections (int, optional): Number of detections required to confirm a target. Defaults to 3
+    - n_obs_bins (int, optional): Number of observation bins. Defaults to 50
+    - image_shape (Tuple[int], optional): Shape of the observation image. Defaults to (84, 84)
+    - seed (int, optional): Random seed used for the environment's np_random member. Defaults to None
+    - render_mode (str, optional): If 'rgb_array', the observations are given as numpy arrays. If 'human', an additional PyGame window is created to show the observations in real time. Defaults to None
     """
     self.radar = radar
     self.swarm = swarm

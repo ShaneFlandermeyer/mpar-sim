@@ -121,7 +121,7 @@ class PPOSurveillanceAgent(PPO):
     self.rpo_alpha = rpo_alpha
     self.stochastic_action_inds = [0, 1, 2, 3]
     self.actor = nn.Sequential(
-        ortho_init(nn.Conv2d(self.observation_space.shape[0], 1, 1)),
+        ortho_init(nn.Conv1d(self.observation_space.shape[0], 1, 1)),
         nn.Flatten(start_dim=1, end_dim=-1),
         nn.Tanh(),
         ortho_init(nn.Linear(self.observation_space.shape[1], 64)),
@@ -129,8 +129,8 @@ class PPOSurveillanceAgent(PPO):
         ortho_init(nn.Linear(64, 2 * len(self.stochastic_action_inds)), std=0.01)
     )
     self.critic = nn.Sequential(
-        ortho_init(nn.Conv2d(self.observation_space.shape[0], 1, 1)),
-        nn.Flatten(start_dim=1, end_dim=-1),
+        ortho_init(nn.Conv1d(self.observation_space.shape[0], 1, 1)),
+        # nn.Flatten(start_dim=1, end_dim=-1),
         nn.Tanh(),
         ortho_init(nn.Linear(self.observation_space.shape[1], 64)),
         nn.Tanh(),
@@ -141,12 +141,12 @@ class PPOSurveillanceAgent(PPO):
 
   def forward(self, x: torch.Tensor):
     # Sample the action from its distribution
-    actor_out = self.actor(x.view(x.shape + (1,)))
+    actor_out = self.actor(x)
     actor_out = list(torch.chunk(actor_out, 2, dim=1))
     mean, var = actor_out[0], actor_out[1]
     cov = torch.diag_embed(torch.exp(0.5*torch.clamp(var, -5, 5)))
     # Compute the value of the state
-    value = self.critic(x.view(x.shape + (1,))).flatten()
+    value = self.critic(x).flatten()
 
     return mean, cov, value
 
