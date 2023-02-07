@@ -152,14 +152,16 @@ class PhasedArrayRadar():
         elevation_steering_angle=look.elevation_steering_angle,
     )
 
-    # Compute the loop gain (the part of the radar range equation that doesn't depend on the target)
+    # Compute the loop gain, which is the portion of the SNR computation that does not depend on the target RCS or range.
     self.tx_power = look.tx_power
     pulse_compression_gain = look.bandwidth * look.pulsewidth
-    n_elements_total = np.ceil(look.tx_power / self.element_tx_power)
+    n_tx_elements = np.ceil(look.tx_power / self.element_tx_power)
+    n_rx_elements = self.n_elements_x * self.n_elements_y
     noise_power = constants.Boltzmann * self.system_temperature * \
-        self.noise_figure * look.bandwidth * n_elements_total
-    self.loop_gain = look.n_pulses * pulse_compression_gain * self.tx_power * \
-        self.tx_beam.gain * self.rx_beam.gain * \
+        self.noise_figure * look.bandwidth * n_rx_elements
+    self.loop_gain = look.n_pulses * pulse_compression_gain * \
+        self.tx_power * n_tx_elements * self.tx_beam.gain * \
+        n_rx_elements * self.rx_beam.gain * \
         self.wavelength**2 / ((4*np.pi)**3 * noise_power)
 
     self.measurement_model = CartesianToRangeAzElRangeRate(

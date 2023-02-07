@@ -24,7 +24,7 @@ def beam_broadening_factor(az_steering_angle: float, el_steering_angle: float) -
 
 def beamwidth2gain(azimuth_beamwidth: float,
                    elevation_beamwidth: float,
-                   directivity_beamwidth_prod: float = 32400
+                   directivity_beamwidth_prod: float = 26e3
                    ) -> float:
   """
   Computes the antenna gain (in dBi) from azimuth and elevation beamwidths (in degrees)

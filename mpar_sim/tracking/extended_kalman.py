@@ -1,7 +1,5 @@
 from typing import Tuple, Callable
 import numpy as np
-from mpar_sim.models.measurement.linear import LinearMeasurementModel
-from mpar_sim.models.measurement.nonlinear import NonlinearMeasurementModel
 
 
 def extended_kalman_update(prior_state: np.ndarray,
