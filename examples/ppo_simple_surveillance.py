@@ -5,8 +5,7 @@
 # ## Imports
 
 # %%
-import time
-from typing import Tuple
+
 import warnings
 
 import gymnasium as gym
@@ -16,16 +15,12 @@ import pytorch_lightning as pl
 import torch
 from lightning_rl.models.on_policy_models.ppo import PPO
 from mpar_sim.models.transition.linear import ConstantVelocity
-from stonesoup.types.state import GaussianState
 from torch import nn
 
 import mpar_sim.envs
-from mpar_sim.agents.raster_scan import RasterScanAgent
 from mpar_sim.beam.beam import SincBeam
-from mpar_sim.common.wrap_to_interval import wrap_to_interval
 from mpar_sim.particle.surveillance_pso import SurveillanceSwarm
 from mpar_sim.radar import PhasedArrayRadar
-from mpar_sim.wrappers.squeeze_image import SqueezeImage
 from lightning_rl.common.layer_init import ortho_init
 
 
@@ -222,7 +217,7 @@ radar = PhasedArrayRadar(
     include_false_alarms=False
 )
 # Create the environment
-env_id = 'mpar_sim/SimpleParticleSurveillance-v0'
+env_id = 'mpar_sim/ParticleSurveillance-v0'
 n_env = 16
 max_episode_steps = 2000
 env = gym.vector.AsyncVectorEnv(
