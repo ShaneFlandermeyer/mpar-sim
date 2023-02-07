@@ -46,7 +46,9 @@ if __name__ == '__main__':
         prior_state=x_predicted,
         prior_covar=P_predicted,
         measurement=measurements[:, i],
-        measurement_model=measurement_model,
+        measurement_noise_covar=measurement_model.covar(),
+        measurement_function=measurement_model.function,
+        jacobian_function=measurement_model.jacobian,
     )
     
     # Store the results and update the prior
