@@ -6,20 +6,16 @@ import warnings
 import gymnasium as gym
 import matplotlib.pyplot as plt
 import numpy as np
-import pytorch_lightning as pl
 import torch
 from lightning_rl.models.on_policy_models.ppo import PPO
 from mpar_sim.models.transition.linear import ConstantVelocity
-from stonesoup.types.state import GaussianState
 from torch import nn
 
 import mpar_sim.envs
 from mpar_sim.agents.raster_scan import RasterScanAgent
 from mpar_sim.beam.beam import SincBeam
-from mpar_sim.common.wrap_to_interval import wrap_to_interval
 from mpar_sim.particle.surveillance_pso import SurveillanceSwarm
 from mpar_sim.radar import PhasedArrayRadar
-from mpar_sim.wrappers.squeeze_image import SqueezeImage
 from lightning_rl.common.layer_init import ortho_init
 
 
@@ -62,7 +58,7 @@ def make_env(env_id,
                    max_initial_n_targets=50,
                    max_az_span=40,
                    max_el_span=40,
-                   range_span=[10e3, 30e3],
+                   range_span=[50e3, 50e3],
                    velocity_span=[-100, 100],
                    birth_rate=0,
                    death_probability=0,
@@ -111,10 +107,11 @@ radar = PhasedArrayRadar(
     el_fov=[-45, 45],
     # Detection settings
     false_alarm_rate=1e-6,
-    include_false_alarms=False
+    include_false_alarms=False,
+    alias_measurements=False,
 )
 # Create the environment
-env_id = 'mpar_sim/SimpleParticleSurveillance-v0'
+env_id = 'mpar_sim/ParticleSurveillance-v0'
 n_env = 16
 max_episode_steps = 1500
 env = gym.vector.AsyncVectorEnv(
@@ -236,9 +233,9 @@ class PPOSurveillanceAgent(PPO):
     return optimizer
 
 
-checkpoint_filename = "/home/shane/src/mpar-sim/lightning_logs/version_549/checkpoints/epoch=84-step=10200.ckpt"
-ppo_agent = PPOSurveillanceAgent.load_from_checkpoint(
-    checkpoint_filename, env=env, seed=seed)
+# checkpoint_filename = "/home/shane/src/mpar-sim/lightning_logs/version_549/checkpoints/epoch=84-step=10200.ckpt"
+# ppo_agent = PPOSurveillanceAgent.load_from_checkpoint(
+#     checkpoint_filename, env=env, seed=seed)
 
 
 #############################
@@ -256,26 +253,26 @@ el_axis = np.linspace(-45, 45, beam_coverage_map.shape[0])
 az_pixel_width = az_axis[1] - az_axis[0]
 el_pixel_width = el_axis[1] - el_axis[0]
 
-tic = time.time()
-obs, info = env.reset(seed=seed)
-dones = np.zeros(n_env, dtype=bool)
-i = 0
-with torch.no_grad():
-  while not np.all(dones):
-    obs_tensor = torch.as_tensor(obs).to(
-        device=ppo_agent.device, dtype=torch.float32)
-    action_tensor = ppo_agent.act(obs_tensor)[0]
-    actions = action_tensor.detach().cpu().numpy()
-    # Repeat actions for all environments
-    obs, reward, terminated, truncated, info = env.step(actions)
-    dones = np.logical_or(dones, np.logical_or(terminated, truncated))
+# tic = time.time()
+# obs, info = env.reset(seed=seed)
+# dones = np.zeros(n_env, dtype=bool)
+# i = 0
+# with torch.no_grad():
+#   while not np.all(dones):
+#     obs_tensor = torch.as_tensor(obs).to(
+#         device=ppo_agent.device, dtype=torch.float32)
+#     action_tensor = ppo_agent.act(obs_tensor)[0]
+#     actions = action_tensor.detach().cpu().numpy()
+#     # Repeat actions for all environments
+#     obs, reward, terminated, truncated, info = env.step(actions)
+#     dones = np.logical_or(dones, np.logical_or(terminated, truncated))
 
-    ppo_init_ratio[i, ~dones] = info['initiation_ratio'][~dones]
+#     ppo_init_ratio[i, ~dones] = info['initiation_ratio'][~dones]
 
-    i += 1
-toc = time.time()
-print("PPO agent done")
-print(f"Time elapsed: {toc-tic:.2f} seconds")
+#     i += 1
+# toc = time.time()
+# print("PPO agent done")
+# print(f"Time elapsed: {toc-tic:.2f} seconds")
 
 # Deterministic swarm agent
 tic = time.time()
@@ -349,36 +346,36 @@ toc = time.time()
 print("Raster agent done")
 print(f"Time elapsed: {toc-tic:.2f} seconds")
 
-# Uniform random agent
-tic = time.time()
-obs, info = env.reset(seed=seed)
-dones = np.zeros(n_env, dtype=bool)
-i = 0
-while not np.all(dones):
-  # Perform an environment step
-  look = raster_agent.act(obs)
-  az_beamwidth = (look.azimuth_beamwidth - radar.min_az_beamwidth) / \
-      (radar.max_az_beamwidth - radar.min_az_beamwidth)
-  el_beamwidth = (look.elevation_beamwidth - radar.min_el_beamwidth) / \
-      (radar.max_el_beamwidth - radar.min_el_beamwidth)
-  actions = np.array([[np.random.uniform(-1, 1),
-                     np.random.uniform(-1, 1),
-                     az_beamwidth,
-                     el_beamwidth,
-                     look.bandwidth,
-                     look.pulsewidth,
-                     look.prf,
-                     look.n_pulses]])
-  actions = np.repeat(actions, n_env, axis=0)
-  obs, reward, terminated, truncated, info = env.step(actions)
-  dones = np.logical_or(dones, np.logical_or(terminated, truncated))
+# # Uniform random agent
+# tic = time.time()
+# obs, info = env.reset(seed=seed)
+# dones = np.zeros(n_env, dtype=bool)
+# i = 0
+# while not np.all(dones):
+#   # Perform an environment step
+#   look = raster_agent.act(obs)
+#   az_beamwidth = (look.azimuth_beamwidth - radar.min_az_beamwidth) / \
+#       (radar.max_az_beamwidth - radar.min_az_beamwidth)
+#   el_beamwidth = (look.elevation_beamwidth - radar.min_el_beamwidth) / \
+#       (radar.max_el_beamwidth - radar.min_el_beamwidth)
+#   actions = np.array([[np.random.uniform(-1, 1),
+#                      np.random.uniform(-1, 1),
+#                      az_beamwidth,
+#                      el_beamwidth,
+#                      look.bandwidth,
+#                      look.pulsewidth,
+#                      look.prf,
+#                      look.n_pulses]])
+#   actions = np.repeat(actions, n_env, axis=0)
+#   obs, reward, terminated, truncated, info = env.step(actions)
+#   dones = np.logical_or(dones, np.logical_or(terminated, truncated))
 
-  # Update metrics
-  random_init_ratio[i, ~dones] = info['initiation_ratio'][~dones]
-  i += 1
-toc = time.time()
-print("Random agent done")
-print(f"Time elapsed: {toc-tic:.2f} seconds")
+#   # Update metrics
+#   random_init_ratio[i, ~dones] = info['initiation_ratio'][~dones]
+#   i += 1
+# toc = time.time()
+# print("Random agent done")
+# print(f"Time elapsed: {toc-tic:.2f} seconds")
 
 #############################
 # Plot results
@@ -387,7 +384,7 @@ fig, ax = plt.subplots()
 plt.plot(np.mean(raster_init_ratio[:-1, :], axis=1), linewidth=2)
 plt.plot(np.mean(random_init_ratio[:-1, :], axis=1), linewidth=2)
 plt.plot(np.mean(spso_init_ratio[:-1, :], axis=1), linewidth=2)
-plt.plot(np.mean(ppo_init_ratio[:-1, :], axis=1), linewidth=2)
+# plt.plot(np.mean(ppo_init_ratio[:-1, :], axis=1), linewidth=2)
 plt.grid()
 plt.xlabel('Time step (dwells)', fontsize=14)
 plt.ylabel('Fraction of targets under track', fontsize=14)
