@@ -82,3 +82,40 @@ def kalman_update(prior_state: np.ndarray,
   posterior_covar = prior_covar - kalman_gain @ innovation_covar @ kalman_gain.T
 
   return posterior_mean, posterior_covar
+
+
+def kalman_predict_update(prior_state: np.ndarray,
+                          prior_covar: np.ndarray,
+                          measurement: np.ndarray,
+                          transition_matrix: np.ndarray,
+                          noise_covar: np.ndarray,
+                          measurement_model: MeasurementModel) -> Tuple[np.ndarray, np.ndarray]:
+  """
+  Perform the Kalman predict and update steps.
+
+  Parameters
+  ----------
+  prior_state : np.ndarray
+      Prior state vector
+  prior_covar : np.ndarray
+      Prior covariance matrix
+  measurement : np.ndarray
+      Actual measurement
+  transition_matrix : np.ndarray
+      Transition model matrix
+  noise_covar : np.ndarray
+  measurement_model : MeasurementModel
+      Model used to collect measurement
+
+  Returns
+  -------
+  Tuple[np.ndarray, np.ndarray]
+      - Predicted state vector
+      - Predicted covariance matrix
+  """
+  predicted_state, predicted_covar = kalman_predict(
+      prior_state, prior_covar, transition_matrix, noise_covar)
+  posterior_state, posterior_covar = kalman_update(
+      predicted_state, predicted_covar, measurement, measurement_model)
+
+  return posterior_state, posterior_covar

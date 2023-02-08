@@ -187,7 +187,7 @@ class CartesianToRangeAzElRangeRate(NonlinearMeasurementModel):
     rr = np.einsum('ij, ij->j', xyz_pos, xyz_vel) / \
         np.linalg.norm(xyz_pos, axis=0)
 
-    out = np.array([el, az, rho, rr]) + meas_noise
+    out = np.array([az, el, rho, rr]) + meas_noise
     if self.alias_measurements:
       # Add aliasing to the range/range rate if it exceeds the unambiguous limits
       out[2] = wrap_to_interval(out[2], 0, self.max_unambiguous_range)
@@ -202,7 +202,7 @@ class CartesianToRangeAzElRangeRate(NonlinearMeasurementModel):
     return out
 
   def inverse_function(self, detection) -> np.ndarray:
-    elevation, azimuth, range, range_rate = detection.state_vector
+    azimuth, elevation, range, range_rate = detection.state_vector
 
     x, y, z = sph2cart(azimuth, elevation, range, degrees=True)
     # because only rho_rate is known, only the components in
@@ -231,30 +231,42 @@ class CartesianToRangeAzElRangeRate(NonlinearMeasurementModel):
     return self.noise_covar
 
   def jacobian(self, state: Optional[np.ndarray]) -> np.ndarray:
-    # TODO: Have not debugged this
-    x, y, z = state[self.position_mapping, ...]
-    r = np.sqrt(x**2 + y**2 + z**2)
-    x_vel, y_vel, z_vel = state[self.velocity_mapping, ...]
+    jacobian = np.zeros((self.ndim_meas, self.ndim_state))
 
-    # Compute the Jacobian (manually derived)
-    J = np.zeros((self.ndim_meas, self.ndim_state))
-    J[0, 0] = -x*z/(r**3*np.sqrt(1 - z**2/r**2))
-    J[0, 2] = -y*z/(r**3*np.sqrt(1 - z**2/r**2))
-    J[0, 4] = (r**(-1.0) - z**2/r**3)/np.sqrt(1 - z**2/r**2)
+    # Compute position portion of jacobian
+    # TODO: Check that r_xy and r_xyz > 0.
+    pos = state[self.position_mapping, ...].ravel()
+    relative_pos = pos - self.translation_offset.ravel()
+    relative_pos = np.dot(self.rotation_matrix, relative_pos)
+    x, y, z = relative_pos
+    r_xy = np.sqrt(x**2 + y**2)
+    r_xyz = np.sqrt(x**2 + y**2 + z**2)
+    A = np.zeros((3, 3))
+    A[0, :] = np.dot(self.rotation_matrix, np.array([-y, x, 0]) / r_xy**2)
+    A[1, :] = np.dot(self.rotation_matrix, np.array(
+        [-x*z, -y*z, r_xy**2]) / (r_xy * r_xyz**2))
+    A[2, :] = np.dot(self.rotation_matrix, np.array([x, y, z]) / r_xyz)
+    # Convert to degrees and store the result
+    A[:2, :] *= 180 / np.pi
+    jacobian[:-1, ::2] = A
 
-    J[1, 0] = -y/(x**2 + y**2)
-    J[1, 2] = x/(x**2 + y**2)
+    # Compute range rate portion of jacobian
+    # TODO: Check that r > 0
+    vel = state[self.velocity_mapping, ...].ravel()
+    relative_vel = vel - self.velocity.ravel()
+    rdot_to_x = (relative_vel[0] * r_xyz -
+                 np.dot(relative_pos, relative_vel) * x / r_xyz) / r_xyz**2
+    rdot_to_xdot = x / r_xyz
+    rdot_to_y = (relative_vel[1] * r_xyz - np.dot(relative_pos, relative_vel) *
+                 y / r_xyz) / r_xyz**2
+    rdot_to_ydot = y / r_xyz
+    rdot_to_z = (relative_vel[2] * r_xyz - np.dot(relative_pos, relative_vel) *
+                 z / r_xyz) / r_xyz**2
+    rdot_to_zdot = z / r_xyz
+    jacobian[-1, :] = [rdot_to_x, rdot_to_xdot,
+                       rdot_to_y, rdot_to_ydot, rdot_to_z, rdot_to_zdot]
 
-    J[2, :] = [x/r, 0, y/r, 0, z/r, 0]
-
-    J[3, 0] = x_vel/r - x*(x*x_vel + y*y_vel + z*z_vel)/r**3
-    J[3, 1] = x/r
-    J[3, 2] = y_vel/r - y*(x*x_vel + y*y_vel + z*z_vel)/r**3
-    J[3, 3] = y/r
-    J[3, 4] = z_vel/r - z*(x*x_vel + y*y_vel + z*z_vel)/r**3
-    J[3, 5] = z/r
-    
-    return J
+    return jacobian
 
   @clearable_cached_property('rotation_offset')
   def rotation_matrix(self) -> np.ndarray:
