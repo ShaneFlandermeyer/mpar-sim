@@ -43,6 +43,7 @@ class PhasedArrayRadar():
                max_el_beamwidth: float = np.Inf,
                # System parameters
                center_frequency: float = 3e9,
+               sample_rate: float = 100e6,
                system_temperature: float = 290,
                noise_figure: float = 4,
                # Scan settings
@@ -73,6 +74,7 @@ class PhasedArrayRadar():
     self.element_gain = element_gain
     self.center_frequency = center_frequency
     self.wavelength = constants.c / self.center_frequency
+    self.sample_rate = sample_rate
     self.system_temperature = system_temperature
     self.noise_figure = noise_figure
     self.beam_shape = beam_shape
@@ -161,15 +163,12 @@ class PhasedArrayRadar():
     # Compute the loop gain, which is the portion of the SNR computation that does not depend on the target RCS or range.
     self.tx_power = look.tx_power
     pulse_compression_gain = look.bandwidth * look.pulsewidth
-    # Doesn't show up directly
-    # n_tx_elements = np.ceil(look.tx_power / self.element_tx_power)
-    n_rx_elements = self.n_elements_x * self.n_elements_y
     noise_power = constants.Boltzmann * self.system_temperature * \
-        10**(self.noise_figure/10) * look.bandwidth * n_rx_elements
+        10**(self.noise_figure/10) * self.sample_rate
+    # TODO: Not including scan loss for now
     # scan_loss = np.cos(look.azimuth_steering_angle)**-2 * \
     #     np.cos(look.elevation_steering_angle)**-2
     scan_loss = 1
-    # element_gain = 10**(3/10)
     self.loop_gain = look.n_pulses * pulse_compression_gain * \
         self.tx_power * 10**(self.element_gain/10) * self.tx_beam.gain * \
         self.rx_beam.gain * self.wavelength**2 / \
