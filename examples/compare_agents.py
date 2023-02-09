@@ -6,20 +6,16 @@ import warnings
 import gymnasium as gym
 import matplotlib.pyplot as plt
 import numpy as np
-import pytorch_lightning as pl
 import torch
 from lightning_rl.models.on_policy_models.ppo import PPO
 from mpar_sim.models.transition.linear import ConstantVelocity
-from stonesoup.types.state import GaussianState
 from torch import nn
 
 import mpar_sim.envs
 from mpar_sim.agents.raster_scan import RasterScanAgent
 from mpar_sim.beam.beam import SincBeam
-from mpar_sim.common.wrap_to_interval import wrap_to_interval
 from mpar_sim.particle.surveillance_pso import SurveillanceSwarm
 from mpar_sim.radar import PhasedArrayRadar
-from mpar_sim.wrappers.squeeze_image import SqueezeImage
 from lightning_rl.common.layer_init import ortho_init
 
 
@@ -62,7 +58,7 @@ def make_env(env_id,
                    max_initial_n_targets=50,
                    max_az_span=40,
                    max_el_span=40,
-                   range_span=[10e3, 30e3],
+                   range_span=[5e3, 50e3],
                    velocity_span=[-100, 100],
                    birth_rate=0,
                    death_probability=0,
@@ -103,6 +99,7 @@ radar = PhasedArrayRadar(
     max_el_beamwidth=10,
     # System parameters
     center_frequency=3e9,
+    sample_rate=100e6,
     system_temperature=290,
     noise_figure=4,
     # Scan settings
@@ -111,12 +108,14 @@ radar = PhasedArrayRadar(
     el_fov=[-45, 45],
     # Detection settings
     false_alarm_rate=1e-6,
-    include_false_alarms=False
+    include_false_alarms=False,
+    alias_measurements=False,
+    discretize_measurements=True
 )
 # Create the environment
-env_id = 'mpar_sim/SimpleParticleSurveillance-v0'
+env_id = 'mpar_sim/ParticleSurveillance-v0'
 n_env = 16
-max_episode_steps = 1500
+max_episode_steps = 2500
 env = gym.vector.AsyncVectorEnv(
     [make_env(env_id,  radar, max_episode_steps) for _ in range(n_env)])
 env = gym.wrappers.RecordEpisodeStatistics(env=env, deque_size=20)
@@ -124,9 +123,9 @@ env = gym.wrappers.RecordEpisodeStatistics(env=env, deque_size=20)
 #############################
 # Agent definitions
 #############################
-az_bw = 3
-el_bw = 3
-bw = 100e6
+az_bw = 10
+el_bw = 10
+bw = radar.sample_rate
 pulsewidth = 10e-6
 prf = 5e3
 n_pulses = 32
@@ -165,7 +164,7 @@ class PPOSurveillanceAgent(PPO):
     self.rpo_alpha = rpo_alpha
     self.stochastic_action_inds = [0, 1, 2, 3]
     self.actor = nn.Sequential(
-        ortho_init(nn.Conv2d(self.observation_space.shape[0], 1, 1)),
+        ortho_init(nn.Conv1d(self.observation_space.shape[0], 1, 1)),
         nn.Flatten(start_dim=1, end_dim=-1),
         nn.Tanh(),
         ortho_init(nn.Linear(self.observation_space.shape[1], 64)),
@@ -173,8 +172,7 @@ class PPOSurveillanceAgent(PPO):
         ortho_init(nn.Linear(64, 2 * len(self.stochastic_action_inds)), std=0.01)
     )
     self.critic = nn.Sequential(
-        ortho_init(nn.Conv2d(self.observation_space.shape[0], 1, 1)),
-        nn.Flatten(start_dim=1, end_dim=-1),
+        ortho_init(nn.Conv1d(self.observation_space.shape[0], 1, 1)),
         nn.Tanh(),
         ortho_init(nn.Linear(self.observation_space.shape[1], 64)),
         nn.Tanh(),
@@ -185,12 +183,12 @@ class PPOSurveillanceAgent(PPO):
 
   def forward(self, x: torch.Tensor):
     # Sample the action from its distribution
-    actor_out = self.actor(x.view(x.shape + (1,)))
+    actor_out = self.actor(x)
     actor_out = list(torch.chunk(actor_out, 2, dim=1))
     mean, var = actor_out[0], actor_out[1]
     cov = torch.diag_embed(torch.exp(0.5*torch.clamp(var, -5, 5)))
     # Compute the value of the state
-    value = self.critic(x.view(x.shape + (1,))).flatten()
+    value = self.critic(x).flatten()
 
     return mean, cov, value
 
@@ -236,7 +234,7 @@ class PPOSurveillanceAgent(PPO):
     return optimizer
 
 
-checkpoint_filename = "/home/shane/src/mpar-sim/lightning_logs/version_549/checkpoints/epoch=84-step=10200.ckpt"
+checkpoint_filename = "/home/shane/src/mpar-sim/lightning_logs/version_0/checkpoints/epoch=84-step=10200.ckpt"
 ppo_agent = PPOSurveillanceAgent.load_from_checkpoint(
     checkpoint_filename, env=env, seed=seed)
 
@@ -256,26 +254,26 @@ el_axis = np.linspace(-45, 45, beam_coverage_map.shape[0])
 az_pixel_width = az_axis[1] - az_axis[0]
 el_pixel_width = el_axis[1] - el_axis[0]
 
-tic = time.time()
-obs, info = env.reset(seed=seed)
-dones = np.zeros(n_env, dtype=bool)
-i = 0
-with torch.no_grad():
-  while not np.all(dones):
-    obs_tensor = torch.as_tensor(obs).to(
-        device=ppo_agent.device, dtype=torch.float32)
-    action_tensor = ppo_agent.act(obs_tensor)[0]
-    actions = action_tensor.detach().cpu().numpy()
-    # Repeat actions for all environments
-    obs, reward, terminated, truncated, info = env.step(actions)
-    dones = np.logical_or(dones, np.logical_or(terminated, truncated))
+# tic = time.time()
+# obs, info = env.reset(seed=seed)
+# dones = np.zeros(n_env, dtype=bool)
+# i = 0
+# with torch.no_grad():
+#   while not np.all(dones):
+#     obs_tensor = torch.as_tensor(obs).to(
+#         device=ppo_agent.device, dtype=torch.float32)
+#     action_tensor = ppo_agent.act(obs_tensor)[0]
+#     actions = action_tensor.detach().cpu().numpy()
+#     # Repeat actions for all environments
+#     obs, reward, terminated, truncated, info = env.step(actions)
+#     dones = np.logical_or(dones, np.logical_or(terminated, truncated))
 
-    ppo_init_ratio[i, ~dones] = info['initiation_ratio'][~dones]
+#     ppo_init_ratio[i, ~dones] = info['initiation_ratio'][~dones]
 
-    i += 1
-toc = time.time()
-print("PPO agent done")
-print(f"Time elapsed: {toc-tic:.2f} seconds")
+#     i += 1
+# toc = time.time()
+# print("PPO agent done")
+# print(f"Time elapsed: {toc-tic:.2f} seconds")
 
 # Deterministic swarm agent
 tic = time.time()
@@ -384,14 +382,17 @@ print(f"Time elapsed: {toc-tic:.2f} seconds")
 # Plot results
 #############################
 fig, ax = plt.subplots()
-plt.plot(np.mean(raster_init_ratio[:-1, :], axis=1), linewidth=2)
-plt.plot(np.mean(random_init_ratio[:-1, :], axis=1), linewidth=2)
-plt.plot(np.mean(spso_init_ratio[:-1, :], axis=1), linewidth=2)
-plt.plot(np.mean(ppo_init_ratio[:-1, :], axis=1), linewidth=2)
+plt.plot(np.mean(raster_init_ratio[:-1, :],
+         axis=1), linewidth=2, label='Raster')
+plt.plot(np.mean(random_init_ratio[:-1, :],
+         axis=1), linewidth=2, label='Random')
+plt.plot(np.mean(spso_init_ratio[:-1, :], axis=1), linewidth=2, label='SPSO')
+# plt.plot(np.mean(ppo_init_ratio[:-1, :], axis=1), linewidth=2, label='RL')
 plt.grid()
 plt.xlabel('Time step (dwells)', fontsize=14)
 plt.ylabel('Fraction of targets under track', fontsize=14)
-plt.legend(['Raster', 'Random', 'SPSO', 'RL'], fontsize=14)
+plt.legend()
+plt.ylim([0, 1])
 
 plt.figure()
 plt.imshow(beam_coverage_map,
