@@ -58,7 +58,7 @@ def make_env(env_id,
                    max_initial_n_targets=50,
                    max_az_span=40,
                    max_el_span=40,
-                   range_span=[5e3, 150e3],
+                   range_span=[5e3, 50e3],
                    velocity_span=[-100, 100],
                    birth_rate=0,
                    death_probability=0,
@@ -115,7 +115,7 @@ radar = PhasedArrayRadar(
 # Create the environment
 env_id = 'mpar_sim/ParticleSurveillance-v0'
 n_env = 16
-max_episode_steps = 2000
+max_episode_steps = 2500
 env = gym.vector.AsyncVectorEnv(
     [make_env(env_id,  radar, max_episode_steps) for _ in range(n_env)])
 env = gym.wrappers.RecordEpisodeStatistics(env=env, deque_size=20)
@@ -123,8 +123,8 @@ env = gym.wrappers.RecordEpisodeStatistics(env=env, deque_size=20)
 #############################
 # Agent definitions
 #############################
-az_bw = 3
-el_bw = 3
+az_bw = 10
+el_bw = 10
 bw = radar.sample_rate
 pulsewidth = 10e-6
 prf = 5e3
@@ -164,7 +164,7 @@ class PPOSurveillanceAgent(PPO):
     self.rpo_alpha = rpo_alpha
     self.stochastic_action_inds = [0, 1, 2, 3]
     self.actor = nn.Sequential(
-        ortho_init(nn.Conv2d(self.observation_space.shape[0], 1, 1)),
+        ortho_init(nn.Conv1d(self.observation_space.shape[0], 1, 1)),
         nn.Flatten(start_dim=1, end_dim=-1),
         nn.Tanh(),
         ortho_init(nn.Linear(self.observation_space.shape[1], 64)),
@@ -172,8 +172,7 @@ class PPOSurveillanceAgent(PPO):
         ortho_init(nn.Linear(64, 2 * len(self.stochastic_action_inds)), std=0.01)
     )
     self.critic = nn.Sequential(
-        ortho_init(nn.Conv2d(self.observation_space.shape[0], 1, 1)),
-        nn.Flatten(start_dim=1, end_dim=-1),
+        ortho_init(nn.Conv1d(self.observation_space.shape[0], 1, 1)),
         nn.Tanh(),
         ortho_init(nn.Linear(self.observation_space.shape[1], 64)),
         nn.Tanh(),
@@ -184,12 +183,12 @@ class PPOSurveillanceAgent(PPO):
 
   def forward(self, x: torch.Tensor):
     # Sample the action from its distribution
-    actor_out = self.actor(x.view(x.shape + (1,)))
+    actor_out = self.actor(x)
     actor_out = list(torch.chunk(actor_out, 2, dim=1))
     mean, var = actor_out[0], actor_out[1]
     cov = torch.diag_embed(torch.exp(0.5*torch.clamp(var, -5, 5)))
     # Compute the value of the state
-    value = self.critic(x.view(x.shape + (1,))).flatten()
+    value = self.critic(x).flatten()
 
     return mean, cov, value
 
@@ -235,9 +234,9 @@ class PPOSurveillanceAgent(PPO):
     return optimizer
 
 
-# checkpoint_filename = "/home/shane/src/mpar-sim/lightning_logs/version_549/checkpoints/epoch=84-step=10200.ckpt"
-# ppo_agent = PPOSurveillanceAgent.load_from_checkpoint(
-#     checkpoint_filename, env=env, seed=seed)
+checkpoint_filename = "/home/shane/src/mpar-sim/lightning_logs/version_0/checkpoints/epoch=84-step=10200.ckpt"
+ppo_agent = PPOSurveillanceAgent.load_from_checkpoint(
+    checkpoint_filename, env=env, seed=seed)
 
 
 #############################
@@ -348,49 +347,52 @@ toc = time.time()
 print("Raster agent done")
 print(f"Time elapsed: {toc-tic:.2f} seconds")
 
-# # Uniform random agent
-# tic = time.time()
-# obs, info = env.reset(seed=seed)
-# dones = np.zeros(n_env, dtype=bool)
-# i = 0
-# while not np.all(dones):
-#   # Perform an environment step
-#   look = raster_agent.act(obs)
-#   az_beamwidth = (look.azimuth_beamwidth - radar.min_az_beamwidth) / \
-#       (radar.max_az_beamwidth - radar.min_az_beamwidth)
-#   el_beamwidth = (look.elevation_beamwidth - radar.min_el_beamwidth) / \
-#       (radar.max_el_beamwidth - radar.min_el_beamwidth)
-#   actions = np.array([[np.random.uniform(-1, 1),
-#                      np.random.uniform(-1, 1),
-#                      az_beamwidth,
-#                      el_beamwidth,
-#                      look.bandwidth,
-#                      look.pulsewidth,
-#                      look.prf,
-#                      look.n_pulses]])
-#   actions = np.repeat(actions, n_env, axis=0)
-#   obs, reward, terminated, truncated, info = env.step(actions)
-#   dones = np.logical_or(dones, np.logical_or(terminated, truncated))
+# Uniform random agent
+tic = time.time()
+obs, info = env.reset(seed=seed)
+dones = np.zeros(n_env, dtype=bool)
+i = 0
+while not np.all(dones):
+  # Perform an environment step
+  look = raster_agent.act(obs)
+  az_beamwidth = (look.azimuth_beamwidth - radar.min_az_beamwidth) / \
+      (radar.max_az_beamwidth - radar.min_az_beamwidth)
+  el_beamwidth = (look.elevation_beamwidth - radar.min_el_beamwidth) / \
+      (radar.max_el_beamwidth - radar.min_el_beamwidth)
+  actions = np.array([[np.random.uniform(-1, 1),
+                     np.random.uniform(-1, 1),
+                     az_beamwidth,
+                     el_beamwidth,
+                     look.bandwidth,
+                     look.pulsewidth,
+                     look.prf,
+                     look.n_pulses]])
+  actions = np.repeat(actions, n_env, axis=0)
+  obs, reward, terminated, truncated, info = env.step(actions)
+  dones = np.logical_or(dones, np.logical_or(terminated, truncated))
 
-#   # Update metrics
-#   random_init_ratio[i, ~dones] = info['initiation_ratio'][~dones]
-#   i += 1
-# toc = time.time()
-# print("Random agent done")
-# print(f"Time elapsed: {toc-tic:.2f} seconds")
+  # Update metrics
+  random_init_ratio[i, ~dones] = info['initiation_ratio'][~dones]
+  i += 1
+toc = time.time()
+print("Random agent done")
+print(f"Time elapsed: {toc-tic:.2f} seconds")
 
 #############################
 # Plot results
 #############################
 fig, ax = plt.subplots()
-plt.plot(np.mean(raster_init_ratio[:-1, :], axis=1), linewidth=2)
-plt.plot(np.mean(random_init_ratio[:-1, :], axis=1), linewidth=2)
-plt.plot(np.mean(spso_init_ratio[:-1, :], axis=1), linewidth=2)
-# plt.plot(np.mean(ppo_init_ratio[:-1, :], axis=1), linewidth=2)
+plt.plot(np.mean(raster_init_ratio[:-1, :],
+         axis=1), linewidth=2, label='Raster')
+plt.plot(np.mean(random_init_ratio[:-1, :],
+         axis=1), linewidth=2, label='Random')
+plt.plot(np.mean(spso_init_ratio[:-1, :], axis=1), linewidth=2, label='SPSO')
+# plt.plot(np.mean(ppo_init_ratio[:-1, :], axis=1), linewidth=2, label='RL')
 plt.grid()
 plt.xlabel('Time step (dwells)', fontsize=14)
 plt.ylabel('Fraction of targets under track', fontsize=14)
-plt.legend(['Raster', 'Random', 'SPSO', 'RL'], fontsize=14)
+plt.legend()
+plt.ylim([0, 1])
 
 plt.figure()
 plt.imshow(beam_coverage_map,
