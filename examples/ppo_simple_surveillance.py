@@ -67,7 +67,7 @@ def make_env(env_id,
                    max_initial_n_targets=50,
                    max_az_span=40,
                    max_el_span=40,
-                   range_span=[10e3, 25e3],
+                   range_span=[5e3, 150e3],
                    velocity_span=[-100, 100],
                    birth_rate=0,
                    death_probability=0,
@@ -125,7 +125,6 @@ class PPOSurveillanceAgent(PPO):
     )
     self.critic = nn.Sequential(
         ortho_init(nn.Conv1d(self.observation_space.shape[0], 1, 1)),
-        # nn.Flatten(start_dim=1, end_dim=-1),
         nn.Tanh(),
         ortho_init(nn.Linear(self.observation_space.shape[1], 64)),
         nn.Tanh(),
@@ -206,6 +205,7 @@ radar = PhasedArrayRadar(
     max_el_beamwidth=10,
     # System parameters
     center_frequency=3e9,
+    sample_rate=100e6,
     system_temperature=290,
     noise_figure=4,
     # Scan settings
@@ -219,7 +219,7 @@ radar = PhasedArrayRadar(
 # Create the environment
 env_id = 'mpar_sim/ParticleSurveillance-v0'
 n_env = 16
-max_episode_steps = 2000
+max_episode_steps = 2500
 env = gym.vector.AsyncVectorEnv(
     [make_env(env_id,  radar, max_episode_steps) for _ in range(n_env)])
 env = gym.wrappers.RecordEpisodeStatistics(env=env, deque_size=20)
@@ -230,7 +230,7 @@ env = gym.wrappers.RecordEpisodeStatistics(env=env, deque_size=20)
 # ## Training loop
 
 # %%
-bw = 100e6
+bw = radar.sample_rate
 pulsewidth = 10e-6
 prf = 5e3
 n_pulses = 32

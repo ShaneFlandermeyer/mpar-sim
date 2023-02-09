@@ -31,7 +31,7 @@ class ParticleSurveillance(gym.Env):
                max_initial_n_targets: int = 50,
                max_az_span: float = 20,
                max_el_span: float = 20,
-               range_span: List[float] = [10e3, 20e3],
+               range_span: List[float] = [10e3, 100e3],
                velocity_span: List[float] = [-100, 100],
                birth_rate: float = 0,
                death_probability: float = 0,

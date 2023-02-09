@@ -38,10 +38,12 @@ class PhasedArrayRadar():
                n_elements_y: int = 16,
                element_spacing: float = 0.5,
                element_tx_power: float = 10,
+               element_gain: float = 3,
                max_az_beamwidth: float = np.Inf,
                max_el_beamwidth: float = np.Inf,
                # System parameters
                center_frequency: float = 3e9,
+               sample_rate: float = 100e6,
                system_temperature: float = 290,
                noise_figure: float = 4,
                # Scan settings
@@ -54,6 +56,8 @@ class PhasedArrayRadar():
                min_range: float = 0,
                max_range: float = np.inf,
                max_range_rate: float = np.inf,
+               alias_measurements: bool = False,
+               discretize_measurements: bool = False
                ) -> None:
     self.ndim_state = ndim_state
     self.position = position
@@ -67,8 +71,10 @@ class PhasedArrayRadar():
     self.n_elements_y = n_elements_y
     self.element_spacing = element_spacing
     self.element_tx_power = element_tx_power
+    self.element_gain = element_gain
     self.center_frequency = center_frequency
     self.wavelength = constants.c / self.center_frequency
+    self.sample_rate = sample_rate
     self.system_temperature = system_temperature
     self.noise_figure = noise_figure
     self.beam_shape = beam_shape
@@ -79,6 +85,8 @@ class PhasedArrayRadar():
     self.min_range = min_range
     self.max_range = max_range
     self.max_range_rate = max_range_rate
+    self.alias_measurements = alias_measurements
+    self.discretize_measurements = discretize_measurements
 
     # Compute the maximum possible beamwidth in az/el for the array geometry
     aperture_width = self.n_elements_x * self.element_spacing * self.wavelength
@@ -155,14 +163,16 @@ class PhasedArrayRadar():
     # Compute the loop gain, which is the portion of the SNR computation that does not depend on the target RCS or range.
     self.tx_power = look.tx_power
     pulse_compression_gain = look.bandwidth * look.pulsewidth
-    n_tx_elements = np.ceil(look.tx_power / self.element_tx_power)
-    n_rx_elements = self.n_elements_x * self.n_elements_y
     noise_power = constants.Boltzmann * self.system_temperature * \
-        self.noise_figure * look.bandwidth * n_rx_elements
+        10**(self.noise_figure/10) * self.sample_rate
+    # TODO: Not including scan loss for now
+    # scan_loss = np.cos(look.azimuth_steering_angle)**-2 * \
+    #     np.cos(look.elevation_steering_angle)**-2
+    scan_loss = 1
     self.loop_gain = look.n_pulses * pulse_compression_gain * \
-        self.tx_power * n_tx_elements * self.tx_beam.gain * \
-        n_rx_elements * self.rx_beam.gain * \
-        self.wavelength**2 / ((4*np.pi)**3 * noise_power)
+        self.tx_power * 10**(self.element_gain/10) * self.tx_beam.gain * \
+        self.rx_beam.gain * self.wavelength**2 / \
+        ((4*np.pi)**3 * noise_power * scan_loss)
 
     self.measurement_model = CartesianToRangeAzElRangeRate(
         range_res=self.range_resolution,
@@ -171,7 +181,10 @@ class PhasedArrayRadar():
         max_unambiguous_range_rate=self.max_unambiguous_radial_speed,
         position_mapping=self.position_mapping,
         velocity_mapping=self.velocity_mapping,
-        noise_covar=np.diag([0.1, 0.1, 0.1, 0.1]))
+        noise_covar=np.diag([0.1, 0.1, 0.1, 0.1]),
+        alias_measurements=self.alias_measurements,
+        discretize_measurements=self.discretize_measurements,
+    )
 
   def is_detectable(self,
                     target_az: float, target_el: float, target_range: float) -> bool:
@@ -219,7 +232,6 @@ class PhasedArrayRadar():
   @clearable_cached_property('rotation_offset')
   def _rotation_matrix(self) -> np.ndarray:
     """3D axis rotation matrix"""
-    # TODO: This may not be correct, but everything for the thesis assumes the radar is oriented at (0,0,0)
     theta_x = -self.rotation_offset[0, 0]  # roll
     theta_y = self.rotation_offset[1, 0]  # pitch/elevation
     theta_z = -self.rotation_offset[2, 0]  # yaw/azimuth
@@ -343,10 +355,11 @@ class PhasedArrayRadar():
                             size=n_false_alarms)
 
       # Bin range and velocity
-      r = np.floor(r / self.range_resolution) * \
-          self.range_resolution + self.range_resolution/2
-      v = np.floor(v / self.velocity_resolution) * \
-          self.velocity_resolution + self.velocity_resolution/2
+      if self.discretize_measurements:
+        r = np.floor(r / self.range_resolution) * \
+            self.range_resolution + self.range_resolution/2
+        v = np.floor(v / self.velocity_resolution) * \
+            self.velocity_resolution + self.velocity_resolution/2
 
       # Add false alarms to the detection report
       snr_db = 20*np.log10(gammaincinv(1, 1 - self.false_alarm_rate))
