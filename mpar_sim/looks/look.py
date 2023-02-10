@@ -10,6 +10,7 @@ class Look():
                azimuth_beamwidth: float = 10,
                elevation_beamwidth: float = 10,
                # Waveform parameters
+               center_frequency: float = 3e9,
                bandwidth: float = 50e6,
                pulsewidth: float = 10e-6,
                prf: float = 1500,
@@ -26,6 +27,7 @@ class Look():
     self.elevation_beamwidth = elevation_beamwidth
     
     # Waveform parameters
+    self.center_frequency = center_frequency
     self.bandwidth = bandwidth
     self.pulsewidth = pulsewidth
     self.prf = prf
