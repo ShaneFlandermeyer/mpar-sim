@@ -4,7 +4,6 @@ from typing import Callable, List, Optional, Set, Tuple, Union
 
 import numpy as np
 from scipy import constants
-from stonesoup.base import clearable_cached_property
 
 from mpar_sim.beam.beam import RectangularBeam
 from mpar_sim.beam.common import aperture2beamwidth, beam_broadening_factor
@@ -62,10 +61,10 @@ class PhasedArrayRadar():
     self.ndim_state = ndim_state
     self.position = position
     self.velocity = velocity
+    self.rotation_offset = rotation_offset
     self.position_mapping = position_mapping
     self.velocity_mapping = velocity_mapping
     self.measurement_model = measurement_model
-    self.rotation_offset = rotation_offset
     self.timestamp = timestamp
     self.n_elements_x = n_elements_x
     self.n_elements_y = n_elements_y
@@ -229,14 +228,6 @@ class PhasedArrayRadar():
         np.abs(relative_az) <= 0.5 * self.tx_beam.azimuth_beamwidth,
         np.abs(relative_el) <= 0.5 * self.tx_beam.elevation_beamwidth)
 
-  @clearable_cached_property('rotation_offset')
-  def _rotation_matrix(self) -> np.ndarray:
-    """3D axis rotation matrix"""
-    theta_x = -self.rotation_offset[0, 0]  # roll
-    theta_y = self.rotation_offset[1, 0]  # pitch/elevation
-    theta_z = -self.rotation_offset[2, 0]  # yaw/azimuth
-    return rotz(theta_z) @ roty(theta_y) @ rotx(theta_x)
-
   def measure(self,
               ground_truths: List[GroundTruthState],
               noise: Union[np.ndarray, bool] = True,
@@ -267,7 +258,7 @@ class PhasedArrayRadar():
 
     # Get the position of the target in the radar coordinate frame
     relative_pos = state_vectors[self.position_mapping, :] - self.position
-    relative_pos = self._rotation_matrix @ relative_pos
+    relative_pos = measurement_model.rotation_matrix @ relative_pos
     [target_az, target_el, r] = cart2sph(*relative_pos, degrees=True)
     relative_az = target_az - self.tx_beam.azimuth_steering_angle
     relative_el = target_el - self.tx_beam.elevation_steering_angle

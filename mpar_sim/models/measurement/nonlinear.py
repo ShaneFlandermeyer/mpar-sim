@@ -247,7 +247,7 @@ class CartesianToRangeAzElRangeRate(NonlinearMeasurementModel):
         [-x*z, -y*z, r_xy**2]) / (r_xy * r_xyz**2))
     A[2, :] = np.dot(self.rotation_matrix, np.array([x, y, z]) / r_xyz)
     # Convert to degrees and store the result
-    A[:2, :] *= 180 / np.pi
+    A[:2, :] = np.rad2deg(A[:2, :])
     jacobian[:-1, ::2] = A
 
     # Compute range rate portion of jacobian
@@ -268,10 +268,24 @@ class CartesianToRangeAzElRangeRate(NonlinearMeasurementModel):
 
     return jacobian
 
-  @clearable_cached_property('rotation_offset')
-  def rotation_matrix(self) -> np.ndarray:
-    """3D axis rotation matrix"""
-    theta_x = -self.rotation_offset.ravel()[0]  # roll
-    theta_y = self.rotation_offset.ravel()[1]  # pitch#elevation
-    theta_z = -self.rotation_offset.ravel()[2]  # yaw#azimuth
-    return rotz(theta_z) @ roty(theta_y) @ rotx(theta_x)
+  @property
+  def rotation_offset(self) -> np.ndarray:
+    """Get the rotation offset of the radar
+
+    Returns:
+      3x1 array containing the rotation offset of the radar in the form [roll, pitch, yaw]
+    """
+    return self._rotation_offset
+
+  @rotation_offset.setter
+  def rotation_offset(self, rotation_offset: np.ndarray):
+    """Set the rotation offset of the radar
+
+    Args:
+      rotation_offset: 3x1 array containing the rotation offset of the radar in the form [roll, pitch, yaw]
+    """
+    assert rotation_offset.size == 3
+    
+    self._rotation_offset = rotation_offset
+    theta_x, theta_y, theta_z = rotation_offset
+    self.rotation_matrix = rotz(theta_z.item()) @ roty(theta_y.item()) @ rotx(theta_x.item())
