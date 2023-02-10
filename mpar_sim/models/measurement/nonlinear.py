@@ -1,8 +1,6 @@
 
 from typing import List, Optional
 import numpy as np
-# TODO: Replicate this and remove the dependency on stonesoup
-from stonesoup.base import clearable_cached_property
 
 from mpar_sim.common import wrap_to_interval
 from mpar_sim.common.coordinate_transform import cart2sph, rotx, roty, rotz, sph2cart
