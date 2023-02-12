@@ -40,7 +40,7 @@ class Beam():
     gain_db = beamwidth2gain(
         self.azimuth_beamwidth, self.elevation_beamwidth, self.directivity_beamwidth_prod)
     self.gain = 10**(gain_db/10)
-    
+
   def norm_pattern_gain(self,
                         az: Union[float, np.ndarray],
                         el: Union[float, np.ndarray]
@@ -48,9 +48,9 @@ class Beam():
     raise NotImplementedError
 
   def shape_loss(self,
-                        az: Union[float, np.ndarray],
-                        el: Union[float, np.ndarray]
-                        ) -> Union[float, np.ndarray]:
+                 az: Union[float, np.ndarray],
+                 el: Union[float, np.ndarray]
+                 ) -> Union[float, np.ndarray]:
     raise NotImplementedError
 
 
@@ -99,7 +99,7 @@ class RectangularBeam(Beam):
     Parameters
     ----------
     az : Union[float, np.ndarray]
-        Azimuth angles 
+        Azimuth angles
     el : Union[float, np.ndarray]
         Elevation angles
     Returns
@@ -149,7 +149,7 @@ class GaussianBeam(Beam):
     Parameters
     ----------
     az : Union[float, np.ndarray]
-        Azimuth angles 
+        Azimuth angles
     el : Union[float, np.ndarray]
         Elevation angles
     Returns
@@ -188,10 +188,13 @@ class SincBeam(Beam):
       el = np.array([el])
 
     angles = np.atleast_2d(np.array([az, el])).T
+    steering_angles = np.array([self.azimuth_steering_angle,
+                                self.elevation_steering_angle])[np.newaxis, :]
     beamwidths = np.array([self.azimuth_beamwidth, self.elevation_beamwidth])[
         np.newaxis, :]
     d_norm = beamwidth2aperture(beamwidths, self.wavelength) / self.wavelength
-    gains = np.sinc(d_norm * np.sin(np.deg2rad(angles)))
+    gains = np.sinc(d_norm * (np.sin(np.deg2rad(angles)) -
+                    np.sin(np.deg2rad(steering_angles))))
     norm_pattern_gain = np.abs(gains[:, 0] * gains[:, 1])
     return norm_pattern_gain if norm_pattern_gain.size > 1 else norm_pattern_gain.item()
 
