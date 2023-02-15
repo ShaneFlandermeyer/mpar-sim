@@ -7,6 +7,7 @@ from mpar_sim.models.transition.base import TransitionModel
 from mpar_sim.models.transition.linear import ConstantVelocity
 from mpar_sim.tracking.kalman import kalman_predict
 
+
 def adaptive_revisit_interval(state_vector: np.ndarray,
                               covar: np.ndarray,
                               predict_func: Callable,
@@ -41,8 +42,11 @@ def adaptive_revisit_interval(state_vector: np.ndarray,
     # Compute the error of the track in az/el,and determine the revisit interval from the track sharpness
     error_std_dev = np.sqrt(np.diagonal(position_covar_sph))
     az_error, el_error, range_error = error_std_dev
-    az_threshold = track_sharpness * np.deg2rad(beamwidths[0])
-    el_threshold = track_sharpness * np.deg2rad(beamwidths[1])
+    az_error = np.rad2deg(az_error)
+    el_error = np.rad2deg(el_error)
+
+    az_threshold = track_sharpness * beamwidths[0]
+    el_threshold = track_sharpness * beamwidths[1]
     if az_error < az_threshold and el_error < el_threshold:
       return dt
 

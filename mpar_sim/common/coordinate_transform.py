@@ -189,7 +189,10 @@ def rpy2rotmat(roll: float, pitch: float, yaw: float) -> np.ndarray:
   return R_yaw @ R_pitch @ R_roll
 
 
-def cart2sph_covar(cart_covar: np.ndarray, x: float, y: float, z: float) -> np.ndarray:
+def cart2sph_covar(cart_covar: np.ndarray, 
+                   x: float, 
+                   y: float, 
+                   z: float) -> np.ndarray:
   """
     Convert a covariance matrix in cartesian coordinates to spherical coordinates
 
