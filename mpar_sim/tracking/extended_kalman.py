@@ -2,8 +2,8 @@ from typing import Tuple, Callable
 import numpy as np
 
 
-def extended_kalman_update(prior_state: np.ndarray,
-                           prior_covar: np.ndarray,
+def extended_kalman_update(state: np.ndarray,
+                           covar: np.ndarray,
                            measurement: np.ndarray,
                            measurement_noise_covar: np.ndarray,
                            measurement_function: Callable,
@@ -42,17 +42,17 @@ def extended_kalman_update(prior_state: np.ndarray,
       - Predicted covariance
   """
   # Compute the residual
-  prior_measurement = measurement_function(prior_state, **kwargs)
+  prior_measurement = measurement_function(state, **kwargs)
   residual = measurement - prior_measurement.ravel()
 
   # Compute the Kalman gain
-  measurement_matrix = jacobian_function(prior_state, **kwargs)
-  measurement_cross_covar = prior_covar @ measurement_matrix.T
+  measurement_matrix = jacobian_function(state, **kwargs)
+  measurement_cross_covar = covar @ measurement_matrix.T
   innovation_covar = measurement_matrix @ measurement_cross_covar + measurement_noise_covar
   kalman_gain = measurement_cross_covar @ np.linalg.inv(innovation_covar)
 
   # Compute the updated state and covariance
-  posterior_mean = prior_state + kalman_gain @ residual
-  posterior_covar = prior_covar - kalman_gain @ innovation_covar @ kalman_gain.T
+  posterior_mean = state + kalman_gain @ residual
+  posterior_covar = covar - kalman_gain @ innovation_covar @ kalman_gain.T
 
   return posterior_mean, posterior_covar
