@@ -208,9 +208,10 @@ def cart2sph_covar(cart_covar: np.ndarray, x: float, y: float, z: float) -> np.n
     -------
     np.ndarray
         Covariance matrix transformed to spherical coordinates, where the first row is azimuth, the second row is elevation, and the third row is range
-  """
+  """  
   r = np.sqrt(x**2 + y**2 + z**2)
   s = np.sqrt(x**2 + y**2)
+
   # Rows of rotation matrix are (az, el, r), respecively
   # See https://robotics.stackexchange.com/questions/2556/how-to-rotate-covariance for converting covariance matrices to new coordinate systems
   R = np.array([[-y/s**2, x/s**2, 0],
