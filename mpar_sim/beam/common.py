@@ -93,23 +93,27 @@ def beamwidth2aperture(
   return d
 
 
-def beam_scan_loss(az_steering_angle: float, el_steering_angle: float, az_cosine_power: float = -2, el_cosine_power: float = -2) -> float:
+def beam_scan_loss(az_steering_angle: float, el_steering_angle: float, cosine_power: float = -3) -> float:
   """
   Compute the loss due to the scan angle. The loss is proportional to the cosine of the scan angle in each dimension.
+  
+  See https://www.mathworks.com/help/phased/ug/spherical-coordinates.html#bsl6_dn for computations of broadside angle
 
   Args:
       az_steering_angle (float): Azimuth scan angle in degrees.
       el_steering_angle (float): Elevation scan angle in degrees.
-      az_cosine_power (float, optional): Power of the cosine loss in azimuth. Defaults to -2.
-      el_cosine_power (float, optional): Power of the cosine loss in elevation. Defaults to -2.
+      cosine_power (float, optional): Power of the cosine term. Defaults to -3
 
   Returns:
       float: Scan loss (dB)
   """
-  # Wrap the scan angle between -180 and 180 degrees
-  angles = np.deg2rad([az_steering_angle, el_steering_angle])
-  loss = np.prod(np.cos(angles)**[az_cosine_power, el_cosine_power])
+  az = np.deg2rad(az_steering_angle)
+  el = np.deg2rad(el_steering_angle)
+  off_boresight_angle = np.arcsin(np.sin(az) * np.cos(el))
+  loss = np.cos(off_boresight_angle)**cosine_power
+
   return 10 * np.log10(loss)
 
+
 if __name__ == '__main__':
-    beam_scan_loss(45, 45)
+  beam_scan_loss(45, 45)
