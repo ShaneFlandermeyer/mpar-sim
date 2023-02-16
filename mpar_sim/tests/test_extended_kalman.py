@@ -36,15 +36,14 @@ if __name__ == '__main__':
   track = np.zeros((6, len(truth)))
   for i in range(len(truth)):
     # Predict step
-    x_predicted, P_predicted = kalman_predict(prior_state=prior_state,
-                                              prior_covar=prior_covar,
-                                              transition_matrix=transition_model.matrix(
-                                                  dt),
-                                              noise_covar=transition_model.covar(dt))
+    x_predicted, P_predicted = kalman_predict(state=prior_state,
+                                              covar=prior_covar,
+                                              transition_model=transition_model,
+                                              time_interval=dt)
     # Update step
     posterior_state, posterior_covar = extended_kalman_update(
-        prior_state=x_predicted,
-        prior_covar=P_predicted,
+        state=x_predicted,
+        covar=P_predicted,
         measurement=measurements[:, i],
         measurement_noise_covar=measurement_model.covar(),
         measurement_function=measurement_model.function,

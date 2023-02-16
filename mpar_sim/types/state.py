@@ -1,8 +1,10 @@
 import datetime
 import numpy as np
 
+class State():
+  """Base state class."""
 
-class GaussianState():
+class GaussianState(State):
   def __init__(self,
                state_vector: np.ndarray,
                covar: np.ndarray,

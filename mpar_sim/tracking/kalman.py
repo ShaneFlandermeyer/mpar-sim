@@ -1,13 +1,15 @@
-from typing import Tuple
+import datetime
+from typing import Tuple, Union
 import numpy as np
 
 from mpar_sim.models.measurement.base import MeasurementModel
+from mpar_sim.models.transition.base import TransitionModel
 
 
-def kalman_predict(prior_state: np.ndarray,
-                   prior_covar: np.ndarray,
-                   transition_matrix: np.ndarray,
-                   noise_covar: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+def kalman_predict(state: np.ndarray,
+                   covar: np.ndarray,
+                   transition_model: TransitionModel,
+                   time_interval: Union[float, datetime.timedelta]) -> Tuple[np.ndarray, np.ndarray]:
   """
   Kalman predict step.
 
@@ -15,13 +17,17 @@ def kalman_predict(prior_state: np.ndarray,
 
   Parameters
   ----------
-  prior_state : np.ndarray
+  state : np.ndarray
       Prior state vector
-  prior_covar : np.ndarray
+  covar : np.ndarray
       Prior covariance matrix
-  transition_matrix : np.ndarray
-      Transition model matrix
-  noise_covar : np.ndarray
+  transition_model : TransitionModel
+      Transition model object. This object must define the following methods:
+        - matrix(dt): Returns the transition matrix
+        - covar(dt): Returns the transition noise covariance matrix
+  time_interval : Union[float, datetime.timedelta]
+      Time interval over which to predict
+
   Returns
   -------
   Tuple[np.ndarray, np.ndarray]
@@ -29,17 +35,17 @@ def kalman_predict(prior_state: np.ndarray,
       - Predicted covariance matrix
   """
 
-  if np.isscalar(transition_matrix):
-    transition_matrix = np.array(transition_matrix)
+  transition_matrix = transition_model.matrix(time_interval)
+  noise_covar = transition_model.covar(time_interval)
 
-  predicted_state = transition_matrix @ prior_state
-  predicted_covar = transition_matrix @ prior_covar @ transition_matrix.T + noise_covar
+  predicted_state = transition_matrix @ state
+  predicted_covar = transition_matrix @ covar @ transition_matrix.T + noise_covar
 
   return predicted_state, predicted_covar
 
 
-def kalman_update(prior_state: np.ndarray,
-                  prior_covar: np.ndarray,
+def kalman_update(state: np.ndarray,
+                  covar: np.ndarray,
                   measurement: np.ndarray,
                   measurement_model: MeasurementModel) -> Tuple[np.ndarray, np.ndarray]:
   """
@@ -51,14 +57,17 @@ def kalman_update(prior_state: np.ndarray,
 
   Parameters
   ----------
-  predicted_state : np.ndarray
+  state : np.ndarray
       Predicted state vector (mean)
-  predicted_covar : np.ndarray
+  covar : np.ndarray
       Predicted covariance
   measurement : np.ndarray
       Actual measurement
   measurement_model : MeasurementModel
-      Model used to collect measurement
+      Model used to collect measurement. This object must define the following methods:
+        - function(state): Convert the input from state space into measurement space 
+        - matrix(): Returns the measurement matrix
+        - covar(): Returns the measurement noise covariance matrix
 
   Returns
   -------
@@ -67,45 +76,51 @@ def kalman_update(prior_state: np.ndarray,
       - Predicted covariance
   """
   # Compute the residual
-  prior_measurement = measurement_model.function(prior_state)
+  prior_measurement = measurement_model.function(state)
   residual = measurement - prior_measurement
 
   # Compute the Kalman gain
   measurement_matrix = measurement_model.matrix()
   measurement_covar = measurement_model.covar()
-  measurement_cross_covar = prior_covar @ measurement_matrix.T
+  measurement_cross_covar = covar @ measurement_matrix.T
   innovation_covar = measurement_matrix @ measurement_cross_covar + measurement_covar
   kalman_gain = measurement_cross_covar @ np.linalg.inv(innovation_covar)
 
   # Compute the updated state and covariance
-  posterior_mean = prior_state + kalman_gain @ residual
-  posterior_covar = prior_covar - kalman_gain @ innovation_covar @ kalman_gain.T
+  posterior_mean = state + kalman_gain @ residual
+  posterior_covar = covar - kalman_gain @ innovation_covar @ kalman_gain.T
 
   return posterior_mean, posterior_covar
 
 
-def kalman_predict_update(prior_state: np.ndarray,
-                          prior_covar: np.ndarray,
+def kalman_predict_update(state: np.ndarray,
+                          covar: np.ndarray,
+                          transition_model: TransitionModel,
+                          time_interval: Union[float, datetime.timedelta],
                           measurement: np.ndarray,
-                          transition_matrix: np.ndarray,
-                          noise_covar: np.ndarray,
                           measurement_model: MeasurementModel) -> Tuple[np.ndarray, np.ndarray]:
   """
   Perform the Kalman predict and update steps.
 
   Parameters
   ----------
-  prior_state : np.ndarray
+  state : np.ndarray
       Prior state vector
-  prior_covar : np.ndarray
+  covar : np.ndarray
       Prior covariance matrix
+  transition_model : TransitionModel
+      Transition model object. This object must define the following methods:
+        - matrix(dt): Returns the transition matrix
+        - covar(dt): Returns the transition noise covariance matrix
+  time_interval : Union[float, datetime.timedelta]
+      Time interval over which to predict
   measurement : np.ndarray
       Actual measurement
-  transition_matrix : np.ndarray
-      Transition model matrix
-  noise_covar : np.ndarray
   measurement_model : MeasurementModel
-      Model used to collect measurement
+      Model used to collect measurement. This object must define the following methods:
+        - function(state): Convert the input from state space into measurement space 
+        - matrix(): Returns the measurement matrix
+        - covar(): Returns the measurement noise covariance matrix
 
   Returns
   -------
@@ -114,7 +129,7 @@ def kalman_predict_update(prior_state: np.ndarray,
       - Predicted covariance matrix
   """
   predicted_state, predicted_covar = kalman_predict(
-      prior_state, prior_covar, transition_matrix, noise_covar)
+      state, covar, transition_model, time_interval)
   posterior_state, posterior_covar = kalman_update(
       predicted_state, predicted_covar, measurement, measurement_model)
 
