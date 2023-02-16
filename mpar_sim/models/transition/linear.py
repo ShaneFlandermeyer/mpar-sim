@@ -72,7 +72,7 @@ class ConstantVelocity(LinearTransitionModel):
                ) -> np.ndarray:
     if noise:
       num_samples = state.shape[1] if state.ndim > 1 else 1
-      noise = self.rvs(num_samples=num_samples, time_interval=time_interval)
+      noise = self.sample_noise(num_samples=num_samples, time_interval=time_interval)
       noise = noise.reshape(state.shape)
     else:
       noise = 0
@@ -100,7 +100,7 @@ class ConstantVelocity(LinearTransitionModel):
     covar = block_diag(covar, nreps=self.ndim_pos)
     return covar
 
-  def rvs(self,
+  def sample_noise(self,
           num_samples: int = 1,
           time_interval: datetime.timedelta = 0) -> np.ndarray:
     covar = self.covar(time_interval)

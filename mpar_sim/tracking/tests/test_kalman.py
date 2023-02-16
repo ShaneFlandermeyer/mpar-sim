@@ -16,7 +16,7 @@ class TestLinearTransitionModel():
   def matrix(self, dt):
     return np.array([[1, dt], [0, 1]])
 
-  def covar(self):
+  def covar(self, dt=None):
     return np.array([[0.588, 1.175],
                      [1.175, 2.35]])
 
@@ -29,7 +29,7 @@ class TestLinearMeasurementModel():
   def matrix(self):
     return np.atleast_2d(np.array([1, 0]))
 
-  def covar(self):
+  def covar(self, dt=None):
     return np.array([[5.]])
 
 
@@ -43,10 +43,10 @@ def test_kalman_predict():
   dt = 0.3
   F = transition_model.matrix(dt)
   Q = transition_model.covar()
-  x_actual, P_actual = kalman_predict(prior_state=x,
-                                      prior_covar=P,
-                                      transition_matrix=F,
-                                      noise_covar=Q)
+  x_actual, P_actual = kalman_predict(state=x,
+                                      covar=P,
+                                      transition_model=transition_model,
+                                      time_interval=dt)
   x_expected, P_expected = predict(x=x, P=P, F=F, Q=Q)
   assert np.allclose(x_actual, x_expected)
   assert np.allclose(P_actual, P_expected)
@@ -64,14 +64,15 @@ def test_kalman_update():
   R = measurement_model.covar()
   H = measurement_model.matrix()
   x_actual, P_actual = kalman_update(
-      prior_state=x,
-      prior_covar=P,
+      state=x,
+      covar=P,
       measurement=z,
       measurement_model=measurement_model,
   )
   x_expected, P_expected = update(x=x, P=P, z=z, R=R, H=H)
   assert np.allclose(x_actual, x_expected)
   assert np.allclose(P_actual, P_expected)
+
 
 if __name__ == '__main__':
   pytest.main()
