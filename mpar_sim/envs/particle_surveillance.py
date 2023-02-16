@@ -10,7 +10,7 @@ from gymnasium import spaces
 
 from mpar_sim.beam.common import beamwidth2aperture
 from mpar_sim.common.coordinate_transform import sph2cart
-from mpar_sim.types.look import SpoiledLook
+from mpar_sim.types.look import Look
 from mpar_sim.models.transition.base import TransitionModel
 from mpar_sim.particle.surveillance_pso import SurveillanceSwarm
 from mpar_sim.radar import PhasedArrayRadar
@@ -260,7 +260,7 @@ class ParticleSurveillance(gym.Env):
         tx_aperture_size / self.radar.element_spacing).astype(int))
     tx_power = n_tx_elements * self.radar.element_tx_power
 
-    look = SpoiledLook(
+    look = Look(
         azimuth_steering_angle=az_steering_angle,
         elevation_steering_angle=el_steering_angle,
         azimuth_beamwidth=az_beamwidth,

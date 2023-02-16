@@ -8,7 +8,7 @@ from scipy import constants
 from mpar_sim.beam.beam import RectangularBeam
 from mpar_sim.beam.common import aperture2beamwidth, beam_broadening_factor
 from mpar_sim.common.coordinate_transform import cart2sph, rotx, roty, rotz
-from mpar_sim.types.look import Look, SpoiledLook
+from mpar_sim.types.look import Look
 from mpar_sim.models.measurement.base import MeasurementModel
 from mpar_sim.models.measurement.estimation import (angle_crlb, range_crlb,
                                                     velocity_crlb)
@@ -136,13 +136,9 @@ class PhasedArrayRadar():
         look.elevation_steering_angle)
     tx_az_beamwidth = look.azimuth_beamwidth * az_broadening
     tx_el_beamwidth = look.elevation_beamwidth * el_broadening
-    # If the transmit beam is spoiled, use the full aperture to form the receive beam. Otherwise, use the requested beamwidth for both transmit and receive
-    if isinstance(look, SpoiledLook):
-      rx_az_beamwidth = self.min_az_beamwidth * az_broadening
-      rx_el_beamwidth = self.min_el_beamwidth * el_broadening
-    else:
-      rx_az_beamwidth = tx_az_beamwidth
-      rx_el_beamwidth = tx_el_beamwidth
+    # Note: This object assumes that the beam is only spoiled on transmit, so that the receive beam uses the full aperture.
+    rx_az_beamwidth = self.min_az_beamwidth * az_broadening
+    rx_el_beamwidth = self.min_el_beamwidth * el_broadening
     self.tx_beam = self.beam_shape(
         wavelength=self.wavelength,
         azimuth_beamwidth=tx_az_beamwidth,

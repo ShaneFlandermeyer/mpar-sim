@@ -4,7 +4,7 @@ from typing import Union
 
 class Look():
   """
-  Default class for 
+  Base class for radar look objects. This class is intended to be used with the PhasedArrayRadar class. The parameters of the look can be loaded into the radar object using the load_look() method.
   """
   def __init__(self,
                # Beam parameters
@@ -43,11 +43,6 @@ class Look():
     
     self.tx_power = tx_power
     
-class SpoiledLook(Look):
-  """
-  A look representing a beam that is spoiled on transmit but uses the full aperture on receive. This reduces the gain on transmit, but allows for full gain and angular resolution on receive.
-  """
-  
 class TrackInitiationLook(Look):
   """A look for initiating a track for new targets."""
   

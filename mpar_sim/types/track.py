@@ -4,6 +4,11 @@ from typing import List
 
 
 class Track():
+  """
+  Helper class for storing the state histories of a track. 
+  
+  This class is functionally identical to the GroundTruthPath class
+  """
   def __init__(self,
                states: List[State] = [],
                id=None):

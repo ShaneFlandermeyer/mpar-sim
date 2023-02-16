@@ -20,9 +20,9 @@ def beam_broadening_factor(az_steering_angle: float, el_steering_angle: float) -
   broadening_el = abs(1 / np.cos(look_angles[1]))
 
   # According to this model, the loss at 90 degrees is infinite. To avoid this, cap the loss at 89 degrees
-  min_broadening = 1 / np.cos(np.deg2rad(89))
+  max_broadening = 1 / np.cos(np.deg2rad(89))
 
-  return max(broadening_az, min_broadening), max(broadening_el, min_broadening)
+  return min(broadening_az, max_broadening), min(broadening_el, max_broadening)
 
 
 def beamwidth2gain(azimuth_beamwidth: float,
