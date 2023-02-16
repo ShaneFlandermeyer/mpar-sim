@@ -55,4 +55,5 @@ class TrackUpdateLook(Look):
   """A look for updating an existing track"""
   
 class VolumeSearchLook(Look):
+  """A look for searching for conducting a volume search step."""
   pass

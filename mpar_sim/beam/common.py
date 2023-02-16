@@ -12,14 +12,17 @@ def beam_broadening_factor(az_steering_angle: float, el_steering_angle: float) -
   """
   # Wrap the scan angle between -180 and 180 degrees
   look_angles = np.array(wrap_to_interval(
-      np.array([az_steering_angle, el_steering_angle]), -180, 180), copy=False)
+      np.array([az_steering_angle, el_steering_angle]), -180, 180))
+  look_angles = np.deg2rad(look_angles)
 
   # The beam broadening factor is approximately equal to the reciprocal of the effective aperture length in each dimension. For a uniform rectangular array, the effective length is proportional to 1/(cos(az)*cos(el)) in azimuth and 1/cos(el) in elevation.
-  broadening_az = 1 / \
-      (np.cos(np.radians(look_angles[0]))
-       * np.cos(np.radians(look_angles[1])))
-  broadening_el = 1 / np.cos(np.radians(look_angles[1]))
-  return max(broadening_az, np.cos(np.radians(89))), max(broadening_el, np.cos(np.radians(89)))
+  broadening_az = abs(1 / (np.cos(look_angles[0]) * np.cos(look_angles[1])))
+  broadening_el = abs(1 / np.cos(look_angles[1]))
+
+  # According to this model, the loss at 90 degrees is infinite. To avoid this, cap the loss at 89 degrees
+  min_broadening = 1 / np.cos(np.deg2rad(89))
+
+  return max(broadening_az, min_broadening), max(broadening_el, min_broadening)
 
 
 def beamwidth2gain(azimuth_beamwidth: float,
