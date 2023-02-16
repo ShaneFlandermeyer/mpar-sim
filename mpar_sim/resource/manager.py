@@ -25,6 +25,12 @@ class ResourceManager():
     """
     return True
 
+  def reset(self) -> None:
+    """
+    Reset the resource manager to its initial state
+    """
+    raise NotImplementedError
+
 
 class PowerApertureManager(ResourceManager):
   def __init__(self,

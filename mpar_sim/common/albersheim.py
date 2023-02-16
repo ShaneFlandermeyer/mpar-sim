@@ -8,7 +8,7 @@ def albersheim_pd(
   """
   Compute the probability of detection for a given SNR and false alarm rate using Albersheim's equation.
 
-  Albersheim's equation assumes the target is nonfluctuating, integration is non-coherent, and a linear detector is used. This is different than the assumptions from my simulation, but it's within my fudge factor
+  Albersheim's equation assumes the target is nonfluctuating, integration is non-coherent, and a linear detector is used. 
 
   See: http://www.radarsp.com/
 
