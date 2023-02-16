@@ -1,21 +1,21 @@
 from datetime import datetime
-from functools import lru_cache
-from typing import Callable, List, Optional, Set, Tuple, Union
+from typing import Callable, List, Optional, Union
 
 import numpy as np
 from scipy import constants
+from scipy.special import gammaincinv
 
 from mpar_sim.beam.beam import RectangularBeam
-from mpar_sim.beam.common import aperture2beamwidth, beam_broadening_factor
-from mpar_sim.common.coordinate_transform import cart2sph, rotx, roty, rotz
-from mpar_sim.types.look import Look
+from mpar_sim.beam.common import (aperture2beamwidth, beam_broadening_factor,
+                                  beam_scan_loss)
+from mpar_sim.common.coordinate_transform import cart2sph
 from mpar_sim.models.measurement.base import MeasurementModel
 from mpar_sim.models.measurement.estimation import (angle_crlb, range_crlb,
                                                     velocity_crlb)
 from mpar_sim.models.measurement.nonlinear import CartesianToRangeAzElRangeRate
 from mpar_sim.types.detection import Clutter, TrueDetection
 from mpar_sim.types.groundtruth import GroundTruthState
-from scipy.special import gammaincinv
+from mpar_sim.types.look import Look
 
 
 class PhasedArrayRadar():
@@ -159,14 +159,10 @@ class PhasedArrayRadar():
     pulse_compression_gain = look.bandwidth * look.pulsewidth
     noise_power = constants.Boltzmann * self.system_temperature * \
         10**(self.noise_figure/10) * self.sample_rate
-    # TODO: Not including scan loss for now
-    # scan_loss = np.cos(look.azimuth_steering_angle)**-2 * \
-    #     np.cos(look.elevation_steering_angle)**-2
-    scan_loss = 1
     self.loop_gain = look.n_pulses * pulse_compression_gain * \
         self.tx_power * 10**(self.element_gain/10) * self.tx_beam.gain * \
         self.rx_beam.gain * self.wavelength**2 / \
-        ((4*np.pi)**3 * noise_power * scan_loss)
+        ((4*np.pi)**3 * noise_power)
 
     self.measurement_model = CartesianToRangeAzElRangeRate(
         range_res=self.range_resolution,
@@ -260,8 +256,10 @@ class PhasedArrayRadar():
 
     # Compute SNR and probability of detection assuming a Swerling 1 target model
     beam_shape_loss_db = self.tx_beam.shape_loss(relative_az, relative_el)
+    beam_scan_loss_db = beam_scan_loss(self.tx_beam.azimuth_steering_angle,
+                                    self.tx_beam.elevation_steering_angle)
     snr_db = 10*np.log10(self.loop_gain) + 10*np.log10(rcs) - \
-        40*np.log10(r) - beam_shape_loss_db
+        40*np.log10(r) - beam_shape_loss_db - beam_scan_loss_db
     snr_lin = 10**(snr_db/10)
     pfa = self.false_alarm_rate
     pd = pfa**(1/(1+snr_lin))

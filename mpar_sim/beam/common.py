@@ -93,19 +93,23 @@ def beamwidth2aperture(
   return d
 
 
-def beam_scan_loss(az_steering_angle: float, el_steering_angle: float, az_cosine_power: float = 2, el_cosine_power: float = 2) -> float:
+def beam_scan_loss(az_steering_angle: float, el_steering_angle: float, az_cosine_power: float = -2, el_cosine_power: float = -2) -> float:
   """
   Compute the loss due to the scan angle. The loss is proportional to the cosine of the scan angle in each dimension.
 
   Args:
-      az_steering_angle (float): Azimuth scan angle
-      el_steering_angle (float): Elevation scan angle
-      az_cosine_power (float, optional): Power of the cosine in azimuth. Defaults to 2.
-      el_cosine_power (float, optional): Power of the cosine in elevation. Defaults to 2.
+      az_steering_angle (float): Azimuth scan angle in degrees.
+      el_steering_angle (float): Elevation scan angle in degrees.
+      az_cosine_power (float, optional): Power of the cosine loss in azimuth. Defaults to -2.
+      el_cosine_power (float, optional): Power of the cosine loss in elevation. Defaults to -2.
 
   Returns:
       float: Scan loss (dB)
   """
   # Wrap the scan angle between -180 and 180 degrees
-  return 10 * np.log10(np.power(np.cos(np.radians(az_steering_angle)), az_cosine_power) *
-                       np.power(np.cos(np.radians(el_steering_angle)), el_cosine_power))
+  angles = np.deg2rad([az_steering_angle, el_steering_angle])
+  loss = np.prod(np.cos(angles)**[az_cosine_power, el_cosine_power])
+  return 10 * np.log10(loss)
+
+if __name__ == '__main__':
+    beam_scan_loss(45, 45)
