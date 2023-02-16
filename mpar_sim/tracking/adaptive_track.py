@@ -19,8 +19,9 @@ def adaptive_revisit_interval(state_vector: np.ndarray,
                               position_mapping: List[int] = [0, 2, 4],
                               ) -> float:
   """
-  Compute the maximum revisit time for the track.
+  Compute the maximum revisit time for the track based on its covariance.
   """
+  # Compute an array of possible revisit times to consider
   tmin = min_revisit_interval
   tmax = max_revisit_interval
   n = int(np.ceil(np.log(tmax/tmin)/np.log(2)))
@@ -52,24 +53,3 @@ def adaptive_revisit_interval(state_vector: np.ndarray,
 
   # If the track error is never within the limits, return the minimum revisit interval
   return dt
-
-
-if __name__ == '__main__':
-  state_vector = np.random.uniform(low=0, high=100, size=(6, 1))
-  covar = np.diag(np.random.uniform(low=0, high=0.1, size=6))
-  transition_model = ConstantVelocity()
-
-  track_sharpness = 0.10
-  min_revisit_interval = 0.2
-  max_revisit_interval = 2.0
-
-  # tracker = AdaptiveTracker(predict_func=lambda x, P: transition_matrix @ x)
-  dt = adaptive_revisit_interval(state_vector,
-                                 covar,
-                                 predict_func=kalman_predict,
-                                 transition_model=transition_model,
-                                 beamwidths=[2, 2],
-                                 track_sharpness=track_sharpness,
-                                 min_revisit_interval=min_revisit_interval,
-                                 max_revisit_interval=max_revisit_interval,)
-  print(dt)
