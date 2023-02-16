@@ -3,7 +3,7 @@ from typing import List
 import scipy.constants as sc
 
 from mpar_sim.beam.common import beamwidth2aperture
-from mpar_sim.looks.look import Look
+from mpar_sim.types.look import Look
 
 
 class ResourceManager():

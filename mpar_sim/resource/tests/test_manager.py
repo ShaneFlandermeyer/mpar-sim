@@ -1,6 +1,6 @@
 import pytest
 from mpar_sim.resource.manager import PowerApertureManager
-from mpar_sim.looks.look import Look
+from mpar_sim.types.look import Look
 import scipy.constants as sc
 
 

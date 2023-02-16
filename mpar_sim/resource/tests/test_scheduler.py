@@ -1,7 +1,7 @@
 import pytest
 from mpar_sim.resource.manager import ResourceManager
 from mpar_sim.resource.scheduler import BestFirstScheduler
-from mpar_sim.looks.look import Look
+from mpar_sim.types.look import Look
 
 def test_schedule():
   looks = [Look()]*5

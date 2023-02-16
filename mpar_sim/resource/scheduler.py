@@ -3,7 +3,7 @@ from typing import List, Tuple
 from datetime import datetime
 import operator
 
-from mpar_sim.looks.look import Look
+from mpar_sim.types.look import Look
 from mpar_sim.resource.manager import ResourceManager
 
 

@@ -39,10 +39,3 @@ class Look():
     self.priority = priority
     
     self.tx_power = tx_power
-    
-  @property
-  def end_time(self) -> Union[float, datetime.datetime]:
-    if isinstance(self.start_time, datetime.datetime):
-      return self.start_time + datetime.timedelta(seconds=self.dwell_time)
-    else:
-      return self.start_time + self.dwell_time

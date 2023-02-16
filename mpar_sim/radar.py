@@ -8,8 +8,7 @@ from scipy import constants
 from mpar_sim.beam.beam import RectangularBeam
 from mpar_sim.beam.common import aperture2beamwidth, beam_broadening_factor
 from mpar_sim.common.coordinate_transform import cart2sph, rotx, roty, rotz
-from mpar_sim.looks.look import Look
-from mpar_sim.looks.spoiled_look import SpoiledLook
+from mpar_sim.types.look import Look, SpoiledLook
 from mpar_sim.models.measurement.base import MeasurementModel
 from mpar_sim.models.measurement.estimation import (angle_crlb, range_crlb,
                                                     velocity_crlb)

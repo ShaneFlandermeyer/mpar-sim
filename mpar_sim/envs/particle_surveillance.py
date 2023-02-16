@@ -10,7 +10,7 @@ from gymnasium import spaces
 
 from mpar_sim.beam.common import beamwidth2aperture
 from mpar_sim.common.coordinate_transform import sph2cart
-from mpar_sim.looks.spoiled_look import SpoiledLook
+from mpar_sim.types.look import SpoiledLook
 from mpar_sim.models.transition.base import TransitionModel
 from mpar_sim.particle.surveillance_pso import SurveillanceSwarm
 from mpar_sim.radar import PhasedArrayRadar
