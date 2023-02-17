@@ -5,12 +5,14 @@ from mpar_sim.models.transition.linear import ConstantVelocity
 from mpar_sim.types.groundtruth import GroundTruthPath, GroundTruthState
 from mpar_sim.models.measurement.nonlinear import CartesianToRangeAzElRangeRate
 import matplotlib.pyplot as plt
+import pytest
 
-if __name__ == '__main__':
-  np.random.seed(1999)
+
+def test_ekf_update():
+  np.random.seed(0)
   transition_model = ConstantVelocity(ndim_pos=3, noise_diff_coeff=0.05)
   measurement_model = CartesianToRangeAzElRangeRate(
-      noise_covar=np.diag([0.1, 0.1, 1, 1]),
+      noise_covar=np.diag([0.1, 0.1, 0.1, 0.1]),
       discretize_measurements=False,
       alias_measurements=False)
 
@@ -34,7 +36,8 @@ if __name__ == '__main__':
   prior_state = np.array([50, 1, 0, 1, 0, 1])
   prior_covar = np.diag([1.5, 0.5, 1.5, 0.5, 1.5, 0.5])
   track = np.zeros((6, len(truth)))
-  for i in range(len(truth)):
+  track[:, 0] = prior_state
+  for i in range(1, len(truth)):
     # Predict step
     x_predicted, P_predicted = kalman_predict(state=prior_state,
                                               covar=prior_covar,
@@ -49,27 +52,20 @@ if __name__ == '__main__':
         measurement_function=measurement_model.function,
         jacobian_function=measurement_model.jacobian,
     )
-    
+
     # Store the results and update the prior
     track[:, i] = posterior_state
     prior_state = posterior_state
     prior_covar = posterior_covar
 
-  plt.figure()
-  plt.plot(states[0], states[2], 'k-', label='Truth')
-  plt.plot(track[0], track[2], 'bo-', label='Track')
-  plt.xlabel('x')
-  plt.ylabel('y')
-  plt.legend()
+  position_mapping = [0, 2, 4]
+  velocity_mapping = [1, 3, 5]
+  position_mse = np.mean(
+      (track[position_mapping] - states[position_mapping])**2, axis=1)
+  velocity_mse = np.mean(
+      (track[velocity_mapping] - states[velocity_mapping])**2, axis=1)
+  assert np.all(position_mse < 0.2)
+  assert np.all(velocity_mse < 0.2)
 
-  # plt.figure()
-  # plt.plot(np.rad2deg(measurements[0]))
-  # plt.xlabel('Time step')
-  # plt.ylabel('Azimuth (degrees)')
-
-  # plt.figure()
-  # plt.plot(measurements[1])
-  # plt.xlabel('Time step')
-  # plt.ylabel('Range')
-  
-  plt.show()
+if __name__ == '__main__':
+  pytest.main()
