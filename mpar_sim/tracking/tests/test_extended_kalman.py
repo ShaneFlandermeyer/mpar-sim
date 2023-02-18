@@ -48,9 +48,7 @@ def test_ekf_update():
         state=x_predicted,
         covar=P_predicted,
         measurement=measurements[:, i],
-        measurement_noise_covar=measurement_model.covar(),
-        measurement_function=measurement_model.function,
-        jacobian_function=measurement_model.jacobian,
+        measurement_model=measurement_model
     )
 
     # Store the results and update the prior
