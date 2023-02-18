@@ -1,11 +1,49 @@
-from typing import Tuple, Callable
+import datetime
+from typing import Tuple, Union
 import numpy as np
 
 from mpar_sim.models.measurement.base import MeasurementModel
+from mpar_sim.models.transition.base import TransitionModel
 
-# def extended_kalman_predictor(state: np.ndarray,
-#                               covar: np.ndarray,
-#                               transition_model: TransitionModel)
+
+def extended_kalman_predict(state: np.ndarray,
+                   covar: np.ndarray,
+                   transition_model: TransitionModel,
+                   time_interval: Union[float, datetime.timedelta]
+                   ) -> Tuple[np.ndarray, np.ndarray]:
+  """
+  Extended Kalman predict step.  
+
+  Equations: https://github.com/rlabbe/Kalman-and-Bayesian-Filters-in-Python/blob/master/11-Extended-Kalman-Filters.ipynb  
+
+  Parameters
+  ----------
+  state : np.ndarray
+      Prior state vector
+  covar : np.ndarray
+      Prior covariance matrix
+  transition_model : TransitionModel
+      Transition model object. This object must define the following methods:
+          - function(state, dt): Propagates the state vector forward by dt
+          - jacobian(dt): Returns the jacobian of the transition function
+          - covar(dt): Returns the transition noise covariance matrix
+  time_interval : Union[float, datetime.timedelta]
+      Time interval over which to predict  
+
+  Returns
+  -------
+  Tuple[np.ndarray, np.ndarray]
+       - Predicted state vector
+       - Predicted covariance
+  """
+  transition_matrix = transition_model.jacobian(time_interval)
+  noise_covar = transition_model.covar(time_interval)
+
+  # Propagate the state forward in time
+  predicted_state = transition_model.function(state, time_interval)
+  predicted_covar = transition_matrix @ covar @ transition_matrix.T + noise_covar
+
+  return predicted_state, predicted_covar
 
 
 def extended_kalman_update(state: np.ndarray,
@@ -18,7 +56,7 @@ def extended_kalman_update(state: np.ndarray,
   The EKF is almost identical to the KF, but the nonlinear measurement must be linearized by using the Jacobian for the measurement matrix H.
 
   See equations here:
-  https://github.com/rlabbe/Kalman-and-Bayesian-Filters-in-Python/blob/master/06-Multivariate-Kalman-Filters.ipynb
+  https://github.com/rlabbe/Kalman-and-Bayesian-Filters-in-Python/blob/master/11-Extended-Kalman-Filters.ipynb
 
   The posterior covariance is computed using the equation from here:
   https://stonesoup.readthedocs.io/en/v0.1b5/stonesoup.updater.html?highlight=kalman#module-stonesoup.updater.kalman
@@ -45,6 +83,7 @@ def extended_kalman_update(state: np.ndarray,
   """
   # Compute the residual
   prior_measurement = measurement_model.function(state)
+  # TODO: This does not handle aliasing of angles properly
   residual = measurement - prior_measurement.ravel()
 
   # Compute the Kalman gain

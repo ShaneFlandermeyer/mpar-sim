@@ -1,15 +1,15 @@
+import datetime
+from typing import Union
 import numpy as np
 from mpar_sim.tracking.extended_kalman import extended_kalman_update
 from mpar_sim.tracking.kalman import kalman_predict
 from mpar_sim.models.transition.linear import ConstantVelocity
 from mpar_sim.types.groundtruth import GroundTruthPath, GroundTruthState
 from mpar_sim.models.measurement.nonlinear import CartesianToRangeAzElRangeRate
-import matplotlib.pyplot as plt
 import pytest
 
 
 def test_ekf_update():
-  # np.random.seed(0)
   transition_model = ConstantVelocity(ndim_pos=3, noise_diff_coeff=0.05)
   measurement_model = CartesianToRangeAzElRangeRate(
       noise_covar=np.diag([0.1, 0.1, 0.1, 0.1]),
@@ -64,6 +64,7 @@ def test_ekf_update():
       (track[velocity_mapping] - states[velocity_mapping])**2, axis=1)
   assert np.all(position_mse) < 1e-6
   assert np.all(velocity_mse) < 1e-6
+
 
 if __name__ == '__main__':
   pytest.main()
