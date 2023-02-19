@@ -1,7 +1,7 @@
 import datetime
 from typing import List
 import numpy as np
-from mpar_sim.looks.volume_search import VolumeSearchLook
+from mpar_sim.types.look import VolumeSearchLook
 
 from mpar_sim.agents.agent import Agent
 

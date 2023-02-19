@@ -1,11 +1,18 @@
-from functools import lru_cache
+#
+# Author: Shane Flandermeyer
+# Created on Thu Feb 16 2023
+# Copyright (c) 2023
+#
+# This file provides functions for adaptive tracking algorithms.
+#
+
+
 from typing import Callable, List
+
 import numpy as np
 
 from mpar_sim.common.coordinate_transform import cart2sph_covar
 from mpar_sim.models.transition.base import TransitionModel
-from mpar_sim.models.transition.linear import ConstantVelocity
-from mpar_sim.tracking.kalman import kalman_predict
 
 
 def adaptive_revisit_interval(state_vector: np.ndarray,

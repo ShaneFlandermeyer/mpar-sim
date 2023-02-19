@@ -53,9 +53,7 @@ class PAPResourceManager():
     return self.total_pap - \
         np.sum([task.power_aperture_product for task in self.allocated_tasks])
 
-  def allocate(self, 
-               look: Look,
-               current_time: datetime.datetime) -> bool:
+  def allocate(self, look: Look) -> bool:
     """
     Attempt to allocate resources for the given look.
 

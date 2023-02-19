@@ -1,23 +1,21 @@
 from datetime import datetime
-from functools import lru_cache
-from typing import Callable, List, Optional, Set, Tuple, Union
+from typing import Callable, List, Optional, Union
 
 import numpy as np
 from scipy import constants
-from stonesoup.base import clearable_cached_property
+from scipy.special import gammaincinv
 
 from mpar_sim.beam.beam import RectangularBeam
-from mpar_sim.beam.common import aperture2beamwidth, beam_broadening_factor
-from mpar_sim.common.coordinate_transform import cart2sph, rotx, roty, rotz
-from mpar_sim.looks.look import Look
-from mpar_sim.looks.spoiled_look import SpoiledLook
+from mpar_sim.beam.common import (aperture2beamwidth, beam_broadening_factor,
+                                  beam_scan_loss)
+from mpar_sim.common.coordinate_transform import cart2sph
 from mpar_sim.models.measurement.base import MeasurementModel
 from mpar_sim.models.measurement.estimation import (angle_crlb, range_crlb,
                                                     velocity_crlb)
 from mpar_sim.models.measurement.nonlinear import CartesianToRangeAzElRangeRate
 from mpar_sim.types.detection import Clutter, TrueDetection
 from mpar_sim.types.groundtruth import GroundTruthState
-from scipy.special import gammaincinv
+from mpar_sim.types.look import Look
 
 
 class PhasedArrayRadar():
@@ -62,10 +60,10 @@ class PhasedArrayRadar():
     self.ndim_state = ndim_state
     self.position = position
     self.velocity = velocity
+    self.rotation_offset = rotation_offset
     self.position_mapping = position_mapping
     self.velocity_mapping = velocity_mapping
     self.measurement_model = measurement_model
-    self.rotation_offset = rotation_offset
     self.timestamp = timestamp
     self.n_elements_x = n_elements_x
     self.n_elements_y = n_elements_y
@@ -138,13 +136,9 @@ class PhasedArrayRadar():
         look.elevation_steering_angle)
     tx_az_beamwidth = look.azimuth_beamwidth * az_broadening
     tx_el_beamwidth = look.elevation_beamwidth * el_broadening
-    # If the transmit beam is spoiled, use the full aperture to form the receive beam. Otherwise, use the requested beamwidth for both transmit and receive
-    if isinstance(look, SpoiledLook):
-      rx_az_beamwidth = self.min_az_beamwidth * az_broadening
-      rx_el_beamwidth = self.min_el_beamwidth * el_broadening
-    else:
-      rx_az_beamwidth = tx_az_beamwidth
-      rx_el_beamwidth = tx_el_beamwidth
+    # Note: This object assumes that the beam is only spoiled on transmit, so that the receive beam uses the full aperture.
+    rx_az_beamwidth = self.min_az_beamwidth * az_broadening
+    rx_el_beamwidth = self.min_el_beamwidth * el_broadening
     self.tx_beam = self.beam_shape(
         wavelength=self.wavelength,
         azimuth_beamwidth=tx_az_beamwidth,
@@ -165,14 +159,10 @@ class PhasedArrayRadar():
     pulse_compression_gain = look.bandwidth * look.pulsewidth
     noise_power = constants.Boltzmann * self.system_temperature * \
         10**(self.noise_figure/10) * self.sample_rate
-    # TODO: Not including scan loss for now
-    # scan_loss = np.cos(look.azimuth_steering_angle)**-2 * \
-    #     np.cos(look.elevation_steering_angle)**-2
-    scan_loss = 1
     self.loop_gain = look.n_pulses * pulse_compression_gain * \
         self.tx_power * 10**(self.element_gain/10) * self.tx_beam.gain * \
         self.rx_beam.gain * self.wavelength**2 / \
-        ((4*np.pi)**3 * noise_power * scan_loss)
+        ((4*np.pi)**3 * noise_power)
 
     self.measurement_model = CartesianToRangeAzElRangeRate(
         range_res=self.range_resolution,
@@ -229,14 +219,6 @@ class PhasedArrayRadar():
         np.abs(relative_az) <= 0.5 * self.tx_beam.azimuth_beamwidth,
         np.abs(relative_el) <= 0.5 * self.tx_beam.elevation_beamwidth)
 
-  @clearable_cached_property('rotation_offset')
-  def _rotation_matrix(self) -> np.ndarray:
-    """3D axis rotation matrix"""
-    theta_x = -self.rotation_offset[0, 0]  # roll
-    theta_y = self.rotation_offset[1, 0]  # pitch/elevation
-    theta_z = -self.rotation_offset[2, 0]  # yaw/azimuth
-    return rotz(theta_z) @ roty(theta_y) @ rotx(theta_x)
-
   def measure(self,
               ground_truths: List[GroundTruthState],
               noise: Union[np.ndarray, bool] = True,
@@ -267,15 +249,17 @@ class PhasedArrayRadar():
 
     # Get the position of the target in the radar coordinate frame
     relative_pos = state_vectors[self.position_mapping, :] - self.position
-    relative_pos = self._rotation_matrix @ relative_pos
+    relative_pos = measurement_model.rotation_matrix @ relative_pos
     [target_az, target_el, r] = cart2sph(*relative_pos, degrees=True)
     relative_az = target_az - self.tx_beam.azimuth_steering_angle
     relative_el = target_el - self.tx_beam.elevation_steering_angle
 
     # Compute SNR and probability of detection assuming a Swerling 1 target model
     beam_shape_loss_db = self.tx_beam.shape_loss(relative_az, relative_el)
+    beam_scan_loss_db = beam_scan_loss(self.tx_beam.azimuth_steering_angle,
+                                    self.tx_beam.elevation_steering_angle)
     snr_db = 10*np.log10(self.loop_gain) + 10*np.log10(rcs) - \
-        40*np.log10(r) - beam_shape_loss_db
+        40*np.log10(r) - beam_shape_loss_db - beam_scan_loss_db
     snr_lin = 10**(snr_db/10)
     pfa = self.false_alarm_rate
     pd = pfa**(1/(1+snr_lin))
