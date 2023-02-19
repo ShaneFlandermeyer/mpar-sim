@@ -7,7 +7,7 @@ from mpar_sim.types.groundtruth import GroundTruthPath
 
 class Detection():
   def __init__(self,
-               state_vector: np.ndarray,
+               state_vector: np.ndarray = None,
                snr: float = None,
                timestamp: datetime.datetime = None,
                measurement_model: MeasurementModel = None,

@@ -8,6 +8,7 @@ class GroundTruthState():
   """
   Stores information about the current state of the ground truth.
   """
+
   def __init__(self,
                state_vector: np.ndarray,
                timestamp: datetime.datetime = None,
@@ -22,9 +23,10 @@ class GroundTruthPath():
   """
   Stores the entire history of the ground truth target.
   """
+
   def __init__(self,
                states: List[GroundTruthState] = [],
-               id=None):
+               id = None):
     self.states = states
     if id is None:
       self.id = str(uuid.uuid1())
@@ -33,19 +35,19 @@ class GroundTruthPath():
 
   def append(self, state: GroundTruthState):
     self.states.append(state)
-  
+
   @property
   def state_vector(self):
     return self.states[-1].state_vector
-  
+
   @property
   def timestamp(self):
     return self.states[-1].timestamp
-  
+
   @property
   def metadata(self):
     return self.states[-1].metadata
-    
+
   def __getitem__(self, index):
     return self.states[index]
 
