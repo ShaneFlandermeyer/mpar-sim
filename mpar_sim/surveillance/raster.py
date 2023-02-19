@@ -48,15 +48,15 @@ def uniform_rectangular_grid(xlims: List[int],
 
 
 def raster_grid_points(az_lims: List[float],
-                   el_lims: List[float],
-                   az_beamwidth: float,
-                   el_beamwidth: float,
-                   az_spacing_beamwidths: float,
-                   el_spacing_beamwidths: float) -> Tuple[np.ndarray, np.ndarray]:
+                       el_lims: List[float],
+                       az_beamwidth: float,
+                       el_beamwidth: float,
+                       az_spacing_beamwidths: float,
+                       el_spacing_beamwidths: float) -> Tuple[np.ndarray, np.ndarray]:
   """
   Compute a raster scan grid that is uniformly spaced in UV space. This way, the beam pattern does not vary with off-boresight scan angle. See Klemm2017.
   This grid is triangular such that successive rows are offset by half a beamwidth.
-  
+
   Parameters
   ----------
   az_lims : List[float]
@@ -85,24 +85,24 @@ def raster_grid_points(az_lims: List[float],
   ulim = azel2uv(az_lims, el_lims[1])[0]
   vlim = azel2uv(az_lims[0], el_lims)[1]
   dx = uv_spacing[0]/2
-  dy = np.sqrt(uv_spacing[1]**2 - 0.25*uv_spacing[0]**2)
-  ugrid, vgrid = uniform_rectangular_grid(ulim, vlim, uv_spacing[0], dy)
+  dy = np.sqrt(uv_spacing[1]**2 - dx**2)
+  u_grid, v_grid = uniform_rectangular_grid(ulim, vlim, uv_spacing[0], dy)
 
   # Offset every other row by half the normal spacing to make the lattice triangular
-  ugrid[1::2] += dx
+  u_grid[1::2] += dx
 
   # Remove points that are now outside the scan limits due to the offset applied above
-  valid = ugrid < ulim[1]
-  ugrid = ugrid[valid]
-  vgrid = vgrid[valid]
+  valid = u_grid < ulim[1]
+  u_grid = u_grid[valid]
+  v_grid = v_grid[valid]
 
-  # UV pairs must also have a magnitude less than 1
-  hypot = np.hypot(ugrid, vgrid)
-  ugrid = ugrid[hypot < 1]
-  vgrid = vgrid[hypot < 1]
+  # UV pairs must also magnitude <= 1
+  hypot = np.hypot(u_grid, v_grid)
+  u_grid = u_grid[hypot <= 1]
+  v_grid = v_grid[hypot <= 1]
 
   # Convert back to az/el and remove the points outside the scan limits
-  az_points, el_points = uv2azel(ugrid, vgrid, degrees=True)
+  az_points, el_points = uv2azel(u_grid, v_grid, degrees=True)
 
   # Remove points that are outside the scan limits after conversion
   valid_az = (az_points >= az_lims[0]) & (az_points <= az_lims[1])
