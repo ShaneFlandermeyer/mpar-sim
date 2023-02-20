@@ -81,6 +81,8 @@ def extended_kalman_update(state: np.ndarray,
       - Predicted state vector
       - Predicted covariance
   """
+  state = state.ravel()
+  measurement = measurement.ravel()
   # Compute the residual
   prior_measurement = measurement_model.function(state)
   # TODO: This does not handle aliasing of angles properly

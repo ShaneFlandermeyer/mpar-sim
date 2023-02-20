@@ -1,43 +1,70 @@
 import numpy as np
 import pytest
+from mpar_sim.models.measurement.nonlinear import CartesianToRangeAzElRangeRate
+
 from mpar_sim.models.transition.linear import ConstantVelocity
-from mpar_sim.tracking.adaptive_track import AdaptiveTrackManager, adaptive_revisit_interval
-from mpar_sim.tracking.kalman import kalman_predict
+from mpar_sim.tracking.adaptive_track import (AdaptiveTrackManager,
+                                              adaptive_revisit_interval)
+from mpar_sim.tracking.extended_kalman import extended_kalman_predict, extended_kalman_update
+from mpar_sim.tracking.kalman import kalman_predict, kalman_update
+from mpar_sim.tracking.tracker import Tracker
 from mpar_sim.types.detection import Detection, TrueDetection
-from mpar_sim.types.groundtruth import GroundTruthPath
+from mpar_sim.types.groundtruth import GroundTruthPath, GroundTruthState
+from mpar_sim.types.look import Look
 
 
 class TestAdaptiveTrackManager():
   @pytest.fixture
   def manager(self):
+    # TODO: Set up a measurement function for this tracker
+    tracker = Tracker(predict_func=kalman_predict,
+                      update_func=extended_kalman_update,
+                      transition_model=ConstantVelocity(),
+                      measurement_model=CartesianToRangeAzElRangeRate(),
+                      )
     return AdaptiveTrackManager(
         track_sharpness=0.15,
         confirmation_interval=1/20,
         min_revisit_interval=0.2,
         max_revisit_interval=2.0,
+        tracker=tracker,
+        n_confirm_detections=3,
     )
 
   def test_process_detections(self, manager: AdaptiveTrackManager):
     # Make a fake detection to add to the track list
-    detections = [TrueDetection(GroundTruthPath())]
+    target_path = GroundTruthPath(
+        GroundTruthState(np.array([1e3, 0, 0, 0, 0, 0])))
+    state_vector = manager.tracker.measurement_model.function(
+        target_path.state_vector, noise=False)
+    detections = [TrueDetection(state_vector=state_vector,
+                                groundtruth_path=target_path)]
+    
+    look = Look()
+
+    # Test the handling of the initiation and tentative tracks
     time = 0
-    manager.process_detections(detections, time)
-    assert len(manager.tentative_tracks) == 1
-    assert len(manager.confirmed_tracks) == 0
+    for _ in range(2):
+      manager.process_detections(detections, time, look)
+      assert len(manager.tentative_tracks) == 1
+      assert len(manager.confirmed_tracks) == 0
 
-    track_id = manager.tentative_tracks[0].id
+      track_id = manager.tentative_tracks[0].id
+      assert manager.update_times[track_id] == time + \
+          manager.confirmation_interval
+
+      time += manager.confirmation_interval
+
+    # Test behavior for confirmed tracks
+    manager.process_detections(detections, time, look)
+    assert len(manager.tentative_tracks) == 0
+    assert len(manager.confirmed_tracks) == 1
+    
+    track_id = manager.confirmed_tracks[0].id
     assert manager.update_times[track_id] == time + \
         manager.confirmation_interval
-
-    # Add another detection to test the tentative track logic
-    time += manager.confirmation_interval
-    manager.process_detections(detections, time)
-
-    assert len(manager.tentative_tracks) == 1
-    assert len(manager.confirmed_tracks) == 0
-
-    assert manager.update_times[track_id] == time + \
-        manager.confirmation_interval
+        
+    # TODO: Test if the resulting track actually makes sense
 
 
 def test_adaptive_update_interval():

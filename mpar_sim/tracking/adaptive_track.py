@@ -14,31 +14,32 @@ import numpy as np
 
 from mpar_sim.common.coordinate_transform import cart2sph_covar
 from mpar_sim.models.transition.base import TransitionModel
+from mpar_sim.tracking.tracker import Tracker
 from mpar_sim.types.detection import Detection
 from mpar_sim.types.look import Look
+from mpar_sim.types.state import State
 from mpar_sim.types.track import Track
 
 
 class AdaptiveTrackManager():
   def __init__(self,
+               tracker: Tracker,
                track_sharpness: float = 0.15,
                confirmation_interval: float = 0.05,
                min_revisit_interval: float = 0.2,
                max_revisit_interval: float = 2.0,
                position_mapping: List[int] = [0, 2, 4],
                velocity_mapping: List[int] = [1, 3, 5],
+               n_confirm_detections: int = 3,
                ):
-    # TODO: Add a tracker object. This object should be used for:
-    #   - Prediction
-    #   - Update
-    #   - Transition/measurement models
-    #   - Initiation logic
+    self.tracker = tracker
     self.track_sharpness = track_sharpness
     self.confirmation_interval = confirmation_interval
     self.min_revisit_interval = min_revisit_interval
     self.max_revisit_interval = max_revisit_interval
     self.position_mapping = position_mapping
     self.velocity_mapping = velocity_mapping
+    self.n_confirm_detections = n_confirm_detections
 
     self.confirmed_tracks = []
     self.tentative_tracks = []
@@ -47,7 +48,6 @@ class AdaptiveTrackManager():
   def process_detections(self,
                          detections: List[Detection],
                          time: Union[float, datetime.datetime],
-                         # TODO: Need this for the adaptive revisit interval
                          look: Look = None,
                          ) -> None:
     for detection in detections:
@@ -57,35 +57,59 @@ class AdaptiveTrackManager():
           track.target_id for track in self.confirmed_tracks]
       tentative_target_ids = [
           track.target_id for track in self.tentative_tracks]
-      if target_id in confirmed_target_ids:
+
+      if target_id in confirmed_target_ids:  # Confirmed track update
         track = self.confirmed_tracks[confirmed_target_ids.index(target_id)]
-        # TODO: Make this work properly
-        # dt = adaptive_revisit_interval(track.state_vector,
-        #                                track.covar,
-        #                                self.tracker.predict,
-        #                                self.tracker.transition_model,
-        #                                look.az_beamwidth,
-        #                                look.el_beamwidth,
-        #                                self.track_sharpness,
-        #                                self.min_revisit_interval,
-        #                                self.max_revisit_interval,
-        #                                self.position_mapping,
-        #                                )
-        dt = 2.0
-      elif target_id in tentative_target_ids:
+        state = State(state_vector=track.state_vector,
+                      covar=track.covar,
+                      timestamp=time,)
+        # Incorporate the new measurement into the track history
+        state.state_vector, state.covar = self.tracker.predict(state, time)
+        state.state_vector, state.covar = self.tracker.update(
+            state, detection.state_vector)
+        track.append(state)
+        dt = adaptive_revisit_interval(
+            state_vector=track.state_vector,
+            covar=track.covar,
+            predict_func=self.tracker.predict_func,
+            transition_model=self.tracker.transition_model,
+            az_beamwidth=look.azimuth_beamwidth,
+            el_beamwidth=look.elevation_beamwidth,
+            track_sharpness=self.track_sharpness,
+            min_revisit_interval=self.min_revisit_interval,
+            max_revisit_interval=self.max_revisit_interval,
+        )
+
+      elif target_id in tentative_target_ids:  # Tentative track update
         track = self.tentative_tracks[tentative_target_ids.index(target_id)]
+        state = State(state_vector=track.state_vector,
+                      covar=track.covar,
+                      timestamp=time,)
+        # Incorporate the new measurement into the track history
+        state.state_vector, state.covar = self.tracker.predict(state, time)
+        state.state_vector, state.covar = self.tracker.update(
+            state, detection.state_vector)
+        track.append(state)
+        # Remove tracks from the queue once they've been confirmed
+        if len(track) >= self.n_confirm_detections:
+          self.confirmed_tracks.append(track)
+          self.tentative_tracks.remove(track)
+
         dt = self.confirmation_interval
-      else:
-        track = Track(target_id=target_id)
-        dt = self.confirmation_interval
+
+      else:  # New track
+        # See stonesoup initiator
+        track = self.tracker.initiate(detection)
         self.tentative_tracks.append(track)
+
+        dt = self.confirmation_interval
 
       if isinstance(time, datetime.datetime):
         dt = datetime.timedelta(seconds=dt)
       self.update_times[track.id] = time + dt
 
-  # def generate_look(self, time: Union[float, datetime.datetime]) -> Look:
-    # pass
+  def generate_look(self, time: Union[float, datetime.datetime]) -> Look:
+    pass
 
 
 def adaptive_revisit_interval(state_vector: np.ndarray,

@@ -27,6 +27,8 @@ class GroundTruthPath():
   def __init__(self,
                states: List[GroundTruthState] = [],
                id = None):
+    if not isinstance(states, list):
+      states = [states]
     self.states = states
     if id is None:
       self.id = str(uuid.uuid1())

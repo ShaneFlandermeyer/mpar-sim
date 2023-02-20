@@ -101,11 +101,11 @@ class CartesianToRangeAzElRangeRate(NonlinearMeasurementModel):
                noise_covar: np.ndarray = np.eye(4),
                range_res: float = 1,
                range_rate_res: float = 1,
-               discretize_measurements: bool = True,
+               discretize_measurements: bool = False,
                # Ambiguity limits
                max_unambiguous_range: float = np.inf,
                max_unambiguous_range_rate: float = np.inf,
-               alias_measurements: bool = True,
+               alias_measurements: bool = False,
                # State mappings
                position_mapping: List[int] = [0, 2, 4],
                velocity_mapping: List[int] = [1, 3, 5],
@@ -199,8 +199,8 @@ class CartesianToRangeAzElRangeRate(NonlinearMeasurementModel):
           self.range_rate_res + self.range_rate_res/2
     return out
 
-  def inverse_function(self, detection) -> np.ndarray:
-    azimuth, elevation, range, range_rate = detection.state_vector
+  def inverse_function(self, measurement: np.ndarray) -> np.ndarray:
+    azimuth, elevation, range, range_rate = measurement
 
     x, y, z = sph2cart(azimuth, elevation, range, degrees=True)
     # because only rho_rate is known, only the components in
@@ -212,16 +212,16 @@ class CartesianToRangeAzElRangeRate(NonlinearMeasurementModel):
     inv_rotation_matrix = np.linalg.inv(self.rotation_matrix)
 
     out_vector = np.zeros((self.ndim_state, 1))
-    out_vector[self.position_mapping, 0] = x, y, z
-    out_vector[self.velocity_mapping, 0] = x_rate, y_rate, z_rate
+    out_vector[self.position_mapping] = x, y, z
+    out_vector[self.velocity_mapping] = x_rate, y_rate, z_rate
 
     out_vector[self.position_mapping,
                :] = inv_rotation_matrix @ out_vector[self.position_mapping, :]
     out_vector[self.velocity_mapping, :] = \
         inv_rotation_matrix @ out_vector[self.velocity_mapping, :]
 
-    out_vector[self.position_mapping, :] = out_vector[self.position_mapping, :] + \
-        self.translation_offset
+    out_vector[self.position_mapping,
+               :] = out_vector[self.position_mapping, :] + self.translation_offset.reshape(-1, 1)
 
     return out_vector
 
@@ -283,7 +283,8 @@ class CartesianToRangeAzElRangeRate(NonlinearMeasurementModel):
       rotation_offset: 3x1 array containing the rotation offset of the radar in the form [roll, pitch, yaw]
     """
     assert rotation_offset.size == 3
-    
+
     self._rotation_offset = rotation_offset
     theta_x, theta_y, theta_z = rotation_offset
-    self.rotation_matrix = rotz(theta_z.item()) @ roty(theta_y.item()) @ rotx(theta_x.item())
+    self.rotation_matrix = rotz(
+        theta_z.item()) @ roty(theta_y.item()) @ rotx(theta_x.item())
