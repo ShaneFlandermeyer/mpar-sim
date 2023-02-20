@@ -7,10 +7,10 @@ from mpar_sim.models.transition.base import TransitionModel
 
 
 def extended_kalman_predict(state: np.ndarray,
-                   covar: np.ndarray,
-                   transition_model: TransitionModel,
-                   time_interval: Union[float, datetime.timedelta]
-                   ) -> Tuple[np.ndarray, np.ndarray]:
+                            covar: np.ndarray,
+                            transition_model: TransitionModel,
+                            time_interval: Union[float, datetime.timedelta]
+                            ) -> Tuple[np.ndarray, np.ndarray]:
   """
   Extended Kalman predict step.  
 

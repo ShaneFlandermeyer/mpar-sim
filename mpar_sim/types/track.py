@@ -5,16 +5,17 @@ from typing import List, Union, Optional
 
 class Track():
   """
-  Helper class for storing the state histories of a track. 
+  Helper class for storing the state history of a track. 
 
-  This class is functionally identical to the GroundTruthPath class
   """
 
   def __init__(self,
-               states: List[State] = [],
+               history: List[State] = [],
                id: Union[str, int] = None,
-               target_id: Optional[Union[str, int]] = None):
-    self.states = states
+               target_id: Optional[Union[str, int]] = None
+               ) -> None:
+    self.history = history
+
     if id is None:
       self.id = str(uuid.uuid1())
     else:
@@ -24,22 +25,30 @@ class Track():
     self.target_id = target_id
 
   def append(self, state: State):
-    self.states.append(state)
+    self.history.append(state)
 
   @property
   def state_vector(self):
-    return self.states[-1].state_vector
+    """Returns the most recent state vector"""
+    return self.history[-1].state_vector
+
+  @property
+  def covar(self):
+    """Returns the most recent covariance matrix"""
+    return self.history[-1].covar
 
   @property
   def timestamp(self):
-    return self.states[-1].timestamp
+    """Returns the most recent track update time"""
+    return self.history[-1].timestamp
 
   @property
   def metadata(self):
-    return self.states[-1].metadata
+    """Returns metadata for the most recent track update"""
+    return self.history[-1].metadata
 
   def __getitem__(self, index):
-    return self.states[index]
+    return self.history[index]
 
   def __len__(self):
-    return len(self.states)
+    return len(self.history)
