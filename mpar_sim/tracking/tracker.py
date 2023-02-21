@@ -2,7 +2,7 @@ import datetime
 from typing import Callable, Tuple, Union
 
 import numpy as np
-from mpar_sim.types.detection import Detection
+from mpar_sim.types.detection import Detection, TrueDetection
 from mpar_sim.types.state import State
 
 from mpar_sim.types.track import Track
@@ -52,10 +52,8 @@ class Tracker():
     """
     Initiate a new track from a measurement.
 
-    TODO: Assumes the measurement model is reversible and nonlinear.
-    TODO: Add a prior_state field to the object to initialize state parameters that cannot be estimated from the measurement. Assuming zero for now
+    Assumes the measurement model is reversible and nonlinear.
     # TODO: Add diagonal loading to covariance for numerical stability
-    # TODO: Assumes a TrueDetection (i.e., measurement.groundtruth_path exists)
 
 
     Parameters
@@ -89,4 +87,9 @@ class Tracker():
       state_vector += prior_state_vector.reshape(state_vector.shape)
       covar += prior_covar.reshape(covar.shape)
 
-    return Track(state, target_id=measurement.groundtruth_path.id)
+    # If the measurement is a TrueDetection (corresponds to an actual target), store the target ID in the track object
+    if isinstance(measurement, TrueDetection):
+      target_id = measurement.groundtruth_path.id
+    else:
+      target_id = None
+    return Track(state, target_id=target_id)

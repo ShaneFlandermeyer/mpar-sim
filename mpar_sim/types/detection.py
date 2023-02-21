@@ -1,4 +1,5 @@
 import datetime
+from typing import Optional
 
 import numpy as np
 from mpar_sim.models.measurement.base import MeasurementModel
@@ -8,10 +9,10 @@ from mpar_sim.types.groundtruth import GroundTruthPath
 class Detection():
   def __init__(self,
                state_vector: np.ndarray = None,
-               snr: float = None,
-               timestamp: datetime.datetime = None,
-               measurement_model: MeasurementModel = None,
-               metadata: dict = {},
+               snr: Optional[float] = None,
+               timestamp: Optional[datetime.datetime] = None,
+               measurement_model: Optional[MeasurementModel] = None,
+               metadata: Optional[dict] = {},
                **kwargs
                ):
     self.state_vector = state_vector
@@ -23,7 +24,7 @@ class Detection():
 
 class TrueDetection(Detection):
   def __init__(self,
-               groundtruth_path: GroundTruthPath = None,
+               groundtruth_path: Optional[GroundTruthPath] = None,
                **kwargs,
                ):
     super().__init__(**kwargs)
