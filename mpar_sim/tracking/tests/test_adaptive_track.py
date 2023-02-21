@@ -21,9 +21,6 @@ class TestAdaptiveTrackManager():
                       update_func=extended_kalman_update,
                       transition_model=ConstantVelocity(),
                       measurement_model=CartesianToRangeAzElRangeRate(),
-                      prior_state=State(
-                          state_vector=np.zeros((6,)),
-                          covar=np.diag([1.5, 100, 1.5, 100, 1.5, 100]))
                       )
     return AdaptiveTrackManager(
         track_sharpness=0.15,

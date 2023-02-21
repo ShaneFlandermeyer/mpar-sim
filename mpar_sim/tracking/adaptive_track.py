@@ -98,7 +98,6 @@ class AdaptiveTrackManager():
         dt = self.confirmation_interval
 
       else:  # New track
-        # See stonesoup initiator
         track = self.tracker.initiate(detection)
         self.tentative_tracks.append(track)
 
@@ -158,8 +157,3 @@ def adaptive_revisit_interval(state_vector: np.ndarray,
 
   # If the track error is never within the limits, return the minimum revisit interval
   return dt
-
-
-if __name__ == '__main__':
-  t1 = Track()
-  t2 = Track()

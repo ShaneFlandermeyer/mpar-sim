@@ -298,10 +298,10 @@ def sph2cart_covar(sph_covar: np.ndarray,
   # Here, the x-axis is along the line from the sensor to the target, the y-axis is in the plane of the sensor and target, and the z-axis is perpendicular to the plane of the sensor and target.
   pos_covar_s2t = np.diag([range_error, r*np.cos(el)*az_error, r*el_error])**2
   # Now convert to the radar coordinate frame
-  rotmat = rpy2rotmat(roll=0, pitch=float(-el), yaw=float(az), degrees=False)
+  rotmat = rpy2rotmat(roll=0, pitch=-el, yaw=az, degrees=False)
   pos_covar = rotmat @ pos_covar_s2t @ rotmat.T
 
-  # TODO: Compute velocity covariance if the range rate is part of the measurement
+  # If range rate is measured, compute velocity covariance
   if sph_covar.shape == (4, 4):
     range_rate_error = np.sqrt(sph_covar[3, 3])
     cross_velocity_error = 10  # Arbitrary large value

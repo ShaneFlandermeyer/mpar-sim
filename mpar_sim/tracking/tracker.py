@@ -15,13 +15,11 @@ class Tracker():
                update_func: Callable,
                transition_model: Callable,
                measurement_model: Callable,
-               prior_state: State = None,
                ):
     self.predict_func = predict_func
     self.update_func = update_func
     self.transition_model = transition_model
     self.measurement_model = measurement_model
-    self.prior_state = prior_state
 
   def predict(self,
               state: State,
@@ -72,26 +70,13 @@ class Tracker():
         measurement.state_vector)
     model_covar = self.measurement_model.covar()
     pos_covar, vel_covar = sph2cart_covar(
-        model_covar, *measurement.state_vector)
+        model_covar, *measurement.state_vector.ravel())
 
     pos_mapping = self.measurement_model.position_mapping
     vel_mapping = self.measurement_model.velocity_mapping
     covar = np.zeros((6, 6))
-    # TODO: Make this compatible with the prior state parameter (or remove the parameter entirely)
     covar[np.ix_(pos_mapping, pos_mapping)] = pos_covar
     covar[np.ix_(vel_mapping, vel_mapping)] = vel_covar
-
-    # If a prior state is provided, use it to initialize the parts of the state that cannot be estimated from the measurement
-    if self.prior_state is not None:
-      prior_state_vector = self.prior_state.state_vector.copy()
-      prior_covar = self.prior_state.covar.copy()
-
-      mapped_dimensions = self.measurement_model.position_mapping
-      prior_state_vector[mapped_dimensions] = 0
-      prior_covar[mapped_dimensions] = 0
-
-      state_vector += prior_state_vector.reshape(state_vector.shape)
-      covar += prior_covar.reshape(covar.shape)
 
     # If the measurement is a TrueDetection (corresponds to an actual target), store the target ID in the track object
     if isinstance(measurement, TrueDetection):
