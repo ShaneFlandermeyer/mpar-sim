@@ -14,11 +14,13 @@ class Tracker():
                update_func: Callable,
                transition_model: Callable,
                measurement_model: Callable,
+               prior_state: State = None,
                ):
     self.predict_func = predict_func
     self.update_func = update_func
     self.transition_model = transition_model
     self.measurement_model = measurement_model
+    self.prior_state = prior_state
 
   def predict(self,
               state: State,
@@ -66,11 +68,25 @@ class Tracker():
     Track
         Output track.
     """
+    # Use the measurement model to estimate the state vector and covariance from the measurement
     state_vector = self.measurement_model.inverse_function(
         measurement.state_vector)
     model_matrix = self.measurement_model.jacobian(state_vector)
-    model_covar = self.measurement_model.covar()
     inv_model_matrix = np.linalg.pinv(model_matrix)
+    model_covar = self.measurement_model.covar()
     covar = inv_model_matrix @ model_covar @ inv_model_matrix.T
     state = State(state_vector, covar, measurement.timestamp)
+
+    # If a prior state is provided, use it to initialize the parts of the state that cannot be estimated from the measurement
+    if self.prior_state is not None:
+      prior_state_vector = self.prior_state.state_vector.copy()
+      prior_covar = self.prior_state.covar.copy()
+
+      mapped_dimensions = self.measurement_model.position_mapping
+      prior_state_vector[mapped_dimensions] = 0
+      prior_covar[mapped_dimensions] = 0
+
+      state_vector += prior_state_vector.reshape(state_vector.shape)
+      covar += prior_covar.reshape(covar.shape)
+
     return Track(state, target_id=measurement.groundtruth_path.id)

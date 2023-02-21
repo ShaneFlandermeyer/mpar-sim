@@ -11,16 +11,19 @@ from mpar_sim.tracking.tracker import Tracker
 from mpar_sim.types.detection import Detection, TrueDetection
 from mpar_sim.types.groundtruth import GroundTruthPath, GroundTruthState
 from mpar_sim.types.look import Look
+from mpar_sim.types.state import State
 
 
 class TestAdaptiveTrackManager():
   @pytest.fixture
   def manager(self):
-    # TODO: Set up a measurement function for this tracker
     tracker = Tracker(predict_func=kalman_predict,
                       update_func=extended_kalman_update,
                       transition_model=ConstantVelocity(),
                       measurement_model=CartesianToRangeAzElRangeRate(),
+                      prior_state=State(
+                          state_vector=np.zeros((6,)),
+                          covar=np.diag([1.5, 100, 1.5, 100, 1.5, 100]))
                       )
     return AdaptiveTrackManager(
         track_sharpness=0.15,
@@ -34,12 +37,12 @@ class TestAdaptiveTrackManager():
   def test_process_detections(self, manager: AdaptiveTrackManager):
     # Make a fake detection to add to the track list
     target_path = GroundTruthPath(
-        GroundTruthState(np.array([1e3, 0, 0, 0, 0, 0])))
+        GroundTruthState(np.array([1e3, 0, 1e3, 0, 0, 0])))
     state_vector = manager.tracker.measurement_model.function(
         target_path.state_vector, noise=False)
     detections = [TrueDetection(state_vector=state_vector,
                                 groundtruth_path=target_path)]
-    
+
     look = Look()
 
     # Test the handling of the initiation and tentative tracks
@@ -59,11 +62,11 @@ class TestAdaptiveTrackManager():
     manager.process_detections(detections, time, look)
     assert len(manager.tentative_tracks) == 0
     assert len(manager.confirmed_tracks) == 1
-    
+
     track_id = manager.confirmed_tracks[0].id
     assert manager.update_times[track_id] == time + \
         manager.confirmation_interval
-        
+
     # TODO: Test if the resulting track actually makes sense
 
 
