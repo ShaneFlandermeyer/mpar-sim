@@ -200,28 +200,28 @@ class CartesianToRangeAzElRangeRate(NonlinearMeasurementModel):
     return out
 
   def inverse_function(self, measurement: np.ndarray) -> np.ndarray:
-    azimuth, elevation, range, range_rate = measurement
-
+    # Compute the cartesian position
+    azimuth, elevation, range, range_rate = measurement.reshape(-1, 1)
     x, y, z = sph2cart(azimuth, elevation, range, degrees=True)
-    # because only rho_rate is known, only the components in
-    # x,y and z of the range rate can be found.
-    x_rate = np.cos(azimuth) * np.cos(elevation) * range_rate
-    y_rate = np.cos(azimuth) * np.sin(elevation) * range_rate
-    z_rate = np.sin(azimuth) * range_rate
 
-    inv_rotation_matrix = np.linalg.inv(self.rotation_matrix)
+    # Back out the velocity from the range rate
+    radar_to_meas = np.array([x, y, z]).reshape(-1, 1)
+    radar_to_meas_norm = radar_to_meas / np.linalg.norm(radar_to_meas)
+    velocity = range_rate * radar_to_meas_norm + self.velocity.reshape(-1, 1)
 
+    # Form the state vector from the measurement function
     out_vector = np.zeros((self.ndim_state, 1))
     out_vector[self.position_mapping] = x, y, z
-    out_vector[self.velocity_mapping] = x_rate, y_rate, z_rate
+    out_vector[self.velocity_mapping] = velocity
 
-    out_vector[self.position_mapping,
-               :] = inv_rotation_matrix @ out_vector[self.position_mapping, :]
-    out_vector[self.velocity_mapping, :] = \
-        inv_rotation_matrix @ out_vector[self.velocity_mapping, :]
+    # Rotate the result from the radar frame back into the "global" frame
+    inv_rotation_matrix = np.linalg.inv(self.rotation_matrix)
+    out_vector[self.position_mapping] = inv_rotation_matrix @ out_vector[self.position_mapping]
+    out_vector[self.velocity_mapping] = inv_rotation_matrix @ out_vector[self.velocity_mapping]
 
-    out_vector[self.position_mapping,
-               :] = out_vector[self.position_mapping, :] + self.translation_offset.reshape(-1, 1)
+    out_vector[self.position_mapping] = out_vector[self.position_mapping] + \
+        self.translation_offset.reshape(
+        out_vector[self.position_mapping].shape)
 
     return out_vector
 
