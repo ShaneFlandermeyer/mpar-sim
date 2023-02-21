@@ -8,7 +8,7 @@ def test_sph2cart_covar():
   az = 45
   el = -10
   r = 1000
-  actual_pos_covar = sph2cart_covar(sph_covar, az, el, r)
+  actual_pos_covar, actual_vel_covar = sph2cart_covar(sph_covar, az, el, r)
   expected_pos_covar = 1e3*np.array(
       [[1.3601,   -1.2988,    0.2297],
        [-1.2988,    1.3601,    0.2297],

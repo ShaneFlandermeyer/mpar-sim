@@ -2,6 +2,7 @@ import datetime
 from typing import Callable, Tuple, Union
 
 import numpy as np
+from mpar_sim.common.coordinate_transform import cart2sph_covar, sph2cart_covar
 from mpar_sim.types.detection import Detection, TrueDetection
 from mpar_sim.types.state import State
 
@@ -69,11 +70,16 @@ class Tracker():
     # Use the measurement model to estimate the state vector and covariance from the measurement
     state_vector = self.measurement_model.inverse_function(
         measurement.state_vector)
-    model_matrix = self.measurement_model.jacobian(state_vector)
-    inv_model_matrix = np.linalg.pinv(model_matrix)
     model_covar = self.measurement_model.covar()
-    covar = inv_model_matrix @ model_covar @ inv_model_matrix.T
-    state = State(state_vector, covar, measurement.timestamp)
+    pos_covar, vel_covar = sph2cart_covar(
+        model_covar, *measurement.state_vector)
+
+    pos_mapping = self.measurement_model.position_mapping
+    vel_mapping = self.measurement_model.velocity_mapping
+    covar = np.zeros((6, 6))
+    # TODO: Make this compatible with the prior state parameter (or remove the parameter entirely)
+    covar[np.ix_(pos_mapping, pos_mapping)] = pos_covar
+    covar[np.ix_(vel_mapping, vel_mapping)] = vel_covar
 
     # If a prior state is provided, use it to initialize the parts of the state that cannot be estimated from the measurement
     if self.prior_state is not None:
@@ -92,4 +98,6 @@ class Tracker():
       target_id = measurement.groundtruth_path.id
     else:
       target_id = None
+
+    state = State(state_vector, covar, measurement.timestamp)
     return Track(state, target_id=target_id)

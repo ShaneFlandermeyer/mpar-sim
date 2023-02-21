@@ -211,7 +211,6 @@ def rotz(theta: Union[float, np.ndarray]):
                    [zeros, zeros, ones]])
 
 
-@lru_cache()
 def rpy2rotmat(roll: float,
                pitch: float,
                yaw: float,
@@ -287,20 +286,28 @@ def sph2cart_covar(sph_covar: np.ndarray,
   if degrees:
     az = np.deg2rad(az)
     el = np.deg2rad(el)
-    
+
   # Needed to initiate the covariance matrix from a detection from a sensor that measures spherical coordinates
 
   az_error = np.deg2rad(np.sqrt(sph_covar[0, 0]))
   el_error = np.deg2rad(np.sqrt(sph_covar[1, 1]))
   range_error = np.sqrt(sph_covar[2, 2])
 
+  # Compute position covariance
   # Compute the covariance in the "sensor to target" coordinate frame.
   # Here, the x-axis is along the line from the sensor to the target, the y-axis is in the plane of the sensor and target, and the z-axis is perpendicular to the plane of the sensor and target.
   pos_covar_s2t = np.diag([range_error, r*np.cos(el)*az_error, r*el_error])**2
   # Now convert to the radar coordinate frame
-  rotmat = rpy2rotmat(roll=0, pitch=-el, yaw=az, degrees=False)
+  rotmat = rpy2rotmat(roll=0, pitch=float(-el), yaw=float(az), degrees=False)
   pos_covar = rotmat @ pos_covar_s2t @ rotmat.T
 
-  # TODO: Compute velocity covariance
-  
-  return pos_covar
+  # TODO: Compute velocity covariance if the range rate is part of the measurement
+  if sph_covar.shape == (4, 4):
+    range_rate_error = np.sqrt(sph_covar[3, 3])
+    cross_velocity_error = 10  # Arbitrary large value
+
+    vel_covar_s2t = np.diag(
+        [range_rate_error, cross_velocity_error, cross_velocity_error])**2
+    vel_covar = rotmat @ vel_covar_s2t @ rotmat.T
+
+  return pos_covar, vel_covar

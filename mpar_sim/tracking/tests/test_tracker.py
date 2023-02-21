@@ -6,8 +6,10 @@ from filterpy.kalman import predict, update
 
 from mpar_sim.tracking.kalman import kalman_predict, kalman_update
 from mpar_sim.tracking.tracker import Tracker
+from mpar_sim.types.detection import Detection
 from mpar_sim.types.state import State
 from mpar_sim.types.track import Track
+from mpar_sim.models.measurement.nonlinear import CartesianToRangeAzElRangeRate
 
 
 class TestLinearMeasurementModel():
@@ -76,7 +78,6 @@ def test_update():
       measurement_model=TestLinearMeasurementModel(),
       predict_func=None,
       transition_model=None,
-
   )
 
   # Add a new track update
@@ -100,5 +101,24 @@ def test_update():
   assert np.allclose(x_actual, x_expected)
   assert np.allclose(P_actual, P_expected)
 
+
+def test_initiate():
+  mm = CartesianToRangeAzElRangeRate(
+    noise_covar=np.diag([3, 2.5, 2, 1])**2,
+    translation_offset=np.array([25, -40, 0]),
+    velocity=np.array([0, 5, 0])
+  )
+  tracker = Tracker(
+      update_func=kalman_update,
+      measurement_model=mm,
+      predict_func=None,
+      transition_model=None,
+  )
+  detection = Detection(state_vector=np.array([45, -10, 1000, -4]))
+  tracker.initiate(detection)
+  
+
+
 if __name__ == '__main__':
   pytest.main()
+  # test_initiate()
