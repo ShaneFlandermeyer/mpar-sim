@@ -12,7 +12,7 @@ def merwe_scaled_sigma_points(mean: np.ndarray,
                               alpha: float,
                               beta: float,
                               kappa: float
-                              ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+                              ) -> Tuple[np.ndarray, ...]:
   """
   Compute sigma points (and the weights for each point) using Van der Merwe's algorithm
 
@@ -101,7 +101,7 @@ def ukf_predict(prior_state: np.ndarray,
                 process_noise: np.ndarray,
                 transition_func: callable,
                 dt: Union[float, datetime.timedelta]
-                ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+                ) -> Tuple[np.ndarray, ...]:
   """
   Unscented Kalman filter prediction step
 

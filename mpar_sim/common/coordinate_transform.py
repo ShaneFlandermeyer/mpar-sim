@@ -59,11 +59,11 @@ def uv2azel(u: Union[float, np.ndarray],
   """
   az = np.arctan2(u, np.sqrt(1 - u**2 - v**2))
   el = np.arcsin(v)
-  
+
   if degrees:
     az = np.rad2deg(az)
     el = np.rad2deg(el)
-    
+
   return az, el
 
 
@@ -78,11 +78,11 @@ def sph2cart(
 
   Parameters
   ----------
-  azimuth: Union[float, np.ndarray]: 
+  azimuth: Union[float, np.ndarray]:
     Azimuth angle in radians
-  elevation: Union[float, np.ndarray]: 
+  elevation: Union[float, np.ndarray]:
     Elevation angle
-  range: Union[float, np.ndarray]: 
+  range: Union[float, np.ndarray]:
     Range
   degrees: bool
 
@@ -212,24 +212,32 @@ def rotz(theta: Union[float, np.ndarray]):
 
 
 @lru_cache()
-def rpy2rotmat(roll: float, pitch: float, yaw: float) -> np.ndarray:
+def rpy2rotmat(roll: float,
+               pitch: float,
+               yaw: float,
+               degrees=True) -> np.ndarray:
   """
   Convert roll, pitch, yaw to rotation matrix
 
   Parameters
   ----------
   r : float
-      roll angle (radians)
+      roll angle
   p : float
-      pitch angle (radians)
+      pitch angle
   y : float
-      yaw angle (radians)
+      yaw angle
 
   Returns
   -------
   np.ndarray
       Rotation matrix
   """
+  if degrees:
+    roll = np.deg2rad(roll)
+    pitch = np.deg2rad(pitch)
+    yaw = np.deg2rad(yaw)
+
   R_roll = rotx(roll)
   R_pitch = roty(pitch)
   R_yaw = rotz(yaw)
@@ -268,3 +276,31 @@ def cart2sph_covar(cart_covar: np.ndarray,
                 [x*z/(r**2*s), y*z/(r**2*s), -s/r**2],
                 [x/r, y/r, z/r]])
   return R @ cart_covar @ R.T
+
+
+def sph2cart_covar(sph_covar: np.ndarray,
+                   az: float,
+                   el: float,
+                   r: float,
+                   degrees: bool = True) -> np.ndarray:
+  # Handle conversion to degrees
+  if degrees:
+    az = np.deg2rad(az)
+    el = np.deg2rad(el)
+    
+  # Needed to initiate the covariance matrix from a detection from a sensor that measures spherical coordinates
+
+  az_error = np.deg2rad(np.sqrt(sph_covar[0, 0]))
+  el_error = np.deg2rad(np.sqrt(sph_covar[1, 1]))
+  range_error = np.sqrt(sph_covar[2, 2])
+
+  # Compute the covariance in the "sensor to target" coordinate frame.
+  # Here, the x-axis is along the line from the sensor to the target, the y-axis is in the plane of the sensor and target, and the z-axis is perpendicular to the plane of the sensor and target.
+  pos_covar_s2t = np.diag([range_error, r*np.cos(el)*az_error, r*el_error])**2
+  # Now convert to the radar coordinate frame
+  rotmat = rpy2rotmat(roll=0, pitch=-el, yaw=az, degrees=False)
+  pos_covar = rotmat @ pos_covar_s2t @ rotmat.T
+
+  # TODO: Compute velocity covariance
+  
+  return pos_covar
