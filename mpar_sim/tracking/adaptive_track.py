@@ -136,7 +136,9 @@ class AdaptiveTrackManager():
         dt = datetime.timedelta(seconds=dt)
       self.update_times[track.id] = time + dt
 
-  def generate_looks(self, time: Union[float, datetime.datetime]) -> Look:
+  def generate_looks(self, 
+                     time: Union[float, datetime.datetime]
+                     ) -> List[Look]:
     confirmed_track_ids = [track.id for track in self.confirmed_tracks]
     tentative_track_ids = [track.id for track in self.tentative_tracks]
     min_update_interval = min(self.confirmation_interval,
