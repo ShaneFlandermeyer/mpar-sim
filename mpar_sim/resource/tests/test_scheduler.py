@@ -18,7 +18,7 @@ class TestBestFirstScheduler:
     """
     Tests that the scheduler runs successfully
     """
-    looks = [Look()]*5
+    looks = [Look(start_time=0, priority=0)]*5
     scheduled_looks, deferred_looks = scheduler.schedule(
         looks, manager, None)
 

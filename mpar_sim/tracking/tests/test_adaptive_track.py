@@ -77,7 +77,7 @@ class TestAdaptiveTrackManager():
     detections = [TrueDetection(state_vector=state_vector,
                                 groundtruth_path=target_path,
                                 timestamp=time)]
-    look = Look()
+    look = Look(azimuth_beamwidth=10, elevation_beamwidth=10)
 
     # Add a detection to the tentative tracks list and generate an updated look on it.
     manager.process_detections(detections, time, look)
@@ -87,6 +87,7 @@ class TestAdaptiveTrackManager():
     assert len(looks) == 1
     assert looks[0].azimuth_steering_angle == 45
     assert looks[0].elevation_steering_angle == 0
+    assert looks[0].start_time == manager.confirmation_interval
 
 
 def test_adaptive_update_interval():

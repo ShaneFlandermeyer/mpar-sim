@@ -169,13 +169,18 @@ class AdaptiveTrackManager():
 
       if is_confirmed:
         look = TrackUpdateLook(azimuth_steering_angle=az,
-                               elevation_steering_angle=el,)
+                               elevation_steering_angle=el,
+                               start_time=start_time,
+                               )
       else:
         look = TrackConfirmationLook(azimuth_steering_angle=az,
-                                     elevation_steering_angle=el,)
+                                     elevation_steering_angle=el,
+                                     start_time=start_time,
+                                     )
       new_looks.append(look)
-      
+
     return new_looks
+
 
 def adaptive_revisit_interval(state_vector: np.ndarray,
                               covar: np.ndarray,
