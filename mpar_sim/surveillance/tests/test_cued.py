@@ -22,9 +22,19 @@ class TestCuedSearchManager():
         state_vector=np.array([-20, -12, 10e3, 0]),
     )]
     manager.process_detections(detections)
+    
+    assert len(manager.looks) == 7
+    
+  def test_generate_looks(self, manager: CuedSearchManager):
+    time = 0
+    detections = [Detection(
+        state_vector=np.array([-20, -12, 10e3, 0]),
+    )]
+    manager.process_detections(detections)
+    looks = manager.generate_looks(time)
+    
+    assert len(looks) == 7
 
-    assert manager.beam_positions_az.shape == (7,)
-    assert manager.beam_positions_el.shape == (7,)
 
 
 def test_raster_grid():

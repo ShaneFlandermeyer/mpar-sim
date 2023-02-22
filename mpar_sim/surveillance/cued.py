@@ -6,7 +6,7 @@ import numpy as np
 
 from mpar_sim.common.coordinate_transform import azel2uv, uv2azel
 from mpar_sim.types.detection import Detection
-from mpar_sim.types.look import Look
+from mpar_sim.types.look import CuedSearchLook, Look
 
 
 class CuedSearchManager():
@@ -26,8 +26,7 @@ class CuedSearchManager():
     self.el_spacing_beamwidths = el_spacing_beamwidths
 
     # Store a queue of beam positions to search
-    self.beam_positions_az = []
-    self.beam_positions_el = []
+    self.looks = []
 
   def process_detections(self, detections: List[Detection]) -> None:
     """
@@ -57,15 +56,20 @@ class CuedSearchManager():
       )
 
       # Add the current beam positions to the queue
-      self.beam_positions_az = np.concatenate(
-          (self.beam_positions_az, az_points))
-      self.beam_positions_el = np.concatenate(
-          (self.beam_positions_el, el_points))
+      # TODO: Add other look parameters
+      # TODO: Increment the start time based on the beam sequence index
+      for az, el in zip(az_points, el_points):
+        look = CuedSearchLook(azimuth_steering_angle=az,
+                              elevation_steering_angle=el,)
+        self.looks.append(look)
 
   def generate_looks(self,
                      time: Union[float, datetime.datetime]
                      ) -> List[Look]:
-    pass  # TODO
+    # TODO: Add time argument to the look object
+    looks = self.looks.copy()
+    self.looks = []
+    return looks
 
 
 @lru_cache
@@ -107,13 +111,13 @@ def cued_search_grid(az_center: float,
   valid_az = np.ones_like(az_points, dtype=bool)
   valid_el = np.ones_like(el_points, dtype=bool)
   if min_az:
-    valid_az = valid_az & (az_points >= min_az)
+    valid_az &= (az_points >= min_az)
   if max_az:
-    valid_az = valid_az & (az_points <= max_az)
+    valid_az &= (az_points <= max_az)
   if min_el:
-    valid_el = valid_el & (el_points >= min_el)
+    valid_el &= (el_points >= min_el)
   if max_el:
-    valid_el = valid_el & (el_points <= max_el)
+    valid_el &= (el_points <= max_el)
 
   az_points = az_points[valid_az & valid_el]
   el_points = el_points[valid_az & valid_el]
