@@ -83,7 +83,7 @@ class CuedSearchManager():
                               pulsewidth=self.pulsewidth,
                               prf=self.prf,
                               n_pulses=self.n_pulses,
-                              # Add priority
+                              # TODO: Add priority?
                               )
         self.looks.append(look)
 

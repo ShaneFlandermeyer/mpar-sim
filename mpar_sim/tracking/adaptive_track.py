@@ -8,7 +8,7 @@
 
 
 import datetime
-from typing import Callable, List, Tuple, Union
+from typing import Callable, List, Optional, Tuple, Union
 
 import numpy as np
 
@@ -24,6 +24,15 @@ from mpar_sim.types.track import Track
 class AdaptiveTrackManager():
   def __init__(self,
                tracker: Tracker,
+               # Task parameters
+               az_beamwidth: float,
+               el_beamwidth: float,
+               center_frequency: Optional[float] = None,
+               bandwidth: Optional[float] = None,
+               pulsewidth: Optional[float] = None,
+               prf: Optional[float] = None,
+               n_pulses: Optional[int] = None,
+               # Adaptive track parameters
                track_sharpness: float = 0.15,
                confirmation_interval: float = 0.05,
                min_revisit_interval: float = 0.2,
@@ -64,6 +73,17 @@ class AdaptiveTrackManager():
     [1] "Novel Radar Techniques and Applications", Richard Klemm, 2019
     """
     self.tracker = tracker
+
+    # Task parameters
+    self.az_beamwidth = az_beamwidth
+    self.el_beamwidth = el_beamwidth
+    self.center_frequency = center_frequency
+    self.bandwidth = bandwidth
+    self.pulsewidth = pulsewidth
+    self.prf = prf
+    self.n_pulses = n_pulses
+
+    # Adaptive track parameters
     self.track_sharpness = track_sharpness
     self.confirmation_interval = confirmation_interval
     self.min_revisit_interval = min_revisit_interval
@@ -79,7 +99,6 @@ class AdaptiveTrackManager():
   def process_detections(self,
                          detections: List[Detection],
                          time: Union[float, datetime.datetime],
-                         look: Look = None,
                          ) -> None:
     for detection in detections:
       # Check if the target is already in the list of tracks.
@@ -104,8 +123,8 @@ class AdaptiveTrackManager():
             covar=track.covar,
             predict_func=self.tracker.predict_func,
             transition_model=self.tracker.transition_model,
-            az_beamwidth=look.azimuth_beamwidth,
-            el_beamwidth=look.elevation_beamwidth,
+            az_beamwidth=self.azimuth_beamwidth,
+            el_beamwidth=self.elevation_beamwidth,
             track_sharpness=self.track_sharpness,
             min_revisit_interval=self.min_revisit_interval,
             max_revisit_interval=self.max_revisit_interval,
@@ -136,7 +155,7 @@ class AdaptiveTrackManager():
         dt = datetime.timedelta(seconds=dt)
       self.update_times[track.id] = time + dt
 
-  def generate_looks(self, 
+  def generate_looks(self,
                      time: Union[float, datetime.datetime]
                      ) -> List[Look]:
     confirmed_track_ids = [track.id for track in self.confirmed_tracks]

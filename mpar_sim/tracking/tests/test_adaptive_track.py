@@ -26,6 +26,8 @@ class TestAdaptiveTrackManager():
                       measurement_model=mm,
                       )
     return AdaptiveTrackManager(
+        az_beamwidth=10,
+        el_beamwidth=10,
         track_sharpness=0.15,
         confirmation_interval=1/20,
         min_revisit_interval=0.2,
@@ -43,12 +45,10 @@ class TestAdaptiveTrackManager():
     detections = [TrueDetection(state_vector=state_vector,
                                 groundtruth_path=target_path)]
 
-    look = Look()
-
     # Test the handling of the initiation and tentative tracks
     time = 0
     for _ in range(2):
-      manager.process_detections(detections, time, look)
+      manager.process_detections(detections, time)
       assert len(manager.tentative_tracks) == 1
       assert len(manager.confirmed_tracks) == 0
 
@@ -59,7 +59,7 @@ class TestAdaptiveTrackManager():
       time += manager.confirmation_interval
 
     # Test behavior for confirmed tracks
-    manager.process_detections(detections, time, look)
+    manager.process_detections(detections, time)
     assert len(manager.tentative_tracks) == 0
     assert len(manager.confirmed_tracks) == 1
 
@@ -77,10 +77,9 @@ class TestAdaptiveTrackManager():
     detections = [TrueDetection(state_vector=state_vector,
                                 groundtruth_path=target_path,
                                 timestamp=time)]
-    look = Look(azimuth_beamwidth=10, elevation_beamwidth=10)
 
     # Add a detection to the tentative tracks list and generate an updated look on it.
-    manager.process_detections(detections, time, look)
+    manager.process_detections(detections, time)
     time += manager.confirmation_interval
     looks = manager.generate_looks(time)
     
