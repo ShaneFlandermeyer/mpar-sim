@@ -43,7 +43,7 @@ class Look():
     
     self.tx_power = tx_power
     
-class TrackInitiationLook(Look):
+class TrackConfirmationLook(Look):
   """A look for initiating a track for new targets."""
   
 class TrackUpdateLook(Look):

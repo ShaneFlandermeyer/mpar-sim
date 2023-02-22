@@ -17,10 +17,13 @@ from mpar_sim.types.state import State
 class TestAdaptiveTrackManager():
   @pytest.fixture
   def manager(self):
+    mm = CartesianToRangeAzElRangeRate(
+        noise_covar=np.diag([0.2, 0.2, 1, 1])
+    )
     tracker = Tracker(predict_func=kalman_predict,
                       update_func=extended_kalman_update,
                       transition_model=ConstantVelocity(),
-                      measurement_model=CartesianToRangeAzElRangeRate(),
+                      measurement_model=mm,
                       )
     return AdaptiveTrackManager(
         track_sharpness=0.15,
@@ -64,7 +67,26 @@ class TestAdaptiveTrackManager():
     assert manager.update_times[track_id] == time + \
         manager.confirmation_interval
 
-    # TODO: Test if the resulting track actually makes sense
+  def test_generate_looks(self, manager: AdaptiveTrackManager):
+    # Make a fake detection to add to the track list
+    time = 0
+    target_path = GroundTruthPath(
+        GroundTruthState(np.array([1e3, 0, 1e3, 0, 0, 0])))
+    state_vector = manager.tracker.measurement_model.function(
+        target_path.state_vector, noise=False)
+    detections = [TrueDetection(state_vector=state_vector,
+                                groundtruth_path=target_path,
+                                timestamp=time)]
+    look = Look()
+
+    # Add a detection to the tentative tracks list and generate an updated look on it.
+    manager.process_detections(detections, time, look)
+    time += manager.confirmation_interval
+    looks = manager.generate_looks(time)
+    
+    assert len(looks) == 1
+    assert looks[0].azimuth_steering_angle == 45
+    assert looks[0].elevation_steering_angle == 0
 
 
 def test_adaptive_update_interval():

@@ -12,11 +12,11 @@ from typing import Callable, List, Tuple, Union
 
 import numpy as np
 
-from mpar_sim.common.coordinate_transform import cart2sph_covar
+from mpar_sim.common.coordinate_transform import cart2sph, cart2sph_covar
 from mpar_sim.models.transition.base import TransitionModel
 from mpar_sim.tracking.tracker import Tracker
 from mpar_sim.types.detection import Detection
-from mpar_sim.types.look import Look
+from mpar_sim.types.look import Look, TrackConfirmationLook, TrackUpdateLook
 from mpar_sim.types.state import State
 from mpar_sim.types.track import Track
 
@@ -125,22 +125,57 @@ class AdaptiveTrackManager():
         if len(track) >= self.n_confirm_detections:
           self.confirmed_tracks.append(track)
           self.tentative_tracks.remove(track)
-
         dt = self.confirmation_interval
 
       else:  # New track
         track = self.tracker.initiate(detection)
         self.tentative_tracks.append(track)
-
         dt = self.confirmation_interval
 
       if isinstance(time, datetime.datetime):
         dt = datetime.timedelta(seconds=dt)
       self.update_times[track.id] = time + dt
 
-  def generate_look(self, time: Union[float, datetime.datetime]) -> Look:
-    pass
+  def generate_looks(self, time: Union[float, datetime.datetime]) -> Look:
+    confirmed_track_ids = [track.id for track in self.confirmed_tracks]
+    tentative_track_ids = [track.id for track in self.tentative_tracks]
+    min_update_interval = min(self.confirmation_interval,
+                              self.min_revisit_interval)
 
+    new_looks = []
+    for track_id, update_time in self.update_times.items():
+      # If this was not present, a look would be generated for every track each time this function is called.
+      if update_time >= time + min_update_interval:
+        continue
+
+      # If we're already late on scheduling the look for this track, schedule it immediately
+      start_time = time if time > update_time else update_time
+
+      # Extrack the last state from the track
+      # TODO: Set the look priority based on whether or not the track is confirmed.
+      if track_id in confirmed_track_ids:
+        is_confirmed = True
+        itrack = confirmed_track_ids.index(track_id)
+        last_state = self.confirmed_tracks[itrack].history[-1]
+      else:
+        is_confirmed = False
+        itrack = tentative_track_ids.index(track_id)
+        last_state = self.tentative_tracks[itrack].history[-1]
+
+      # Propagate the state to the current time. Use the predicted position to determine where the beam should be steered.
+      predicted_state, _ = self.tracker.predict(last_state, start_time)
+      predicted_pos = predicted_state[self.position_mapping].ravel()
+      az, el, r = cart2sph(*predicted_pos, degrees=True)
+
+      if is_confirmed:
+        look = TrackUpdateLook(azimuth_steering_angle=az,
+                               elevation_steering_angle=el,)
+      else:
+        look = TrackConfirmationLook(azimuth_steering_angle=az,
+                                     elevation_steering_angle=el,)
+      new_looks.append(look)
+      
+    return new_looks
 
 def adaptive_revisit_interval(state_vector: np.ndarray,
                               covar: np.ndarray,
