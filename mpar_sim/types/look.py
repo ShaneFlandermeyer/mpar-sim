@@ -47,14 +47,17 @@ class Look():
     self.tx_power = tx_power
 
 
+class VolumeSearchLook(Look):
+  """A look for searching for conducting a volume search step."""
+
+
+class CuedSearchLook(Look):
+  """A look for performing a cued search (after a volume search has been completed).)"""
+
+
 class TrackConfirmationLook(Look):
   """A look for initiating a track for new targets."""
 
 
 class TrackUpdateLook(Look):
   """A look for updating an existing track"""
-
-
-class VolumeSearchLook(Look):
-  """A look for searching for conducting a volume search step."""
-  pass
