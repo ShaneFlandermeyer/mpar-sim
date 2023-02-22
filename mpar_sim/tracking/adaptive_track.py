@@ -32,6 +32,37 @@ class AdaptiveTrackManager():
                velocity_mapping: List[int] = [1, 3, 5],
                n_confirm_detections: int = 3,
                ):
+    """
+    This class implements an adaptive track manager that selects the revisit interval for each track based on the angular error from the track covariance matrix.
+
+    The implementation is based on section 3.2.3 of [1].
+
+    Parameters
+    ----------
+    tracker : Tracker
+        An object that implements a tracking algorithm. The following methods are required:
+          - predict(state, time)
+          - update(state, measurement)
+          - initiate(measurement)
+    track_sharpness : float, optional
+        The angular error threshold (in fractions of a beamwidth). Track updates are scheduled such that this is not reached, by default 0.15
+    confirmation_interval : float, optional
+        The revisit interval for a confirmation dwell, by default 0.05
+    min_revisit_interval : float, optional
+        The minimum revisit interval for track updates, by default 0.2
+    max_revisit_interval : float, optional
+        The maximum revisit interval for track updates, by default 2.0
+    position_mapping : List[int], optional
+        The indices of the state vector that correspond to position, by default [0, 2, 4]
+    velocity_mapping : List[int], optional
+        The indices of the state vector that correspond to velocity, by default [1, 3, 5]
+    n_confirm_detections : int, optional
+        Number of detections that must be associated to a tentative track before it is confirmed, by default 3
+
+    References
+    ----------
+    [1] "Novel Radar Techniques and Applications", Richard Klemm, 2019
+    """
     self.tracker = tracker
     self.track_sharpness = track_sharpness
     self.confirmation_interval = confirmation_interval
