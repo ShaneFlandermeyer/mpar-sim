@@ -83,17 +83,17 @@ class CuedSearchManager():
                               pulsewidth=self.pulsewidth,
                               prf=self.prf,
                               n_pulses=self.n_pulses,
-                              # TODO: Add start time and priority
+                              # Add priority
                               )
         self.looks.append(look)
 
   def generate_looks(self,
                      time: Union[float, datetime.datetime]
                      ) -> List[Look]:
-    # TODO: Increment the start time based on the beam sequence index
-
-    # TODO: Add time argument to the look object
-    looks = self.looks.copy()
+    looks = self.looks
+    for look in looks:
+      look.start_time = time
+      
     self.looks = []
     return looks
 

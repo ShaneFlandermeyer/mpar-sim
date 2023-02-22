@@ -31,9 +31,13 @@ class TestCuedSearchManager():
         state_vector=np.array([-20, -12, 10e3, 0]),
     )]
     manager.process_detections(detections)
+    
+    time += 1
     looks = manager.generate_looks(time)
     
     assert len(looks) == 7
+    for look in looks:
+      assert look.start_time == time
 
 
 
