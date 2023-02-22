@@ -80,7 +80,6 @@ class AdaptiveTrackAgent(Agent):
 
     # A queue of (time, track) tuples that indicates the next desired update time for each track that has received a new detection
     self.update_queue = deque()
-
     self.confirmed_tracks = set()
 
   def act(self, current_time: datetime.datetime) -> List[Look]:

@@ -12,14 +12,17 @@ def beam_broadening_factor(az_steering_angle: float, el_steering_angle: float) -
   """
   # Wrap the scan angle between -180 and 180 degrees
   look_angles = np.array(wrap_to_interval(
-      np.array([az_steering_angle, el_steering_angle]), -180, 180), copy=False)
+      np.array([az_steering_angle, el_steering_angle]), -180, 180))
+  look_angles = np.deg2rad(look_angles)
 
   # The beam broadening factor is approximately equal to the reciprocal of the effective aperture length in each dimension. For a uniform rectangular array, the effective length is proportional to 1/(cos(az)*cos(el)) in azimuth and 1/cos(el) in elevation.
-  broadening_az = 1 / \
-      (np.cos(np.radians(look_angles[0]))
-       * np.cos(np.radians(look_angles[1])))
-  broadening_el = 1 / np.cos(np.radians(look_angles[1]))
-  return max(broadening_az, np.cos(np.radians(89))), max(broadening_el, np.cos(np.radians(89)))
+  broadening_az = abs(1 / (np.cos(look_angles[0]) * np.cos(look_angles[1])))
+  broadening_el = abs(1 / np.cos(look_angles[1]))
+
+  # According to this model, the loss at 90 degrees is infinite. To avoid this, cap the loss at 89 degrees
+  max_broadening = 1 / np.cos(np.deg2rad(89))
+
+  return min(broadening_az, max_broadening), min(broadening_el, max_broadening)
 
 
 def beamwidth2gain(azimuth_beamwidth: float,
@@ -90,19 +93,27 @@ def beamwidth2aperture(
   return d
 
 
-def beam_scan_loss(az_steering_angle: float, el_steering_angle: float, az_cosine_power: float = 2, el_cosine_power: float = 2) -> float:
+def beam_scan_loss(az_steering_angle: float, el_steering_angle: float, cosine_power: float = -3) -> float:
   """
   Compute the loss due to the scan angle. The loss is proportional to the cosine of the scan angle in each dimension.
+  
+  See https://www.mathworks.com/help/phased/ug/spherical-coordinates.html#bsl6_dn for computations of broadside angle
 
   Args:
-      az_steering_angle (float): Azimuth scan angle
-      el_steering_angle (float): Elevation scan angle
-      az_cosine_power (float, optional): Power of the cosine in azimuth. Defaults to 2.
-      el_cosine_power (float, optional): Power of the cosine in elevation. Defaults to 2.
+      az_steering_angle (float): Azimuth scan angle in degrees.
+      el_steering_angle (float): Elevation scan angle in degrees.
+      cosine_power (float, optional): Power of the cosine term. Defaults to -3
 
   Returns:
       float: Scan loss (dB)
   """
-  # Wrap the scan angle between -180 and 180 degrees
-  return 10 * np.log10(np.power(np.cos(np.radians(az_steering_angle)), az_cosine_power) *
-                       np.power(np.cos(np.radians(el_steering_angle)), el_cosine_power))
+  az = np.deg2rad(az_steering_angle)
+  el = np.deg2rad(el_steering_angle)
+  off_boresight_angle = np.arcsin(np.sin(az) * np.cos(el))
+  loss = np.cos(off_boresight_angle)**cosine_power
+
+  return 10 * np.log10(loss)
+
+
+if __name__ == '__main__':
+  beam_scan_loss(45, 45)

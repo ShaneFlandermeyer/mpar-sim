@@ -23,7 +23,6 @@ class TestLinearTransitionModel():
 
 class TestLinearMeasurementModel():
   def function(self, state):
-    # TODO: No measurement noise
     return self.matrix() @ state
 
   def matrix(self):

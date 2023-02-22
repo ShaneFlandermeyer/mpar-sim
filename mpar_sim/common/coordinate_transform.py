@@ -3,22 +3,68 @@ import numpy as np
 from typing import Tuple, Union
 
 
-def azel2uv(az: np.ndarray, el: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+def azel2uv(az: Union[float, np.ndarray],
+            el: Union[float, np.ndarray],
+            degrees: bool = True) -> Tuple[Union[float, np.ndarray], ...]:
   """
-  Converts az/el in DEGREES to UV 
+  Convert azimuth and elevation angles to u and v coordinates
 
-  Args:
-      az (np.ndarray): Azimuth values
-      el (np.ndarray): Elevation values
+  See: https://www.mathworks.com/help/phased/ug/spherical-coordinates.html
 
-  Returns:
-      Tuple(np.ndarray): The tuple (u,v)
+  Parameters
+  ----------
+  az : Union[float, np.ndarray]
+      Azimuth angle(s)
+  el : Union[float, np.ndarray]
+      Elevation angle(s)
+  degrees : bool, optional
+      If true, input angles are in degrees, by default True
+
+  Returns
+  -------
+  Tuple[Union[float, np.ndarray], ...]
+      u/v coordinates
   """
+  if degrees:
+    az = np.deg2rad(az)
+    el = np.deg2rad(el)
 
-  u = np.cos(np.radians(el)) * np.sin(np.radians(az))
-  v = np.sin(np.radians(el))
+  u = np.sin(az) * np.cos(el)
+  v = np.sin(el)
 
-  return (u, v)
+  return u, v
+
+
+def uv2azel(u: Union[float, np.ndarray],
+            v: Union[float, np.ndarray],
+            degrees: bool = True) -> Tuple[Union[float, np.ndarray], ...]:
+  """
+  Convert u/v back to azimuth and elevation
+
+  See: https://www.mathworks.com/help/phased/ug/spherical-coordinates.html
+
+  Parameters
+  ----------
+  u : np.ndarray
+      u coordinate
+  v : np.ndarray
+      v coordinate
+  degrees : bool
+      If true, output angles are in degrees, by default True
+
+  Returns
+  -------
+  Tuple[np.ndarray, np.ndarray]
+      Azimuth and elevation angles
+  """
+  az = np.arctan2(u, np.sqrt(1 - u**2 - v**2))
+  el = np.arcsin(v)
+
+  if degrees:
+    az = np.rad2deg(az)
+    el = np.rad2deg(el)
+
+  return az, el
 
 
 def sph2cart(
@@ -32,11 +78,11 @@ def sph2cart(
 
   Parameters
   ----------
-  azimuth: Union[float, np.ndarray]: 
+  azimuth: Union[float, np.ndarray]:
     Azimuth angle in radians
-  elevation: Union[float, np.ndarray]: 
+  elevation: Union[float, np.ndarray]:
     Elevation angle
-  range: Union[float, np.ndarray]: 
+  range: Union[float, np.ndarray]:
     Range
   degrees: bool
 
@@ -164,34 +210,42 @@ def rotz(theta: Union[float, np.ndarray]):
                    [sin_theta, cos_theta, zeros],
                    [zeros, zeros, ones]])
 
-@lru_cache()
-def rpy2rotmat(roll: float, pitch: float, yaw: float) -> np.ndarray:
+
+def rpy2rotmat(roll: float,
+               pitch: float,
+               yaw: float,
+               degrees=True) -> np.ndarray:
   """
   Convert roll, pitch, yaw to rotation matrix
 
   Parameters
   ----------
   r : float
-      roll angle (radians)
+      roll angle
   p : float
-      pitch angle (radians)
+      pitch angle
   y : float
-      yaw angle (radians)
+      yaw angle
 
   Returns
   -------
   np.ndarray
       Rotation matrix
   """
+  if degrees:
+    roll = np.deg2rad(roll)
+    pitch = np.deg2rad(pitch)
+    yaw = np.deg2rad(yaw)
+
   R_roll = rotx(roll)
   R_pitch = roty(pitch)
   R_yaw = rotz(yaw)
   return R_yaw @ R_pitch @ R_roll
 
 
-def cart2sph_covar(cart_covar: np.ndarray, 
-                   x: float, 
-                   y: float, 
+def cart2sph_covar(cart_covar: np.ndarray,
+                   x: float,
+                   y: float,
                    z: float) -> np.ndarray:
   """
     Convert a covariance matrix in cartesian coordinates to spherical coordinates
@@ -211,7 +265,7 @@ def cart2sph_covar(cart_covar: np.ndarray,
     -------
     np.ndarray
         Covariance matrix transformed to spherical coordinates, where the first row is azimuth, the second row is elevation, and the third row is range
-  """  
+  """
   r = np.sqrt(x**2 + y**2 + z**2)
   s = np.sqrt(x**2 + y**2)
 
@@ -221,3 +275,39 @@ def cart2sph_covar(cart_covar: np.ndarray,
                 [x*z/(r**2*s), y*z/(r**2*s), -s/r**2],
                 [x/r, y/r, z/r]])
   return R @ cart_covar @ R.T
+
+
+def sph2cart_covar(sph_covar: np.ndarray,
+                   az: float,
+                   el: float,
+                   r: float,
+                   degrees: bool = True) -> np.ndarray:
+  # Handle conversion to degrees
+  if degrees:
+    az = np.deg2rad(az)
+    el = np.deg2rad(el)
+
+  # Needed to initiate the covariance matrix from a detection from a sensor that measures spherical coordinates
+
+  az_error = np.deg2rad(np.sqrt(sph_covar[0, 0]))
+  el_error = np.deg2rad(np.sqrt(sph_covar[1, 1]))
+  range_error = np.sqrt(sph_covar[2, 2])
+
+  # Compute position covariance
+  # Compute the covariance in the "sensor to target" coordinate frame.
+  # Here, the x-axis is along the line from the sensor to the target, the y-axis is in the plane of the sensor and target, and the z-axis is perpendicular to the plane of the sensor and target.
+  pos_covar_s2t = np.diag([range_error, r*np.cos(el)*az_error, r*el_error])**2
+  # Now convert to the radar coordinate frame
+  rotmat = rpy2rotmat(roll=0, pitch=-el, yaw=az, degrees=False)
+  pos_covar = rotmat @ pos_covar_s2t @ rotmat.T
+
+  # If range rate is measured, compute velocity covariance
+  if sph_covar.shape == (4, 4):
+    range_rate_error = np.sqrt(sph_covar[3, 3])
+    cross_velocity_error = 10  # Arbitrary large value
+
+    vel_covar_s2t = np.diag(
+        [range_rate_error, cross_velocity_error, cross_velocity_error])**2
+    vel_covar = rotmat @ vel_covar_s2t @ rotmat.T
+
+  return pos_covar, vel_covar

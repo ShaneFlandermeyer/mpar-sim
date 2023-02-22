@@ -1,14 +1,12 @@
 import datetime
+from typing import Union
 import numpy as np
 
 class State():
-  """Base state class."""
-
-class GaussianState(State):
   def __init__(self,
                state_vector: np.ndarray,
                covar: np.ndarray,
-               timestamp: datetime.datetime = None):
+               timestamp: Union[float, datetime.datetime] = None):
     """
     A class representing a Gaussian state, which is characterized by a mean (the state vector) and covariance matrix. The covariance matrix must be square and must have the same dimension as the state vector.
 

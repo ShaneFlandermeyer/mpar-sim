@@ -16,7 +16,7 @@ pip install -e .
 
 ## Radar System
 
-This library can be used to simulate a uniform rectangular antenna array. For example, a radar can be initiated as
+The simulation is built around the ```PhasedArrayRadar``` class, which simulates detections for a uniform rectangular array (URA) aperture. A radar can be instantiated as shown below:
 
 ```python
 radar = PhasedArrayRadar(
@@ -44,7 +44,7 @@ radar = PhasedArrayRadar(
 )
 ```
 
-The ```measure()``` function of the radar can be used to collect measurements for a list of ```GroundTruthState``` objects.
+The ```measure()``` function of the radar can be used to collect measurements for a list of ```GroundTruthState``` objects. These measurements are returned as ```Detection``` objects (```TrueDetection``` if the measurement corresponds to a real target or ```Clutter``` if it's from a false alarm or clutter).
 
 ## Features
 
@@ -57,7 +57,10 @@ The ```measure()``` function of the radar can be used to collect measurements fo
 - Motion models:
   - ConstantVelocity
 - Measurement models:
-  - CartesianToRangeAzElRangeRate 
+  - CartesianToRangeAzElRangeRate
+- Resource management:
+  - Best-first scheduler
+  - Power-aperture product-based resource manager
 - Tracking:
   - Kalman predict
   - Kalman update

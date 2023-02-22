@@ -11,7 +11,8 @@ def merwe_scaled_sigma_points(mean: np.ndarray,
                               # Merwe parameters
                               alpha: float,
                               beta: float,
-                              kappa: float) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+                              kappa: float
+                              ) -> Tuple[np.ndarray, ...]:
   """
   Compute sigma points (and the weights for each point) using Van der Merwe's algorithm
 
@@ -58,7 +59,8 @@ def merwe_scaled_sigma_points(mean: np.ndarray,
 def unscented_transform(sigmas: np.ndarray,
                         Wm: np.ndarray,
                         Wc: np.ndarray,
-                        process_noise: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+                        process_noise: np.ndarray
+                        ) -> Tuple[np.ndarray, np.ndarray]:
   """
   Use the unscented transform to compute the mean and covariance from a set of sigma points
 
@@ -98,7 +100,8 @@ def ukf_predict(prior_state: np.ndarray,
                 prior_covar: np.ndarray,
                 process_noise: np.ndarray,
                 transition_func: callable,
-                dt: Union[float, datetime.timedelta]) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+                dt: Union[float, datetime.timedelta]
+                ) -> Tuple[np.ndarray, ...]:
   """
   Unscented Kalman filter prediction step
 
@@ -149,7 +152,8 @@ def ukf_update(measurement: np.ndarray,
                Wc: np.ndarray,
                # Measurement parameters
                measurement_func: callable,
-               measurement_noise: np.ndarray,) -> Tuple[np.ndarray, np.ndarray]:
+               measurement_noise: np.ndarray,
+               ) -> Tuple[np.ndarray, np.ndarray]:
   """
   Unscented Kalman filter update step
 
@@ -216,7 +220,7 @@ def ukf_predict_update(prior_state: np.ndarray,
                        # Measurement model
                        measurement_func: callable,
                        measurement_noise: np.ndarray,
-                       ):
+                       ) -> Tuple[np.ndarray, np.ndarray]:
   predicted_state, predicted_covar, sigmas_f, Wm, Wc = ukf_predict(
       prior_state, prior_covar, process_noise, transition_func, dt)
 
@@ -246,9 +250,9 @@ if __name__ == '__main__':
   # Simulate measurements
   def measurement_func(state, noise_covar, noise=False):
     if noise:
-        noise = np.random.multivariate_normal(np.zeros(2), noise_covar)
+      noise = np.random.multivariate_normal(np.zeros(2), noise_covar)
     else:
-        noise = 0
+      noise = 0
     x = state[0].item()
     y = state[2].item()
     azimuth = np.arctan2(y, x)
@@ -286,12 +290,12 @@ if __name__ == '__main__':
   plt.xlabel('x')
   plt.ylabel('y')
   plt.legend()
-  
+
   plt.figure()
   plt.plot(np.rad2deg(measurements[0]))
   plt.xlabel('Time step')
   plt.ylabel('Azimuth (degrees)')
-  
+
   plt.figure()
   plt.plot(measurements[1])
   plt.xlabel('Time step')

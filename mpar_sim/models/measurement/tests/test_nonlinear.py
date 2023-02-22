@@ -2,6 +2,8 @@ from mpar_sim.models.measurement.nonlinear import CartesianToRangeAzElRangeRate
 import pytest
 import numpy as np
 
+from mpar_sim.types.detection import Detection
+
 
 class TestCartesianToAzElBearingRange:
   model = CartesianToRangeAzElRangeRate()
@@ -23,7 +25,6 @@ class TestCartesianToAzElBearingRange:
     assert np.allclose(expected, actual)
 
   def test_jacobian(self):
-    # TODO: Compare this with the matlab output
     state = np.array([1, 10, 2, 20, 3, 30])
     actual = self.model.jacobian(state)
     expected = np.array(
@@ -33,6 +34,22 @@ class TestCartesianToAzElBearingRange:
             [0, 0.2673, 0, 0.5345, 0, 0.8018]
          ])
     assert np.allclose(expected, actual, atol=1e-4)
+
+  def test_inverse_function(self):
+    """
+    Expected results from the example here:
+    https://www.mathworks.com/help/radar/ref/initcvekf.html
+    """
+    mm = CartesianToRangeAzElRangeRate(
+        translation_offset=np.array([25, -40, 0]),
+        velocity=np.array([0, 5, 0])
+    )
+    detection = Detection(state_vector=np.array([45, -10, 1000, -4]))
+    actual = mm.inverse_function(detection.state_vector)
+    expected = np.array(
+        [721.3642, -2.7855, 656.3642, 2.2145, -173.6482, 0.6946])
+    assert np.allclose(expected.ravel(), actual.ravel(), atol=1e-4)
+    
 
 
 if __name__ == '__main__':
