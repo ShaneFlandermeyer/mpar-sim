@@ -252,14 +252,6 @@ class ParticleSurveillance(gym.Env):
     el_beamwidth = action[3] * (self.radar.max_el_beamwidth -
                                 self.radar.min_el_beamwidth) + self.radar.min_el_beamwidth
 
-    # Compute the number of elements used to form the Tx beam. Assuming the total Tx power is equal to the # of tx elements times the max element power
-    # tx_beamwidths =
-    tx_aperture_size = beamwidth2aperture(
-        np.array([az_beamwidth, el_beamwidth]), self.radar.wavelength) / self.radar.wavelength
-    n_tx_elements = np.prod(np.ceil(
-        tx_aperture_size / self.radar.element_spacing).astype(int))
-    tx_power = n_tx_elements * self.radar.element_tx_power
-
     look = Look(
         azimuth_steering_angle=az_steering_angle,
         elevation_steering_angle=el_steering_angle,
@@ -269,7 +261,6 @@ class ParticleSurveillance(gym.Env):
         pulsewidth=action[5],
         prf=action[6],
         n_pulses=action[7],
-        tx_power=tx_power,
         start_time=self.time,
     )
     return look

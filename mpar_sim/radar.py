@@ -7,7 +7,7 @@ from scipy.special import gammaincinv
 
 from mpar_sim.beam.beam import RectangularBeam
 from mpar_sim.beam.common import (aperture2beamwidth, beam_broadening_factor,
-                                  beam_scan_loss)
+                                  beam_scan_loss, beamwidth2aperture)
 from mpar_sim.common.coordinate_transform import cart2sph
 from mpar_sim.models.measurement.base import MeasurementModel
 from mpar_sim.models.measurement.estimation import (angle_crlb, range_crlb,
@@ -154,8 +154,18 @@ class PhasedArrayRadar():
         elevation_steering_angle=look.elevation_steering_angle,
     )
 
+    # If the user specifies a transmit power, use that. Otherwise, compute the transmit power from the aperture size.
+    if look.tx_power:
+      self.tx_power = look.tx_power
+    else:
+      beamwidths = np.array([look.azimuth_beamwidth, look.elevation_beamwidth])
+      tx_aperture_size = beamwidth2aperture(
+          beamwidths, self.wavelength) / self.wavelength
+      n_tx_elements = np.prod(np.ceil(
+          tx_aperture_size / self.element_spacing).astype(int))
+      self.tx_power = n_tx_elements * self.element_tx_power
+
     # Compute the loop gain, which is the portion of the SNR computation that does not depend on the target RCS or range.
-    self.tx_power = look.tx_power
     pulse_compression_gain = look.bandwidth * look.pulsewidth
     noise_power = constants.Boltzmann * self.system_temperature * \
         10**(self.noise_figure/10) * self.sample_rate
@@ -257,7 +267,7 @@ class PhasedArrayRadar():
     # Compute SNR and probability of detection assuming a Swerling 1 target model
     beam_shape_loss_db = self.tx_beam.shape_loss(relative_az, relative_el)
     beam_scan_loss_db = beam_scan_loss(self.tx_beam.azimuth_steering_angle,
-                                    self.tx_beam.elevation_steering_angle)
+                                       self.tx_beam.elevation_steering_angle)
     snr_db = 10*np.log10(self.loop_gain) + 10*np.log10(rcs) - \
         40*np.log10(r) - beam_shape_loss_db - beam_scan_loss_db
     snr_lin = 10**(snr_db/10)

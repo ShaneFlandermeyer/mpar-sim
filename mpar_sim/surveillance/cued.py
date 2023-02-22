@@ -1,6 +1,6 @@
 import datetime
 from functools import lru_cache
-from typing import List, Tuple, Union
+from typing import List, Optional, Tuple, Union
 
 import numpy as np
 
@@ -11,15 +11,30 @@ from mpar_sim.types.look import CuedSearchLook, Look
 
 class CuedSearchManager():
   def __init__(self,
+               # Task parameters
                az_beamwidth: float,
                el_beamwidth: float,
-               az_lims: List[float],
-               el_lims: List[float],
+               center_frequency: Optional[float] = None,
+               bandwidth: Optional[float] = None,
+               pulsewidth: Optional[float] = None,
+               prf: Optional[float] = None,
+               n_pulses: Optional[int] = None,
+               # Search grid parameters
+               az_lims: Optional[List[float]] = None,
+               el_lims: Optional[List[float]] = None,
                az_spacing_beamwidths: float = 0.75,
                el_spacing_beamwidths: float = 0.75,
                ):
+    # Task parameters
     self.az_beamwidth = az_beamwidth
     self.el_beamwidth = el_beamwidth
+    self.center_frequency = center_frequency
+    self.bandwidth = bandwidth
+    self.pulsewidth = pulsewidth
+    self.prf = prf
+    self.n_pulses = n_pulses
+
+    # Search grid parameters
     self.az_lims = az_lims
     self.el_lims = el_lims
     self.az_spacing_beamwidths = az_spacing_beamwidths
@@ -41,6 +56,7 @@ class CuedSearchManager():
     # TODO: Add a clustering algorithm such as DBSCAN to group detections that likely came from the same target.
 
     for detection in detections:
+      # Create a cued search grid around the detection
       measurement = detection.state_vector
       az_points, el_points = cued_search_grid(
           az_center=measurement[0],
@@ -56,16 +72,26 @@ class CuedSearchManager():
       )
 
       # Add the current beam positions to the queue
-      # TODO: Add other look parameters
-      # TODO: Increment the start time based on the beam sequence index
+
       for az, el in zip(az_points, el_points):
         look = CuedSearchLook(azimuth_steering_angle=az,
-                              elevation_steering_angle=el,)
+                              elevation_steering_angle=el,
+                              azimuth_beamwidth=self.az_beamwidth,
+                              elevation_beamwidth=self.el_beamwidth,
+                              center_frequency=self.center_frequency,
+                              bandwidth=self.bandwidth,
+                              pulsewidth=self.pulsewidth,
+                              prf=self.prf,
+                              n_pulses=self.n_pulses,
+                              # TODO: Add start time and priority
+                              )
         self.looks.append(look)
 
   def generate_looks(self,
                      time: Union[float, datetime.datetime]
                      ) -> List[Look]:
+    # TODO: Increment the start time based on the beam sequence index
+
     # TODO: Add time argument to the look object
     looks = self.looks.copy()
     self.looks = []
