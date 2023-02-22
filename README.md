@@ -48,21 +48,22 @@ The ```measure()``` function of the radar can be used to collect measurements fo
 
 ## Features
 
-- Agents:
-  - RasterScanAgent
 - Beams:
-  - RectangularBeam
-  - GaussianBeam
-  - SincBeam
+  - Rectangular
+  - Gaussian
+  - Sinc
 - Motion models:
-  - ConstantVelocity
+  - Constant velocity white noise acceleration
 - Measurement models:
-  - CartesianToRangeAzElRangeRate
+  - Cartesian to azimuth/elevation/range/velocity
 - Resource management:
   - Best-first scheduler
   - Power-aperture product-based resource manager
+- Surveillance:
+  - Raster scan
+  - Cued search
 - Tracking:
-  - Kalman predict
-  - Kalman update
-  - Extended kalman update
-  - Unscented kalman update
+  - Adaptive track manager
+  - Standard kalman filter
+  - Extended kalman filter
+  - Unscented kalman filter

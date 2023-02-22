@@ -51,10 +51,8 @@ class Tracker():
     """
     Initiate a new track from a measurement.
 
-    Assumes the measurement model is reversible and nonlinear.
-    # TODO: Add diagonal loading to covariance for numerical stability
-
-
+    Assumes the measurement model is reversible (to call the inverse function).
+    
     Parameters
     ----------
     measurement : np.ndarray
