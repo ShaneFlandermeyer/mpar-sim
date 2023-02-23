@@ -48,14 +48,15 @@ class PhasedArrayRadar():
                beam_shape: Callable = RectangularBeam,
                # Detection settings
                false_alarm_rate: float = 1e-6,
-               include_false_alarms: bool = True,
+               include_false_alarms: bool = False,
                az_fov: Union[List, np.ndarray] = np.array([-90, 90]),
                el_fov: Union[List, np.ndarray] = np.array([-90, 90]),
-               min_range: float = 0,
-               max_range: float = np.inf,
-               max_range_rate: float = np.inf,
+               min_range: Optional[float] = 0,
+               max_range: Optional[float] = np.inf,
+               max_range_rate: Optional[float] = np.inf,
                alias_measurements: bool = False,
-               discretize_measurements: bool = False
+               discretize_measurements: bool = False,
+               noise_covar: Optional[np.ndarray] = None,
                ) -> None:
     self.ndim_state = ndim_state
     self.position = position
@@ -85,6 +86,7 @@ class PhasedArrayRadar():
     self.max_range_rate = max_range_rate
     self.alias_measurements = alias_measurements
     self.discretize_measurements = discretize_measurements
+    self.noise_covar = noise_covar
 
     # Compute the maximum possible beamwidth in az/el for the array geometry
     aperture_width = self.n_elements_x * self.element_spacing * self.wavelength
@@ -181,53 +183,10 @@ class PhasedArrayRadar():
         max_unambiguous_range_rate=self.max_unambiguous_radial_speed,
         position_mapping=self.position_mapping,
         velocity_mapping=self.velocity_mapping,
-        noise_covar=np.diag([0.1, 0.1, 0.1, 0.1]),
         alias_measurements=self.alias_measurements,
         discretize_measurements=self.discretize_measurements,
+        noise_covar=self.noise_covar,
     )
-
-  def is_detectable(self,
-                    target_az: float, target_el: float, target_range: float) -> bool:
-    """
-    Returns true if the target is within the radar's field of view (in range, azimuth, and elevation) and false otherwise
-    Parameters
-    ----------
-    target_az: float
-        Azimuth angle of the target in degrees
-    target_el: float
-        Elevation angle of the target in degrees
-    target_range: float
-        Range of the target in meters
-    Returns
-    -------
-    bool
-        Whether the target can be detected by the radar
-    """
-    valid_az = np.logical_and(
-        self.az_fov[0] <= target_az, target_az <= self.az_fov[1])
-    valid_el = np.logical_and(
-        self.el_fov[0] <= target_el, target_el <= self.el_fov[1])
-    valid_range = np.logical_and(
-        self.min_range <= target_range, target_range <= self.max_range)
-    return np.logical_and(valid_az, np.logical_and(valid_el, valid_range))
-
-  def is_in_beam(self, relative_az: float, relative_el: float) -> bool:
-    """
-    Returns true if the target is within the radar's beam and false otherwise
-    Parameters
-    ----------
-    target_az: float
-        Azimuth angle of the target in degrees
-    target_el: float
-        Elevation angle of the target in degrees
-    Returns
-    -------
-    bool
-        Whether the target is within the radar's beam
-    """
-    return np.logical_and(
-        np.abs(relative_az) <= 0.5 * self.tx_beam.azimuth_beamwidth,
-        np.abs(relative_el) <= 0.5 * self.tx_beam.elevation_beamwidth)
 
   def measure(self,
               ground_truths: List[GroundTruthState],
@@ -282,37 +241,41 @@ class PhasedArrayRadar():
     n_detections = np.count_nonzero(is_detected)
 
     if n_detections > 0:
-      # Use the SNR to compute the measurement accuracies in each dimension. These accuracies are set to the CRLB of each quantity (i.e., we assume we have efficient estimators)
-      single_pulse_snr = snr_lin / self.n_pulses
-      # The CRLB uses the RMS bandwidth. Assuming an LFM waveform with a rectangular spectrum, B_rms = B / sqrt(12)
-      rms_bandwidth = self.bandwidth / np.sqrt(12)
-      rms_range_res = constants.c / (2 * rms_bandwidth)
-      azimuth_variance = angle_crlb(
-          snr=snr_lin[is_detected],
-          resolution=self.rx_beam.azimuth_beamwidth,
-          bias_fraction=0.01)
-      elevation_variance = angle_crlb(
-          snr=snr_lin[is_detected],
-          resolution=self.rx_beam.elevation_beamwidth,
-          bias_fraction=0.01)
-      range_variance = range_crlb(
-          snr=single_pulse_snr[is_detected],
-          resolution=rms_range_res,
-          bias_fraction=0.05)
-      velocity_variance = velocity_crlb(
-          snr=snr_lin[is_detected],
-          resolution=self.velocity_resolution,
-          bias_fraction=0.05)
       # Concatenate the measurement noise covariance matrices to pass them into the measurement model
       if noise:
-        measurement_model.noise_covar = np.zeros(
-            (measurement_model.ndim_meas, measurement_model.ndim_meas, n_detections))
-        for i in range(n_detections):
-          measurement_model.noise_covar[..., i] = np.diag(
-              [azimuth_variance[i],
-               elevation_variance[i],
-               range_variance[i],
-               velocity_variance[i]])
+        if self.noise_covar:
+          measurement_model.noise_covar = self.noise_covar
+        else:
+          # If the noise covariance matrix is not manually provided, compute it from the CRLB. Since the CRLB depends on the SNR, we need to compute it separately for each target
+          measurement_model.noise_covar = np.zeros(
+              (measurement_model.ndim_meas, measurement_model.ndim_meas, n_detections))
+
+          single_pulse_snr = snr_lin / self.n_pulses
+          # The CRLB uses the RMS bandwidth. Assuming an LFM waveform with a rectangular spectrum, B_rms = B / sqrt(12)
+          rms_bandwidth = self.bandwidth / np.sqrt(12)
+          rms_range_res = constants.c / (2 * rms_bandwidth)
+          azimuth_variance = angle_crlb(
+              snr=snr_lin[is_detected],
+              resolution=self.rx_beam.azimuth_beamwidth,
+              bias_fraction=0.01)
+          elevation_variance = angle_crlb(
+              snr=snr_lin[is_detected],
+              resolution=self.rx_beam.elevation_beamwidth,
+              bias_fraction=0.01)
+          range_variance = range_crlb(
+              snr=single_pulse_snr[is_detected],
+              resolution=rms_range_res,
+              bias_fraction=0.05)
+          velocity_variance = velocity_crlb(
+              snr=snr_lin[is_detected],
+              resolution=self.velocity_resolution,
+              bias_fraction=0.05)
+          for i in range(n_detections):
+            measurement_model.noise_covar[..., i] = np.diag(
+                [azimuth_variance[i],
+                 elevation_variance[i],
+                 range_variance[i],
+                 velocity_variance[i]])
       measurements = measurement_model.function(
           state_vectors[:, is_detected], noise=noise)
 
@@ -369,3 +332,48 @@ class PhasedArrayRadar():
         detections.append(detection)
 
     return detections
+
+  def is_detectable(self,
+                    target_az: float,
+                    target_el: float,
+                    target_range: float) -> bool:
+    """
+    Returns true if the target is within the radar's field of view (in range, azimuth, and elevation) and false otherwise
+    Parameters
+    ----------
+    target_az: float
+        Azimuth angle of the target in degrees
+    target_el: float
+        Elevation angle of the target in degrees
+    target_range: float
+        Range of the target in meters
+    Returns
+    -------
+    bool
+        Whether the target can be detected by the radar
+    """
+    valid_az = np.logical_and(
+        self.az_fov[0] <= target_az, target_az <= self.az_fov[1])
+    valid_el = np.logical_and(
+        self.el_fov[0] <= target_el, target_el <= self.el_fov[1])
+    valid_range = np.logical_and(
+        self.min_range <= target_range, target_range <= self.max_range)
+    return np.logical_and(valid_az, np.logical_and(valid_el, valid_range))
+
+  def is_in_beam(self, relative_az: float, relative_el: float) -> bool:
+    """
+    Returns true if the target is within the radar's beam and false otherwise
+    Parameters
+    ----------
+    target_az: float
+        Azimuth angle of the target in degrees
+    target_el: float
+        Elevation angle of the target in degrees
+    Returns
+    -------
+    bool
+        Whether the target is within the radar's beam
+    """
+    return np.logical_and(
+        np.abs(relative_az) <= 0.5 * self.tx_beam.azimuth_beamwidth,
+        np.abs(relative_el) <= 0.5 * self.tx_beam.elevation_beamwidth)
