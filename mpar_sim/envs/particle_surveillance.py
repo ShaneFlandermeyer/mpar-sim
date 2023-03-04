@@ -19,7 +19,7 @@ from mpar_sim.types.groundtruth import GroundTruthPath, GroundTruthState
 
 
 class ParticleSurveillance(gym.Env):
-  metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 60}
+  metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 30}
 
   def __init__(self,
                radar: PhasedArrayRadar,
@@ -180,6 +180,7 @@ class ParticleSurveillance(gym.Env):
       terminated = True
     else:
       terminated = False
+    terminated = False
 
     truncated = False
 
