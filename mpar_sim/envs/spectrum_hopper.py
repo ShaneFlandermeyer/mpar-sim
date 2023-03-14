@@ -31,7 +31,7 @@ class SpectrumHopper(gym.Env):
 
     # Observation space has two channels. The first channel is the interference spectrogram and the second is the radar spectrogram
     self.observation_space = gym.spaces.Box(
-        low=0, high=1, shape=(84, 84, 2), dtype=np.uint8)
+        low=0, high=255, shape=(84, 84, 2), dtype=np.uint8)
 
     # Action space is the start and span of the radar waveform
     self.action_space = gym.spaces.Box(
@@ -62,15 +62,15 @@ class SpectrumHopper(gym.Env):
     i_stop_freq = i_start_freq + n_freq_bins
     self.spectrogram[:, :, 1] = np.roll(self.spectrogram[:, :, 1], -1, axis=0)
     self.spectrogram[-1:, :, 1] = 0
-    self.spectrogram[-n_time_bins_pulse:, i_start_freq:i_stop_freq, 1] = 1
+    self.spectrogram[-n_time_bins_pulse:, i_start_freq:i_stop_freq, 1] = 255
 
     self.time += self.pri
 
     # Compute reward
     # TODO: Using simple reward function for now
     occupancy_reward = radar_bw / self.channel_bw
-    collision_reward = np.sum(np.logical_and(self.spectrogram[-1:, :, 0] == 1,
-                                    self.spectrogram[-1:, :, 1] == 1)) / n_freq_bins
+    collision_reward = np.sum(np.logical_and(self.spectrogram[-1:, :, 0] == 255,
+                                    self.spectrogram[-1:, :, 1] == 255)) / n_freq_bins
     reward = occupancy_reward + collision_reward
 
     obs = self.spectrogram
@@ -117,10 +117,10 @@ if __name__ == '__main__':
     bandwidth = np.random.uniform(0, 1)
     obs, reward, term, trunc, info = env.step([start_freq, bandwidth])
 
-  # plt.figure()
-  # plt.imshow(obs[:, :, 0],
-  #            extent=(env.freq_axis[0],
-  #            env.freq_axis[-1], env.time_axis[0]*1e3, env.time_axis[-1]*1e3),
-  #            aspect='auto')
-  # plt.colorbar()
-  # plt.show()
+  plt.figure()
+  plt.imshow(obs[:, :, 0],
+             extent=(env.freq_axis[0],
+             env.freq_axis[-1], env.time_axis[0]*1e3, env.time_axis[-1]*1e3),
+             aspect='auto')
+  plt.colorbar()
+  plt.show()

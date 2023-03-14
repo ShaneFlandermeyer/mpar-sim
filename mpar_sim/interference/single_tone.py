@@ -60,7 +60,7 @@ class SingleToneInterferer():
     # Move the spectrogram to the current time
     spectrogram = np.roll(spectrogram, -1, axis=0)
     spectrogram[-1:, :] = 0
-    spectrogram[-1, i_start_freq:i_stop_freq] = self.state
+    spectrogram[-1, i_start_freq:i_stop_freq] = 255*self.state
 
     return spectrogram
 
