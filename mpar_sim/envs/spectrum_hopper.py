@@ -1,5 +1,8 @@
 import gymnasium as gym
 import numpy as np
+import matplotlib.pyplot as plt
+
+from mpar_sim.interference.single_tone import SingleToneInterferer
 
 
 class SpectrumHopper(gym.Env):
@@ -16,53 +19,80 @@ class SpectrumHopper(gym.Env):
   def __init__(self):
     # TODO: Hard-coded for now
     self.channel_bw = 100e6
-    self.interference_bw = 20e6
-    self.interference_duration = 5e-3
+    self.interference = SingleToneInterferer(
+        start_freq=40e6,
+        bandwidth=20e6,
+        duration=10e-3,
+        duty_cycle=0.5,
+    )
     self.spectrogram_duration = 30e-3
     self.pri = 409.6e-6
     self.pulsewidth = 10e-6
 
-    # TODO: Add the observation space
+    # Observation space has two channels. The first channel is the interference spectrogram and the second is the radar spectrogram
+    self.observation_space = gym.spaces.Box(
+        low=0, high=1, shape=(84, 84, 2), dtype=np.uint8)
 
     # Action space is the start and span of the radar waveform
     self.action_space = gym.spaces.Box(
-        low=np.array([0, 0], dtype=np.float32),
-        high=np.array([1, 1], dtype=np.float32),
-    )
+        low=0, high=1, shape=(2,), dtype=np.float32)
+
+    # Note: Assuming time axis is discretized based on the PRF. This doesn't work if the PRF changes, but by that point I hope to be working on real-world data
+    self.freq_axis = np.linspace(
+        0, self.channel_bw, self.observation_space.shape[1])
+    self.time_axis = np.arange(0, self.spectrogram_duration, self.pri)
 
   def step(self, action: np.ndarray):
     # Update the radar waveform
     start_freq = action[0] * self.channel_bw
     radar_bw = min(action[1] * self.channel_bw, self.channel_bw - start_freq)
 
-    # TODO: Update the radar observation
-    radar_dx = int(
-        max(radar_bw / self.channel_bw * self.spectrogram.shape[1], 1)
-    )
-    radar_dy = int(
-        max(self.pulsewidth / self.spectrogram_duration *
-            self.spectrogram.shape[0], 1)
-    )
-
-    # TODO: Update the communications interference
-    # TODO: Handle the fact that the PRI and interference changes are not time-aligned
-    if self.time > self.interference_duration:
-      self._update_interference()
-
-    # TODO: Update the interference observation
-
-    # TODO: Compute reward
+    # Update the communications interference
+    self.spectrogram[:, :, 0] = self.interference.update_spectrogram(
+        spectrogram=self.spectrogram[:, :, 0],
+        freq_axis=self.freq_axis,
+        start_time=self.time)
+    
+    # Update the radar observation
+    n_freq_bins = np.digitize(
+        radar_bw, self.freq_axis - np.min(self.freq_axis))
+    n_time_bins_pulse = np.digitize(self.pulsewidth, self.time_axis)
+    i_start_freq = np.digitize(
+        start_freq, self.freq_axis - np.min(self.freq_axis), right=True)
+    i_stop_freq = i_start_freq + n_freq_bins
+    self.spectrogram[:, :, 1] = np.roll(self.spectrogram[:, :, 1], -1, axis=0)
+    self.spectrogram[-1:, :, 1] = 0
+    self.spectrogram[-n_time_bins_pulse:, i_start_freq:i_stop_freq, 1] = 1
 
     self.time += self.pri
 
-    raise NotImplementedError
+    # Compute reward
+    # TODO: Using simple reward function for now
+    occupancy_reward = radar_bw / self.channel_bw
+    collision_reward = np.sum(np.logical_and(self.spectrogram[-1:, :, 0] == 1,
+                                    self.spectrogram[-1:, :, 1] == 1)) / n_freq_bins
+    reward = occupancy_reward + collision_reward
+
+    obs = self.spectrogram
+    terminated = False
+    truncated = False
+    info = {}
+    return obs, reward, terminated, truncated, info
 
   def reset(self, seed: int = None, options: dict = None):
-    # For the spectrogram, the first channel is the interference occupancy map, and the second is for the radar
-    self.spectrogram = np.zeros((84, 84, 2), dtype=np.uint8)
-    self.interference_start_freq = self.np_random.uniform(0, self.channel_bw)
-    self.interference_sweep_direction = self.np_random.choice([-1, 1])
+    # Reset the spectrogram and time counter
+    self.spectrogram = np.zeros(self.observation_space.shape, dtype=np.uint8)
     self.time = 0
+
+    # Run the interference for a variable number of steps
+    self.interference.reset()
+    n_warmup_steps = self.np_random.integers(0, self.spectrogram.shape[0])
+    for i in range(1, n_warmup_steps + 1):
+      self.spectrogram[:, :, 0] = self.interference.update_spectrogram(
+          spectrogram=self.spectrogram[:, :, 0],
+          freq_axis=self.freq_axis,
+          start_time=(i-1)*self.pri)
+    self.interference.last_update_time = 0
 
     observation = self.spectrogram
     info = {}
@@ -75,20 +105,22 @@ class SpectrumHopper(gym.Env):
   def close(self):
     raise NotImplementedError
 
-  ##########################
-  # Internal helper methods
-  ##########################
-  def _update_interference(self):
-    next_start_freq = self.interference_start_freq + \
-        self.interference_sweep_direction * self.interference_bw
-    if next_start_freq < 0 or next_start_freq > self.channel_bw:
-      self.interference_sweep_direction *= -1
-      self.interference_start_freq += self.interference_sweep_direction * self.interference_bw
-    else:
-      self.interference_start_freq = next_start_freq
-
 
 if __name__ == '__main__':
   env = SpectrumHopper()
   obs, info = env.reset()
-  env.step([0.5, 0.5])
+  print(env.action_space)
+  print(env.observation_space)
+
+  for i in range(1):
+    start_freq = np.random.uniform(0, 1)
+    bandwidth = np.random.uniform(0, 1)
+    obs, reward, term, trunc, info = env.step([start_freq, bandwidth])
+
+  # plt.figure()
+  # plt.imshow(obs[:, :, 0],
+  #            extent=(env.freq_axis[0],
+  #            env.freq_axis[-1], env.time_axis[0]*1e3, env.time_axis[-1]*1e3),
+  #            aspect='auto')
+  # plt.colorbar()
+  # plt.show()
