@@ -7,7 +7,7 @@ readme = "README.md"
 packages = [{include = "mpar_sim"}]
 
 [tool.poetry.dependencies]
-python = "^3.10"
+python = "^3.8"
 stonesoup = "^0.1b11"
 numpy = "^1.23.4"
 scipy = "^1.9.3"

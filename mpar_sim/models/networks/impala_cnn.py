@@ -5,6 +5,7 @@ import numpy as np
 
 class ResidualBlock(nn.Module):
   """A basic two-layer residual block."""
+
   def __init__(self, in_channels: int) -> None:
     super(ResidualBlock, self).__init__()
     self.conv1 = nn.Conv2d(
@@ -23,9 +24,10 @@ class ResidualBlock(nn.Module):
 class ImpalaBlock(nn.Module):
   """
   An "impala block" as described in Espeholt et al. 2018.
-  
+
   Contains two residual blocks and a pooled convolutional layer
   """
+
   def __init__(self, in_channels: int, out_channels: int) -> None:
     super(ImpalaBlock, self).__init__()
     self.conv = nn.Conv2d(in_channels=in_channels,
@@ -42,19 +44,19 @@ class ImpalaBlock(nn.Module):
     return x
 
 
-class ImpalaModel(nn.Module):
+class ImpalaNetwork(nn.Module):
   """The full impala network"""
-  def __init__(self, h: int, w: int, c: int) -> None:
-    super(ImpalaModel, self).__init__()
+
+  def __init__(self, c: int, h: int, w: int,
+               out_features: int) -> None:
+    super(ImpalaNetwork, self).__init__()
     self.imp1 = ImpalaBlock(in_channels=c, out_channels=16)
     self.imp2 = ImpalaBlock(in_channels=16, out_channels=32)
     self.imp3 = ImpalaBlock(in_channels=32, out_channels=32)
 
     out_shape = self.imp3(
         self.imp2(self.imp1(torch.zeros(c, h, w)))).shape
-    self.fc = nn.Linear(in_features=np.prod(out_shape), out_features=256)
-
-    self.output_dim = 256
+    self.fc = nn.Linear(in_features=np.prod(out_shape), out_features=out_features)
 
   def forward(self, x: torch.Tensor) -> torch.Tensor:
     x = self.imp1(x)
