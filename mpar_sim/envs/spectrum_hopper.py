@@ -52,7 +52,7 @@ class SpectrumHopper(gym.Env):
         spectrogram=self.spectrogram[0],
         freq_axis=self.freq_axis,
         start_time=self.time)
-    
+
     # Update the radar observation
     n_freq_bins = np.digitize(
         radar_bw, self.freq_axis - np.min(self.freq_axis))
@@ -70,7 +70,7 @@ class SpectrumHopper(gym.Env):
     # TODO: Using simple reward function for now
     occupancy_reward = radar_bw / self.channel_bw
     collision_reward = -np.sum(np.logical_and(self.spectrogram[0, -1:] == 255,
-                                    self.spectrogram[1, -1:] == 255)) / n_freq_bins
+                                              self.spectrogram[1, -1:] == 255)) / n_freq_bins
     reward = occupancy_reward + collision_reward
 
     obs = self.spectrogram
@@ -84,15 +84,22 @@ class SpectrumHopper(gym.Env):
     self.spectrogram = np.zeros(self.observation_space.shape, dtype=np.uint8)
     self.time = 0
 
-    # Run the interference for a variable number of steps
     self.interference.reset()
-    # TODO: Make this a wrapper
-    n_warmup_steps = self.np_random.integers(0, self.spectrogram.shape[1])
-    for i in range(n_warmup_steps):
-      self.spectrogram[0] = self.interference.update_spectrogram(
-          spectrogram=self.spectrogram[0],
-          freq_axis=self.freq_axis,
-          start_time=i*self.pri)
+    # Randomize the interferer
+    self.interference.duration = np.random.uniform(
+        0, self.spectrogram_duration)
+    self.interference.duty_cycle = np.random.uniform(0, 1)
+    self.interference.start_freq = np.random.uniform(0, self.channel_bw)
+    # self.interference.bandwidth = np.random.uniform(
+    #     0, self.channel_bw - self.interference.start_freq)
+    # Run the interference for a variable number of steps
+    # TODO: Make a warm start wrapper
+    # n_warmup_steps = self.np_random.integers(0, self.spectrogram.shape[1])
+    # for i in range(n_warmup_steps):
+    #   self.spectrogram[0] = self.interference.update_spectrogram(
+    #       spectrogram=self.spectrogram[0],
+    #       freq_axis=self.freq_axis,
+    #       start_time=i*self.pri)
 
     # TODO: Randomize the position of the interferer
     observation = self.spectrogram
