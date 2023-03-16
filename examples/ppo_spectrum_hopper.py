@@ -1,5 +1,4 @@
 # docs and experiment results can be found at https://docs.cleanrl.dev/rl-algorithms/ppo/#ppo_ataripy
-from mpar_sim.models.networks.nature_cnn import NatureCNN
 import mpar_sim.envs
 from torch.utils.tensorboard import SummaryWriter
 from torch.distributions.normal import Normal
@@ -19,6 +18,7 @@ import argparse
 import os
 
 from mpar_sim.models.networks.nature_cnn import NatureCNN
+from mpar_sim.models.networks.impala_cnn import ImpalaNetwork
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
@@ -48,13 +48,13 @@ def parse_args():
   # Algorithm specific arguments
   parser.add_argument("--env-id", type=str, default="mpar_sim/SpectrumHopper-v0",
       help="the id of the environment")
-  parser.add_argument("--total-timesteps", type=int, default=1_000_000,
+  parser.add_argument("--total-timesteps", type=int, default=5_000_000,
       help="total timesteps of the experiments")
   parser.add_argument("--learning-rate", type=float, default=3e-4,
       help="the learning rate of the optimizer")
   parser.add_argument("--num-envs", type=int, default=16,
       help="the number of parallel game environments")
-  parser.add_argument("--num-steps", type=int, default=2048,
+  parser.add_argument("--num-steps", type=int, default=1024,
       help="the number of steps to run in each environment per policy rollout")
   parser.add_argument("--anneal-lr", type=lambda x: bool(strtobool(x)), default=True, nargs="?", const=True,
       help="Toggle learning rate annealing for policy and value networks")
@@ -62,9 +62,9 @@ def parse_args():
       help="the discount factor gamma")
   parser.add_argument("--gae-lambda", type=float, default=0.95,
       help="the lambda for the general advantage estimation")
-  parser.add_argument("--num-minibatches", type=int, default=4,
+  parser.add_argument("--num-minibatches", type=int, default=1,
       help="the number of mini-batches")
-  parser.add_argument("--update-epochs", type=int, default=10,
+  parser.add_argument("--update-epochs", type=int, default=5,
       help="the K epochs to update the policy")
   parser.add_argument("--norm-adv", type=lambda x: bool(strtobool(x)), default=True, nargs="?", const=True,
       help="Toggles advantages normalization")
@@ -93,16 +93,19 @@ def make_env(env_id, seed, idx, capture_video, run_name, gamma):
     if capture_video:
       env = gym.make(env_id, render_mode="rgb_array")
     else:
-      env = gym.make(env_id)
+      if idx == 0:
+        env = gym.make(env_id, render_mode="human")
+      else:
+        env = gym.make(env_id)
     if capture_video:
       if idx == 0:
         env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
     env = gym.wrappers.TimeLimit(env, max_episode_steps=500)
     env = gym.wrappers.RecordEpisodeStatistics(env)
     env = gym.wrappers.ClipAction(env)
-    env = gym.wrappers.NormalizeReward(env, gamma=gamma)
-    env = gym.wrappers.TransformReward(
-        env, lambda reward: np.clip(reward, -10, 10))
+    # env = gym.wrappers.NormalizeReward(env, gamma=gamma)
+    # env = gym.wrappers.TransformReward(
+    #     env, lambda reward: np.clip(reward, -10, 10))
     env.action_space.seed(seed)
     env.observation_space.seed(seed)
     return env
@@ -123,8 +126,11 @@ class Agent(nn.Module):
                                     layer_init=layer_init)
 
     n_actions = np.prod(envs.single_action_space.shape)
+    # TODO: Consider using an autoregressive action head for computing the span after computing the start frequency. 
+    # See: https://github.com/henrycharlesworth/multi_action_head_PPO
     self.actor_mean = layer_init(nn.Linear(hidden_size, n_actions), std=0.01)
-    self.actor_logstd = nn.Parameter(torch.zeros(1, n_actions))
+    self.actor_std = layer_init(nn.Linear(hidden_size, n_actions), std=0.01)
+    # self.actor_logstd = nn.Parameter(torch.zeros(1, n_actions))
     self.critic = layer_init(nn.Linear(hidden_size, 1), std=1.0)
 
   def get_value(self, x: torch.Tensor):
@@ -134,8 +140,10 @@ class Agent(nn.Module):
   def get_action_and_value(self, x, action=None):
     features = self.feature_net(x / 255.0)
     action_mean = self.actor_mean(features)
-    action_logstd = self.actor_logstd.expand_as(action_mean)
-    action_std = torch.exp(action_logstd)
+    # action_mean = torch.sigmoid(action_mean)
+    # action_logstd = self.actor_logstd.expand_as(action_mean)
+    # action_std = torch.exp(action_logstd)
+    action_std = torch.nn.functional.softplus(self.actor_std(features))
     probs = Normal(action_mean, action_std)
     if action is None:
       action = probs.sample()
@@ -225,10 +233,10 @@ if __name__ == '__main__':
       mean_episodic_length = np.mean(
           [info["episode"]["l"] for info in infos["final_info"] if info is not None])
       print(
-          f"global_step={global_step}, mean_return={mean_episodic_return:.2f}, mean_length={mean_episodic_length:.2f}")
-      writer.add_scalar("charts/episodic_return",
+          f"global_step={global_step}, mean_reward={mean_episodic_return:.2f}, mean_length={mean_episodic_length:.2f}")
+      writer.add_scalar("charts/mean_cumulative_reward",
                         mean_episodic_return, global_step)
-      writer.add_scalar("charts/episodic_length",
+      writer.add_scalar("charts/mean_episode_length",
                         mean_episodic_length, global_step)
 
     # bootstrap value if not done

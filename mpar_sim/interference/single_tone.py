@@ -53,10 +53,10 @@ class SingleToneInterferer():
       update_interval = self.duration * self.duty_cycle
     else:
       update_interval = self.duration * (1 - self.duty_cycle)
-      
-    if start_time - self.last_update_time >= update_interval:
-        self.state = 1 - self.state
-        self.last_update_time = start_time
+
+    if start_time - self.last_update_time >= update_interval and self.duty_cycle < 1:
+      self.state = 1 - self.state
+      self.last_update_time = start_time + self.duration
     # Move the spectrogram to the current time
     spectrogram = np.roll(spectrogram, -1, axis=0)
     spectrogram[-1:, :] = 0
