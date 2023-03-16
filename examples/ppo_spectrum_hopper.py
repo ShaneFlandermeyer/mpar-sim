@@ -1,5 +1,5 @@
 # docs and experiment results can be found at https://docs.cleanrl.dev/rl-algorithms/ppo/#ppo_ataripy
-from mpar_sim.models.networks.impala_cnn import ImpalaNetwork
+from mpar_sim.models.networks.nature_cnn import NatureCNN
 import mpar_sim.envs
 from torch.utils.tensorboard import SummaryWriter
 from torch.distributions.normal import Normal
@@ -17,6 +17,8 @@ import time
 import random
 import argparse
 import os
+
+from mpar_sim.models.networks.nature_cnn import NatureCNN
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
@@ -95,7 +97,7 @@ def make_env(env_id, seed, idx, capture_video, run_name, gamma):
     if capture_video:
       if idx == 0:
         env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
-    env = gym.wrappers.TimeLimit(env, max_episode_steps=250)
+    env = gym.wrappers.TimeLimit(env, max_episode_steps=500)
     env = gym.wrappers.RecordEpisodeStatistics(env)
     env = gym.wrappers.ClipAction(env)
     env = gym.wrappers.NormalizeReward(env, gamma=gamma)
@@ -116,8 +118,9 @@ def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
 class Agent(nn.Module):
   def __init__(self, envs, hidden_size: int = 256):
     super().__init__()
-    self.impala_net = ImpalaNetwork(*envs.single_observation_space.shape,
-                                    out_features=hidden_size)
+    self.feature_net = NatureCNN(*envs.single_observation_space.shape,
+                                    out_features=hidden_size,
+                                    layer_init=layer_init)
 
     n_actions = np.prod(envs.single_action_space.shape)
     self.actor_mean = layer_init(nn.Linear(hidden_size, n_actions), std=0.01)
@@ -125,11 +128,11 @@ class Agent(nn.Module):
     self.critic = layer_init(nn.Linear(hidden_size, 1), std=1.0)
 
   def get_value(self, x: torch.Tensor):
-    features = self.impala_net(x / 255.0)
+    features = self.feature_net(x / 255.0)
     return self.critic(features)
 
   def get_action_and_value(self, x, action=None):
-    features = self.impala_net(x / 255.0)
+    features = self.feature_net(x / 255.0)
     action_mean = self.actor_mean(features)
     action_logstd = self.actor_logstd.expand_as(action_mean)
     action_std = torch.exp(action_logstd)
