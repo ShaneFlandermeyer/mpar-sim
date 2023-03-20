@@ -15,6 +15,8 @@ class SpectrumHopper1D(gym.Env):
   This gym environment formulates the interference avoidance problem as a continuous control task.
   
   Hopefully, the agent will be able to learn from "spectrograms" that have been pre-processed to form a binary mask indicating the presence of interference.
+  
+  TODO: For the 1D case, need some sort of recurrence to resolve multi-step interference
   """
 
   ##########################
@@ -74,7 +76,7 @@ class SpectrumHopper1D(gym.Env):
     collision_penalty = -np.sum(np.logical_and(self.spectrogram == 1,
                                                radar_spectrum == 1)) / self.observation_space.shape[0]
     collision_penalty = min(collision_penalty, 0)
-    reward = 1*occupancy_reward + 5*collision_penalty
+    reward = 1*occupancy_reward + 2*collision_penalty
 
     self.time += 1
 

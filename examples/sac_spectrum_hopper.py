@@ -19,7 +19,7 @@ from torch.utils.tensorboard import SummaryWriter
 from lightning_rl.common.buffers import ReplayBuffer
 
 from mpar_sim.interference.single_tone import SingleToneInterference
-
+from mpar_sim.interference.hopping import HoppingInterference
 
 def parse_args():
   # fmt: off
@@ -75,11 +75,13 @@ def parse_args():
 
 def make_env(env_id, seed, idx, capture_video, run_name):
   def thunk():
-    interference = [SingleToneInterference(
+    interference = [HoppingInterference(
         start_freq=0e6,
         bandwidth=20e6,
-        duration=10,
-        duty_cycle=1,
+        duration=1,
+        hop_size=20e6,
+        min_freq=0,
+        max_freq=100e6,
     )]
     env = gym.make(env_id,
                    channel_bandwidth=100e6,
