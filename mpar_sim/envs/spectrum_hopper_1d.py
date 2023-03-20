@@ -1,11 +1,12 @@
-from typing import Optional
+from typing import List, Optional
 import gymnasium as gym
 import numpy as np
 import matplotlib.pyplot as plt
 import pygame
 import cv2
+from mpar_sim.interference.interference import Interference
 
-from mpar_sim.interference.single_tone import SingleToneInterferer
+from mpar_sim.interference.single_tone import SingleToneInterference
 
 
 class SpectrumHopper1D(gym.Env):
@@ -20,19 +21,18 @@ class SpectrumHopper1D(gym.Env):
   # Core Gym methods
   ##########################
   def __init__(self,
+               interference: List[Interference],
+               channel_bandwidth: float = 100e6,
                render_mode: str = None):
-    # TODO: Hard-coded for now
-    self.channel_bw = 100e6
-    self.interference = SingleToneInterferer(
-        start_freq=0e6,
-        bandwidth=20e6,
-        duration=10e-3,
-        duty_cycle=1,
-    )
+    self.channel_bandwidth = channel_bandwidth
+
+    self.interference = interference
+    if not isinstance(interference, list):
+      self.interference = [interference]
 
     # Observation space has two channels. The first channel is the interference spectrogram and the second is the radar spectrogram
     self.observation_space = gym.spaces.Box(
-        low=0, high=1, shape=(1024,), dtype=np.uint8)
+        low=0, high=1, shape=(100,), dtype=np.uint8)
 
     # Action space is the start and span of the radar waveform
     self.action_space = gym.spaces.Box(
@@ -40,7 +40,7 @@ class SpectrumHopper1D(gym.Env):
 
     # Note: Assuming time axis is discretized based on the PRF. This doesn't work if the PRF changes, but by that point I hope to be working on real-world data
     self.freq_axis = np.linspace(
-        0, self.channel_bw, self.observation_space.shape[0])
+        0, self.channel_bandwidth, self.observation_space.shape[0])
 
     assert render_mode is None or render_mode in self.metadata["render_modes"]
     self.render_mode = render_mode
@@ -50,33 +50,43 @@ class SpectrumHopper1D(gym.Env):
 
   def step(self, action: np.ndarray):
     # Update the radar waveform
-    start_freq = action[0] * self.channel_bw
-    radar_bw = min(action[1] * self.channel_bw, self.channel_bw - start_freq)
-
-    # Update the communications interference
-    n_freq_bins = np.digitize(
-        self.interference.bandwidth, self.freq_axis - np.min(self.freq_axis))
-    i_start_freq = np.digitize(
-        self.interference.start_freq, self.freq_axis - np.min(self.freq_axis), right=True)
+    start_freq = action[0] * self.channel_bandwidth
+    radar_bw = min(action[1] * self.channel_bandwidth,
+                   self.channel_bandwidth - start_freq)
+    
+    # Radar spectrum occupancy
+    n_freq_bins = np.digitize(radar_bw, self.freq_axis - np.min(self.freq_axis))
+    i_start_freq = np.digitize(start_freq, self.freq_axis - np.min(self.freq_axis), right=True)
     i_stop_freq = i_start_freq + n_freq_bins
-    self.spectrogram[i_start_freq:i_stop_freq] = 1
+    radar_spectrum = np.zeros(self.observation_space.shape[0])
+    radar_spectrum[i_start_freq:i_stop_freq] = 1
 
-    occupancy_reward = radar_bw / self.channel_bw
-    # For the collision reward, compute the overlap between the radar and comms spectrums
-    interference_stop = self.interference.start_freq + self.interference.bandwidth
-    radar_stop = start_freq + radar_bw
-    collision_penalty = -(min(interference_stop, radar_stop) - \
-          max(self.interference.start_freq, start_freq)) / self.channel_bw
+    # Update the communications occupancy
+    for interferer in self.interference:
+      interferer.step(time=self.time)
+      if interferer.is_active:
+        n_freq_bins = np.digitize(
+            interferer.bandwidth, self.freq_axis - np.min(self.freq_axis))
+        i_start_freq = np.digitize(
+            interferer.start_freq, self.freq_axis - np.min(self.freq_axis), right=True)
+        i_stop_freq = i_start_freq + n_freq_bins
+        self.spectrogram[i_start_freq:i_stop_freq] = 1
+
+    # Compute reward
+    occupancy_reward = radar_bw / self.channel_bandwidth
+    collision_penalty = -np.sum(np.logical_and(self.spectrogram == 1,
+                                               radar_spectrum == 1)) / self.observation_space.shape[0]
     collision_penalty = min(collision_penalty, 0)
     reward = 1*occupancy_reward + 5*collision_penalty
+    
+    self.time += 1
 
     obs = self.spectrogram
-
     terminated = False
     truncated = False
     info = {
-      'collision_penalty': collision_penalty, 
-      'occupancy_reward': occupancy_reward
+        'collision_penalty': collision_penalty,
+        'occupancy_reward': occupancy_reward
     }
 
     if self.render_mode == "human":

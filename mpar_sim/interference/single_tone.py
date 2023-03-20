@@ -1,7 +1,9 @@
 import numpy as np
 
+from mpar_sim.interference.interference import Interference
 
-class SingleToneInterferer():
+
+class SingleToneInterference(Interference):
   def __init__(self,
                start_freq: float,
                bandwidth: float,
@@ -14,7 +16,17 @@ class SingleToneInterferer():
     self.duty_cycle = duty_cycle
 
     self.last_update_time = 0
-    self.state = 1
+    self.is_active = True
+    
+  def step(self, time):
+    if self.is_active == 1:
+      update_interval = self.duration * self.duty_cycle
+    else:
+      update_interval = self.duration * (1 - self.duty_cycle)
+      
+    if time - self.last_update_time >= update_interval and self.duty_cycle < 1:
+      self.is_active = ~self.is_active
+      self.last_update_time = time
 
   def update_spectrogram(self,
                          spectrogram: np.ndarray,
@@ -49,21 +61,21 @@ class SingleToneInterferer():
     i_stop_freq = i_start_freq + n_freq_bins
 
     # Compute the number of time bins to update
-    if self.state == 1:
+    if self.is_active == 1:
       update_interval = self.duration * self.duty_cycle
     else:
       update_interval = self.duration * (1 - self.duty_cycle)
 
     if start_time - self.last_update_time >= update_interval and self.duty_cycle < 1:
-      self.state = 1 - self.state
+      self.is_active = 1 - self.is_active
       self.last_update_time = start_time + self.duration
     # Move the spectrogram to the current time
     spectrogram = np.roll(spectrogram, -1, axis=0)
     spectrogram[-1:, :] = 0
-    spectrogram[-1, i_start_freq:i_stop_freq] = 255*self.state
+    spectrogram[-1, i_start_freq:i_stop_freq] = 255*self.is_active
 
     return spectrogram
 
   def reset(self):
     self.last_update_time = 0
-    self.state = np.random.choice([0, 1])
+    self.is_active = np.random.choice([True, False])

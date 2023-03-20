@@ -18,6 +18,8 @@ import torch.optim as optim
 from torch.utils.tensorboard import SummaryWriter
 from lightning_rl.common.buffers import ReplayBuffer
 
+from mpar_sim.interference.single_tone import SingleToneInterference
+
 
 def parse_args():
   # fmt: off
@@ -73,7 +75,15 @@ def parse_args():
 
 def make_env(env_id, seed, idx, capture_video, run_name):
   def thunk():
-    env = gym.make(env_id)
+    interference = [SingleToneInterference(
+        start_freq=0e6,
+        bandwidth=20e6,
+        duration=10,
+        duty_cycle=1,
+    )]
+    env = gym.make(env_id,
+                   channel_bandwidth=100e6,
+                   interference=interference,)
     if capture_video:
       if idx == 0:
         env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
