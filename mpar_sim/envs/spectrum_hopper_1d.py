@@ -53,24 +53,21 @@ class SpectrumHopper1D(gym.Env):
     start_freq = action[0] * self.channel_bandwidth
     radar_bw = min(action[1] * self.channel_bandwidth,
                    self.channel_bandwidth - start_freq)
-    
+    radar_stop = start_freq + radar_bw
     # Radar spectrum occupancy
-    n_freq_bins = np.digitize(radar_bw, self.freq_axis - np.min(self.freq_axis))
-    i_start_freq = np.digitize(start_freq, self.freq_axis - np.min(self.freq_axis), right=True)
-    i_stop_freq = i_start_freq + n_freq_bins
+    occupied = np.logical_and(self.freq_axis >= start_freq,
+                              self.freq_axis <= radar_stop)
     radar_spectrum = np.zeros(self.observation_space.shape[0])
-    radar_spectrum[i_start_freq:i_stop_freq] = 1
+    radar_spectrum[occupied] = 1
 
     # Update the communications occupancy
     for interferer in self.interference:
       interferer.step(time=self.time)
       if interferer.is_active:
-        n_freq_bins = np.digitize(
-            interferer.bandwidth, self.freq_axis - np.min(self.freq_axis))
-        i_start_freq = np.digitize(
-            interferer.start_freq, self.freq_axis - np.min(self.freq_axis), right=True)
-        i_stop_freq = i_start_freq + n_freq_bins
-        self.spectrogram[i_start_freq:i_stop_freq] = 1
+        interference_stop = interferer.start_freq + interferer.bandwidth
+        occupied = np.logical_and(self.freq_axis >= interferer.start_freq,
+                                  self.freq_axis <= interference_stop)
+        self.spectrogram[occupied] = 1
 
     # Compute reward
     occupancy_reward = radar_bw / self.channel_bandwidth
@@ -78,7 +75,7 @@ class SpectrumHopper1D(gym.Env):
                                                radar_spectrum == 1)) / self.observation_space.shape[0]
     collision_penalty = min(collision_penalty, 0)
     reward = 1*occupancy_reward + 5*collision_penalty
-    
+
     self.time += 1
 
     obs = self.spectrogram
@@ -119,6 +116,8 @@ class SpectrumHopper1D(gym.Env):
   ##########################
   # Helper methods
   ##########################
+  # def _
+
   def _render_frame(self) -> Optional[np.ndarray]:
     """
     Draw the current observation in a PyGame window if render_mode is 'human', or return the pixels as a numpy array if not.
