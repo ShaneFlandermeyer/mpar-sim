@@ -34,7 +34,7 @@ class SpectrumHopper1D(gym.Env):
 
     # Observation space has two channels. The first channel is the interference spectrogram and the second is the radar spectrogram
     self.observation_space = gym.spaces.Box(
-        low=0, high=1, shape=(100,), dtype=np.uint8)
+        low=0, high=1, shape=(1024,), dtype=np.uint8)
 
     # Action space is the start and span of the radar waveform
     self.action_space = gym.spaces.Box(
@@ -53,8 +53,8 @@ class SpectrumHopper1D(gym.Env):
   def step(self, action: np.ndarray):
     # Update the radar waveform
     start_freq = action[0] * self.channel_bandwidth
-    radar_bw = min(action[1] * self.channel_bandwidth,
-                   self.channel_bandwidth - start_freq)
+    radar_bw = np.clip(action[1] * self.channel_bandwidth,
+                       0, self.channel_bandwidth - start_freq)
     radar_stop = start_freq + radar_bw
     # Radar spectrum occupancy
     occupied = np.logical_and(self.freq_axis >= start_freq,
@@ -63,6 +63,7 @@ class SpectrumHopper1D(gym.Env):
     radar_spectrum[occupied] = 1
 
     # Update the communications occupancy
+    self.spectrogram = np.zeros(self.observation_space.shape, dtype=np.uint8)
     for interferer in self.interference:
       interferer.step(time=self.time)
       if interferer.is_active:
@@ -73,9 +74,9 @@ class SpectrumHopper1D(gym.Env):
 
     # Compute reward
     occupancy_reward = radar_bw / self.channel_bandwidth
-    collision_penalty = -np.sum(np.logical_and(self.spectrogram == 1,
-                                               radar_spectrum == 1)) / self.observation_space.shape[0]
-    collision_penalty = min(collision_penalty, 0)
+    collision_penalty = -np.sum(np.logical_and(self.spectrogram,
+                                               radar_spectrum)) / self.observation_space.shape[0]
+    collision_penalty = np.clip(collision_penalty, -np.Inf, 0)
     reward = 1*occupancy_reward + 2*collision_penalty
 
     self.time += 1
@@ -95,8 +96,15 @@ class SpectrumHopper1D(gym.Env):
   def reset(self, seed: int = None, options: dict = None):
     super().reset(seed=seed)
     # Reset the spectrogram and time counter
-    self.spectrogram = np.zeros(self.observation_space.shape, dtype=np.uint8)
     self.time = 0
+    self.spectrogram = np.zeros(self.observation_space.shape, dtype=np.uint8)
+    for interferer in self.interference:
+      interferer.step(time=self.time)
+      if interferer.is_active:
+        interference_stop = interferer.start_freq + interferer.bandwidth
+        occupied = np.logical_and(self.freq_axis >= interferer.start_freq,
+                                  self.freq_axis <= interference_stop)
+        self.spectrogram[occupied] = 1
 
     observation = self.spectrogram
     info = {}

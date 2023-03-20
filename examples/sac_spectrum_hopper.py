@@ -72,6 +72,8 @@ def parse_args():
   # fmt: on
   return args
 
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+
 
 def make_env(env_id, seed, idx, capture_video, run_name):
   def thunk():
@@ -91,6 +93,11 @@ def make_env(env_id, seed, idx, capture_video, run_name):
         env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
     env = gym.wrappers.TimeLimit(env, max_episode_steps=500)
     env = gym.wrappers.RecordEpisodeStatistics(env)
+    # env = gym.wrappers.NormalizeReward(env)
+    # env = gym.wrappers.TransformReward(env, lambda obs: np.clip(obs, -10, 10))
+    # env = gym.wrappers.FrameStack(env, num_stack=4)
+    # env = gym.wrappers.FlattenObservation(env)
+    
     env.action_space.seed(seed)
     env.observation_space.seed(seed)
     return env
@@ -114,8 +121,8 @@ class SoftQNetwork(nn.Module):
     return x
 
 
-LOG_STD_MIN = 2
-LOG_STD_MAX = -5
+LOG_STD_MIN = -5
+LOG_STD_MAX = 2
 
 
 class Actor(nn.Module):
@@ -169,10 +176,24 @@ class Actor(nn.Module):
     action = yt * self.action_scale + self.action_bias
     logprob = normal.log_prob(xt)
     # Enforcing action bound
+    # TODO: This line makes it impossible to get full reward when the only goal is to maximize bandwidth
     logprob -= torch.log(self.action_scale * (1 - yt.pow(2)) + 1e-6)
     logprob = logprob.sum(1, keepdim=True)
     mean = torch.tanh(mean) * self.action_scale + self.action_bias
     return action, logprob, mean
+  
+  
+def evaluate_policy(envs, actor):
+  obs, info = envs.reset()
+  rewards = []
+  while True:
+    _, _, actions = actor.get_action(torch.Tensor(obs).to(device))
+    actions = actions.detach().cpu().numpy()
+    obs, reward, terminated, truncated, infos = envs.step(actions)
+    rewards.append(reward)
+    if terminated or truncated:
+      print("Test reward:", np.sum(rewards))
+      return
 
 
 if __name__ == '__main__':
@@ -185,9 +206,6 @@ if __name__ == '__main__':
           "\n".join([f"|{key}|{value}|" for key, value in vars(args).items()])),
   )
 
-  envs = gym.vector.SyncVectorEnv(
-      [make_env(args.env_id, args.seed, 0, args.capture_video, run_name)])
-
   # TRY NOT TO MODIFY: seeding
   random.seed(args.seed)
   np.random.seed(args.seed)
@@ -197,6 +215,8 @@ if __name__ == '__main__':
                         and args.cuda else "cpu")
   # env setup
   envs = gym.vector.SyncVectorEnv(
+      [make_env(args.env_id, args.seed, 0, args.capture_video, run_name)])
+  test_envs = gym.vector.SyncVectorEnv(
       [make_env(args.env_id, args.seed, 0, args.capture_video, run_name)])
   assert isinstance(envs.single_action_space,
                     gym.spaces.Box), "only continuous action space is supported"
@@ -346,13 +366,16 @@ if __name__ == '__main__':
       if global_step % 100 == 0:
         for key, value in train_info.items():
           writer.add_scalar(key, value, global_step)
-        # writer.add_scalar("losses/actor_loss", actor_loss.item(), global_step)
         writer.add_scalar("losses/alpha", alpha, global_step)
-        print("SPS:", int(global_step / (time.time() - start_time)))
-        print("Collision penalty", infos['collision_penalty'].mean(
-        ), "Occupancy reward", infos['occupancy_reward'].mean())
+        # print("SPS:", int(global_step / (time.time() - start_time)), 
+        #       "Collision penalty", infos['collision_penalty'].mean(),
+        #       "Occupancy reward", infos['occupancy_reward'].mean())
+        # evaluate_policy(test_envs, actor)
         writer.add_scalar("charts/SPS", int(global_step /
                           (time.time() - start_time)), global_step)
         if args.autotune:
           writer.add_scalar("losses/alpha_loss",
                             alpha_loss.item(), global_step)
+          
+      if global_step % 5_000 == 0:
+        evaluate_policy(test_envs, actor)
