@@ -35,3 +35,8 @@ class HoppingInterference():
         self.direction *= -1
 
       self.start_freq += self.hop_size*self.direction
+      
+  def reset(self):
+    self.last_update_time = 0
+    self.direction = 1
+    self.is_active = True
