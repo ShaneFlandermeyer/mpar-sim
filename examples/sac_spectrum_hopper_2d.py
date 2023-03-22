@@ -1,6 +1,6 @@
 
 import copy
-from typing import Tuple
+from typing import Optional, Tuple
 import mpar_sim.envs
 
 import argparse
@@ -13,6 +13,9 @@ import gymnasium as gym
 import numpy as np
 from lightning_rl.models.off_policy import SAC
 from lightning_rl.models.networks.nature import NatureEncoder
+from lightning_rl.models.networks.sacae import SACAEEncoder
+from lightning_rl.common.utils import get_out_shape
+# from lightning_rl.models.networks.drq import SAC
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -20,7 +23,7 @@ import torch.optim as optim
 # from stable_baselines3.common.buffers import ReplayBuffer
 from torch.utils.tensorboard import SummaryWriter
 from lightning_rl.common.buffers import ReplayBuffer
-from lightning_rl.models.off_policy.drq import EncoderCNN
+# from lightning_rl.models.off_policy.drq import EncoderCNN
 from lightning_rl.models.off_policy.sac import squashed_gaussian_action
 
 from mpar_sim.interference.single_tone import SingleToneInterference
@@ -34,12 +37,13 @@ class Actor(nn.Module):
                obs_shape: Tuple[int],
                action_shape: Tuple[int],
                hidden_dim: int,
+               encoder_dim: int,
                lr: float,
                action_scale: torch.Tensor,
                action_bias: torch.Tensor,
                logstd_min: float = -5,
                logstd_max: float = 2,
-               feature_dim: int = 50,) -> None:
+               ) -> None:
     super().__init__()
 
     self.obs_shape = obs_shape
@@ -50,12 +54,15 @@ class Actor(nn.Module):
     self.action_bias = action_bias
     self.logstd_min = logstd_min
     self.logstd_max = logstd_max
-    self.feature_dim = feature_dim
-
-    self.encoder = NatureEncoder(*obs_shape, out_features=feature_dim)
+    self.encoder_dim = encoder_dim
+    
+    self.features = nn.Sequential(
+      nn.Linear(encoder_dim, hidden_dim),
+      nn.LayerNorm(hidden_dim),
+    )
 
     self.fc_start = nn.Sequential(
-        nn.Linear(feature_dim, hidden_dim),
+        nn.Linear(hidden_dim, hidden_dim),
         nn.ReLU(inplace=True),
         nn.Linear(hidden_dim, hidden_dim),
         nn.ReLU(inplace=True),
@@ -64,7 +71,7 @@ class Actor(nn.Module):
 
     # Input to this is the concatenation of the feature vector and the mean start frequency
     self.fc_bandwidth = nn.Sequential(
-        nn.Linear(feature_dim+1, hidden_dim),
+        nn.Linear(hidden_dim+1, hidden_dim),
         nn.ReLU(inplace=True),
         nn.Linear(hidden_dim, hidden_dim),
         nn.ReLU(inplace=True),
@@ -73,10 +80,8 @@ class Actor(nn.Module):
 
     self.optimizer = optim.Adam(self.parameters(), lr=lr)
 
-  def forward(self,
-              obs: torch.Tensor,
-              detach_encoder: bool = False) -> torch.Tensor:
-    obs = self.encoder(obs, detach=detach_encoder)
+  def forward(self, obs: torch.Tensor) -> torch.Tensor:
+    obs = self.features(obs)
 
     # Start frequency distribution
     start_mean, start_logstd = self.fc_start(obs).chunk(2, dim=-1)
@@ -95,8 +100,10 @@ class Actor(nn.Module):
     logstd = torch.cat([start_logstd, bw_logstd], dim=1)
     return mean, logstd
 
-  def get_action(self, x: torch.Tensor, detach_encoder: bool = False):
-    mean, logstd = self.forward(x, detach_encoder=detach_encoder)
+  def get_action(self, x: torch.Tensor, encoder: Optional[nn.Module] = None):
+    if encoder is not None:
+      x = encoder(x)
+    mean, logstd = self.forward(x)
     std = logstd.exp()
     action, logprob, mean = squashed_gaussian_action(
         mean, std, self.action_scale, self.action_bias)
@@ -128,7 +135,6 @@ class Critic(nn.Module):
                action_shape: Tuple[int],
                hidden_dim: int,
                lr: float,
-               feature_dim: int = 50,
                gamma: float = 0.99,
                ) -> None:
     super().__init__()
@@ -136,13 +142,18 @@ class Critic(nn.Module):
     self.action_shape = action_shape
     self.hidden_dim = hidden_dim
     self.lr = lr
-    self.feature_dim = feature_dim
     self.gamma = gamma
+    
+    self.encoder = NatureEncoder(*obs_shape)
+    self.encoder_dim = np.prod(get_out_shape(self.encoder, obs_shape))
 
-    self.encoder = NatureEncoder(*obs_shape, out_features=feature_dim)
+    self.features = nn.Sequential(
+      nn.Linear(self.encoder_dim, hidden_dim),
+      nn.LayerNorm(hidden_dim),
+    )
 
     self.Q1 = nn.Sequential(
-        nn.Linear(feature_dim + action_shape[0], hidden_dim),
+        nn.Linear(hidden_dim + action_shape[0], hidden_dim),
         nn.ReLU(inplace=True),
         nn.Linear(hidden_dim, hidden_dim),
         nn.ReLU(inplace=True),
@@ -150,7 +161,7 @@ class Critic(nn.Module):
     )
 
     self.Q2 = nn.Sequential(
-        nn.Linear(feature_dim + action_shape[0], hidden_dim),
+        nn.Linear(hidden_dim + action_shape[0], hidden_dim),
         nn.ReLU(inplace=True),
         nn.Linear(hidden_dim, hidden_dim),
         nn.ReLU(inplace=True),
@@ -158,14 +169,11 @@ class Critic(nn.Module):
     )
 
     self.optimizer = optim.Adam(self.parameters(), lr=lr)
+    self.encoder_optimizer = optim.Adam(self.encoder.parameters(), lr=lr)
 
-  def forward(self,
-              obs: torch.Tensor,
-              action: torch.Tensor,
-              detach_encoder: bool = False,
-              ) -> torch.Tensor:
+  def forward(self, obs: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
     assert obs.size(0) == action.size(0)
-    obs = self.encoder(obs, detach=detach_encoder)
+    obs = self.features(obs)
 
     obs_action = torch.cat([obs, action], dim=-1)
     q1 = self.Q1(obs_action)
@@ -196,8 +204,10 @@ class Critic(nn.Module):
     q_loss = q1_loss + q2_loss
 
     self.optimizer.zero_grad()
+    self.encoder_optimizer.zero_grad()
     q_loss.backward()
     self.optimizer.step()
+    self.encoder_optimizer.step()
 
     info = {
         "losses/q1_loss": q1_loss.item(),
@@ -329,26 +339,22 @@ if __name__ == '__main__':
   action_bias = torch.Tensor(
       0.5 * (envs.single_action_space.high + envs.single_action_space.low)).to(device)
 
-  # TODO: Share encoder weights between the actor and critic
-  actor = Actor(obs_shape=envs.single_observation_space.shape,
-                action_shape=envs.single_action_space.shape,
-                hidden_dim=256,
-                lr=args.policy_lr,
-                action_scale=action_scale,
-                action_bias=action_bias,
-                feature_dim=50
-                ).to(device)
   critic = Critic(obs_shape=envs.single_observation_space.shape,
                   action_shape=envs.single_action_space.shape,
                   lr=args.q_lr,
                   hidden_dim=256,
-                  feature_dim=50,
                   gamma=args.gamma
                   ).to(device)
   critic_target = copy.deepcopy(critic).to(device)
-  # Share convolutional weights
-  actor.encoder.copy_conv_weights_from(critic.encoder)
-
+  actor = Actor(obs_shape=envs.single_observation_space.shape,
+                action_shape=envs.single_action_space.shape,
+                hidden_dim=256,
+                encoder_dim=critic.encoder_dim,
+                lr=args.policy_lr,
+                action_scale=action_scale,
+                action_bias=action_bias,
+                ).to(device)
+  
   # Automatic entropy tuning
   if args.autotune:
     target_entropy = - \
@@ -381,8 +387,9 @@ if __name__ == '__main__':
       actions = np.array([envs.single_action_space.sample()
                          for _ in range(envs.num_envs)])
     else:
-      actions, _, _ = actor.get_action(torch.Tensor(obs).to(device))
-      actions = actions.detach().cpu().numpy()
+      with torch.no_grad():
+        actions, _, _ = actor.get_action(torch.Tensor(obs).to(device), encoder=critic.encoder)
+        actions = actions.cpu().numpy()
 
     # TRY NOT TO MODIFY: Execute the game and log data
     next_obs, rewards, terminated, truncated, infos = envs.step(actions)
@@ -428,11 +435,14 @@ if __name__ == '__main__':
       actions = torch.Tensor(data.actions).to(device)
       rewards = torch.Tensor(data.rewards).to(device)
       dones = torch.Tensor(data.dones).to(device)
-
+      # Encode the observations. We save some computation by only doing the encoding once here.
+      observations = critic.encoder(observations)
+      with torch.no_grad():
+        next_observations = critic.encoder(next_observations)
+      
       # Train critic
       with torch.no_grad():
         next_actions, next_logprobs, _ = actor.get_action(next_observations)
-
       critic_info = critic.update(target=critic_target,
                                   obs=observations,
                                   next_obs=next_observations,
@@ -447,10 +457,10 @@ if __name__ == '__main__':
       # Train actor (every policy_frequency steps)
       if global_step % args.policy_frequency == 0:
         for _ in range(args.policy_frequency):
-          a, logprob_a, _ = actor.get_action(observations, detach_encoder=True)
+          a, logprob_a, _ = actor.get_action(observations.detach())
           actor_info = actor.update(
               critic=critic,
-              obs=observations,
+              obs=observations.detach(),
               actions=a,
               logprobs=logprob_a,
               alpha=alpha)
