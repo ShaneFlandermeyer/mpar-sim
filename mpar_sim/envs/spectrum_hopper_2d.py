@@ -33,8 +33,10 @@ class SpectrumHopper2D(gym.Env):
     self.render_mode = render_mode
 
     # Observation space has two channels. The first channel is the interference spectrogram and the second is the radar spectrogram
-    self.observation_space = gym.spaces.Box(
-        low=0, high=255, shape=(1, 84, 84), dtype=np.uint8)
+    self.observation_space = gym.spaces.Dict({
+        'spectrogram': gym.spaces.Box(low=0, high=255, shape=(1, 84, 84), dtype=np.uint8),
+        'spectrum': gym.spaces.Box(low=0, high=255, shape=(fft_size,), dtype=np.uint8)
+    })
 
     # Action space is the start and span of the radar waveform
     self.action_space = gym.spaces.Box(
@@ -42,7 +44,7 @@ class SpectrumHopper2D(gym.Env):
 
     # # Note: Assuming time axis is discretized based on the PRF. This doesn't work if the PRF changes, but by that point I hope to be working on real-world data
     self.spectrogram_freq_axis = np.linspace(
-        0, self.channel_bandwidth, self.observation_space.shape[2])
+        0, self.channel_bandwidth, self.observation_space['spectrogram'].shape[2])
     self.fft_freq_axis = np.linspace(
         0, self.channel_bandwidth, self.fft_size)
 
@@ -72,7 +74,7 @@ class SpectrumHopper2D(gym.Env):
         self.spectrogram_freq_axis >= radar_start_freq,
         self.spectrogram_freq_axis <= radar_stop_freq)
     self.radar_spectrogram[0, -1, radar_occupied] = 1
-    
+
     radar_occupied = np.logical_and(self.fft_freq_axis >= radar_start_freq,
                                     self.fft_freq_axis <= radar_stop_freq)
     self.radar_spectrum[:] = 0
@@ -88,7 +90,10 @@ class SpectrumHopper2D(gym.Env):
 
     self.time += 1
 
-    obs = self.spectrogram
+    obs = {
+        "spectrogram": self.spectrogram,
+        "spectrum": self.current_spectrum,
+    }
     terminated = False
     truncated = False
     info = {
@@ -106,26 +111,32 @@ class SpectrumHopper2D(gym.Env):
     for interferer in self.interference:
       interferer.reset()
 
-    self.spectrogram = np.zeros(self.observation_space.shape, dtype=np.uint8)
-    self.current_spectrum = np.zeros(self.fft_size, dtype=np.uint8)
+    self.spectrogram = np.zeros(
+        self.observation_space['spectrogram'].shape, dtype=np.uint8)
+    self.current_spectrum = np.zeros(
+        self.observation_space['spectrum'].shape, dtype=np.uint8)
     self.radar_spectrogram = np.zeros(
-        self.observation_space.shape, dtype=np.uint8)
-    self.radar_spectrum = np.zeros(self.fft_size, dtype=np.uint8)
+        self.observation_space['spectrogram'].shape, dtype=np.uint8)
+    self.radar_spectrum = np.zeros(
+        self.observation_space['spectrum'].shape, dtype=np.uint8)
     self.time = 0
     # Run a sequence of no-ops to get a full spectrogram
-    for _ in range(self.observation_space.shape[1]):
+    for _ in range(self.spectrogram.shape[1]):
       self.spectrogram[0] = np.roll(self.spectrogram[0], -1, axis=0)
       self.spectrogram[0, -1, :] = 0
       self._update_spectrum()
       self.time += 1
 
-    observation = self.spectrogram
+    obs = {
+        "spectrogram": self.spectrogram,
+        "spectrum": self.current_spectrum,
+    }
     info = {}
 
     if self.render_mode == "human":
       self._render_frame()
 
-    return observation, info
+    return obs, info
 
   def render(self):
     if self.render_mode == "rgb_array":

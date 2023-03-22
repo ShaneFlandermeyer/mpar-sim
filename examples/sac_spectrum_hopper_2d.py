@@ -33,8 +33,8 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
 class Actor(nn.Module):
   def __init__(self,
-               obs_shape: Tuple[int],
-               action_shape: Tuple[int],
+               obs_space: gym.Space,
+               action_space: gym.Space,
                hidden_dim: int,
                encoder_dim: int,
                lr: float,
@@ -45,8 +45,10 @@ class Actor(nn.Module):
                ) -> None:
     super().__init__()
 
-    self.obs_shape = obs_shape
-    self.action_shape = action_shape
+    self.obs_space = obs_space
+    self.action_space = action_space
+    self.fft_size = obs_space['spectrum'].shape[0]
+
     self.hidden_dim = hidden_dim
     self.lr = lr
     self.action_scale = action_scale
@@ -54,10 +56,10 @@ class Actor(nn.Module):
     self.logstd_min = logstd_min
     self.logstd_max = logstd_max
     self.encoder_dim = encoder_dim
-    
+
     self.features = nn.Sequential(
-      nn.Linear(encoder_dim, hidden_dim),
-      nn.LayerNorm(hidden_dim),
+        nn.Linear(encoder_dim + self.fft_size, hidden_dim),
+        nn.LayerNorm(hidden_dim),
     )
 
     self.fc_start = nn.Sequential(
@@ -99,9 +101,7 @@ class Actor(nn.Module):
     logstd = torch.cat([start_logstd, bw_logstd], dim=1)
     return mean, logstd
 
-  def get_action(self, x: torch.Tensor, encoder: Optional[nn.Module] = None):
-    if encoder is not None:
-      x = encoder(x)
+  def get_action(self, x: torch.Tensor) -> Tuple[torch.Tensor, ...]:
     mean, logstd = self.forward(x)
     std = logstd.exp()
     action, logprob, mean = squashed_gaussian_action(
@@ -128,31 +128,34 @@ class Actor(nn.Module):
 
     return info
 
+
 class Critic(nn.Module):
   def __init__(self,
-               obs_shape: Tuple[int],
-               action_shape: Tuple[int],
+               obs_space: gym.Space,
+               action_space: gym.Space,
                hidden_dim: int,
                lr: float,
                gamma: float = 0.99,
                ) -> None:
     super().__init__()
-    self.obs_shape = obs_shape
-    self.action_shape = action_shape
+    self.obs_space = obs_space
+    self.image_shape = obs_space['spectrogram'].shape
+    self.fft_size = obs_space['spectrum'].shape[0]
+    self.action_shape = action_space
     self.hidden_dim = hidden_dim
     self.lr = lr
     self.gamma = gamma
-    
-    self.encoder = NatureEncoder(*obs_shape)
-    self.encoder_dim = np.prod(get_out_shape(self.encoder, obs_shape))
+
+    self.encoder = NatureEncoder(*self.image_shape)
+    self.encoder_dim = np.prod(get_out_shape(self.encoder, self.image_shape))
 
     self.features = nn.Sequential(
-      nn.Linear(self.encoder_dim, hidden_dim),
-      nn.LayerNorm(hidden_dim),
+        nn.Linear(self.encoder_dim + self.fft_size, hidden_dim),
+        nn.LayerNorm(hidden_dim),
     )
 
     self.Q1 = nn.Sequential(
-        nn.Linear(hidden_dim + action_shape[0], hidden_dim),
+        nn.Linear(hidden_dim + action_space[0], hidden_dim),
         nn.ReLU(inplace=True),
         nn.Linear(hidden_dim, hidden_dim),
         nn.ReLU(inplace=True),
@@ -160,7 +163,7 @@ class Critic(nn.Module):
     )
 
     self.Q2 = nn.Sequential(
-        nn.Linear(hidden_dim + action_shape[0], hidden_dim),
+        nn.Linear(hidden_dim + action_space[0], hidden_dim),
         nn.ReLU(inplace=True),
         nn.Linear(hidden_dim, hidden_dim),
         nn.ReLU(inplace=True),
@@ -339,22 +342,22 @@ if __name__ == '__main__':
   action_bias = torch.Tensor(
       0.5 * (envs.single_action_space.high + envs.single_action_space.low)).to(device)
 
-  critic = Critic(obs_shape=envs.single_observation_space.shape,
-                  action_shape=envs.single_action_space.shape,
+  critic = Critic(obs_space=envs.single_observation_space,
+                  action_space=envs.single_action_space.shape,
                   lr=args.q_lr,
                   hidden_dim=256,
                   gamma=args.gamma
                   ).to(device)
   critic_target = copy.deepcopy(critic).to(device)
-  actor = Actor(obs_shape=envs.single_observation_space.shape,
-                action_shape=envs.single_action_space.shape,
+  actor = Actor(obs_space=envs.single_observation_space,
+                action_space=envs.single_action_space,
                 hidden_dim=256,
                 encoder_dim=critic.encoder_dim,
                 lr=args.policy_lr,
                 action_scale=action_scale,
                 action_bias=action_bias,
                 ).to(device)
-  
+
   # Automatic entropy tuning
   if args.autotune:
     target_entropy = - \
@@ -368,15 +371,25 @@ if __name__ == '__main__':
 
   # Create the replay buffer
   rb = ReplayBuffer(args.buffer_size)
-  rb.create_tensor('observations', envs.single_observation_space.shape,
-                   envs.single_observation_space.dtype)
-  rb.create_tensor('next_observations', envs.single_observation_space.shape,
-                   envs.single_observation_space.dtype)
-  rb.create_tensor('actions', envs.single_action_space.shape,
+  # Current obs
+  rb.create_buffer('spectrograms',
+                   envs.single_observation_space['spectrogram'].shape,
+                   envs.single_observation_space['spectrogram'].dtype)
+  rb.create_buffer('spectrums',
+                   envs.single_observation_space['spectrum'].shape,
+                   envs.single_observation_space['spectrum'].dtype)
+  # Next obs
+  rb.create_buffer('next_spectrograms',
+                   envs.single_observation_space['spectrogram'].shape,
+                   envs.single_observation_space['spectrogram'].dtype)
+  rb.create_buffer('next_spectrums',
+                   envs.single_observation_space['spectrum'].shape,
+                   envs.single_observation_space['spectrum'].dtype)
+  rb.create_buffer('actions', envs.single_action_space.shape,
                    envs.single_action_space.dtype)
-  rb.create_tensor('rewards', (1,), np.float32)
-  rb.create_tensor('dones', (1,), bool)
-  rb.create_tensor('infos', (1,), dict)
+  rb.create_buffer('rewards', (1,), np.float32)
+  rb.create_buffer('dones', (1,), bool)
+  rb.create_buffer('infos', (1,), dict)
 
   start_time = time.time()
   # TRY NOT TO MODIFY: start the game
@@ -388,7 +401,11 @@ if __name__ == '__main__':
                          for _ in range(envs.num_envs)])
     else:
       with torch.no_grad():
-        actions, _, _ = actor.get_action(torch.Tensor(obs).to(device), encoder=critic.encoder)
+        encoded_features = critic.encoder(
+            torch.Tensor(obs['spectrogram']).to(device))
+        spectrum = torch.Tensor(obs['spectrum']).to(device)
+        encoded_obs = torch.cat([encoded_features, spectrum], dim=-1)
+        actions, _, _ = actor.get_action(encoded_obs)
         actions = actions.cpu().numpy()
 
     # TRY NOT TO MODIFY: Execute the game and log data
@@ -415,8 +432,10 @@ if __name__ == '__main__':
       if d:
         real_next_obs[idx] = infos["final_observation"][idx]
 
-    rb.add(observations=obs,
-           next_observations=real_next_obs,
+    rb.add(spectrograms=obs['spectrogram'],
+           spectrums=obs['spectrum'],
+           next_spectrograms=real_next_obs['spectrogram'],
+           next_spectrums=real_next_obs['spectrum'],
            actions=actions,
            rewards=rewards,
            dones=dones,
@@ -430,22 +449,30 @@ if __name__ == '__main__':
       train_info = {}
       # Sample the replay buffer and convert to tensors
       data = rb.sample(args.batch_size)
-      observations = torch.Tensor(data.observations).to(device)
-      next_observations = torch.Tensor(data.next_observations).to(device)
+      # Observations (more complicated due to the dict space)
+      spectrograms = torch.Tensor(data.spectrograms).to(device)
+      spectrums = torch.Tensor(data.spectrums).to(device)
+      next_spectrograms = torch.Tensor(data.next_spectrograms).to(device)
+      next_spectrums = torch.Tensor(data.next_spectrums).to(device)
       actions = torch.Tensor(data.actions).to(device)
       rewards = torch.Tensor(data.rewards).to(device)
       dones = torch.Tensor(data.dones).to(device)
+
       # Encode the observations. We save some computation by only doing the encoding once here.
-      observations = critic.encoder(observations)
+      encoded_features = critic.encoder(spectrograms)
       with torch.no_grad():
-        next_observations = critic.encoder(next_observations)
-      
+        next_encoded_features = critic.encoder(next_spectrograms)
+      # Concatenate before passing to SAC networks
+      encoded_obs = torch.cat((encoded_features, spectrums), dim=1)
+      next_encoded_obs = torch.cat(
+          (next_encoded_features, next_spectrums), dim=1)
+
       # Train critic
       with torch.no_grad():
-        next_actions, next_logprobs, _ = actor.get_action(next_observations)
+        next_actions, next_logprobs, _ = actor.get_action(encoded_obs)
       critic_info = critic.update(target=critic_target,
-                                  obs=observations,
-                                  next_obs=next_observations,
+                                  obs=encoded_obs,
+                                  next_obs=next_encoded_obs,
                                   actions=actions,
                                   next_actions=next_actions,
                                   next_logprobs=next_logprobs,
@@ -454,13 +481,13 @@ if __name__ == '__main__':
                                   alpha=alpha)
       train_info.update(critic_info)
 
-      # Train actor (every policy_frequency steps)
+      # Train actor
       if global_step % args.policy_frequency == 0:
         for _ in range(args.policy_frequency):
-          a, logprob_a, _ = actor.get_action(observations.detach())
+          a, logprob_a, _ = actor.get_action(encoded_obs.detach())
           actor_info = actor.update(
               critic=critic,
-              obs=observations.detach(),
+              obs=encoded_obs.detach(),
               actions=a,
               logprobs=logprob_a,
               alpha=alpha)
@@ -468,7 +495,7 @@ if __name__ == '__main__':
 
           if args.autotune:
             with torch.no_grad():
-              _, logprob, _ = actor.get_action(observations)
+              _, logprob, _ = actor.get_action(encoded_obs)
             alpha_loss = (-log_alpha * (logprob + target_entropy)).mean()
 
             alpha_optimizer.zero_grad()
@@ -486,7 +513,6 @@ if __name__ == '__main__':
           writer.add_scalar(key, value, global_step)
         writer.add_scalar("losses/alpha", alpha, global_step)
         print("SPS:", int(global_step / (time.time() - start_time)))
-        # evaluate_policy(test_envs, actor)
         writer.add_scalar("charts/SPS", int(global_step /
                           (time.time() - start_time)), global_step)
         if args.autotune:
