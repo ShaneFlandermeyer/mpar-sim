@@ -13,7 +13,6 @@ import gymnasium as gym
 import numpy as np
 from lightning_rl.models.off_policy import SAC
 from lightning_rl.models.networks.nature import NatureEncoder
-from lightning_rl.models.networks.sacae import SACAEEncoder
 from lightning_rl.common.utils import get_out_shape
 # from lightning_rl.models.networks.drq import SAC
 import torch
@@ -240,8 +239,9 @@ def make_env(env_id, seed, idx, capture_video, run_name):
     )]
     env = gym.make(env_id,
                    channel_bandwidth=100e6,
+                   fft_size=1024,
                    interference=interference,
-                   render_mode='rgb_array')
+                   render_mode='human')
     if capture_video:
       if idx == 0:
         env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
