@@ -66,18 +66,19 @@ class SpectrumHopperRecorded(gym.Env):
     radar_stop_freq = radar_start_freq + radar_bw
 
     # Update the communications occupancy
-    self.start_ind += 1
-    # This was computed
+    # self.start_ind += 1
     n_snaps_per_pulse = 6
     stop_ind = min(self.start_ind + n_snaps_per_pulse, self.data.shape[0])
     n_step = stop_ind - self.start_ind
-    self.spectrogram = np.roll(self.spectrogram, -n_step, axis=0)
-    self.spectrogram[-n_step:, :] = self.data[self.start_ind:stop_ind, :]
+    self.spectrogram = self.data[self.start_ind:self.start_ind + self.n_image_snapshots, :]
+    self.current_spectrum = self.spectrogram[-1, :]
+    self.start_ind += n_step
+    
     self.spectrogram_obs[0] = cv2.resize(
         self.spectrogram, 
         self.observation_space['spectrogram'].shape[1:], 
         interpolation=cv2.INTER_LINEAR)
-    self.current_spectrum = self.data[self.start_ind, :]
+    
 
     # Radar spectrum occupancy (with history)
     self.radar_spectrogram[0] = np.roll(self.radar_spectrogram[0], -1, axis=0)
