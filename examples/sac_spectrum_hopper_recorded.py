@@ -13,21 +13,18 @@ import gymnasium as gym
 import numpy as np
 from lightning_rl.models.off_policy import SAC
 from lightning_rl.models.networks.nature import NatureEncoder
+from lightning_rl.models.networks.sacae import SACAEEncoder
+from lightning_rl.models.networks.impala import ImpalaEncoder
 from lightning_rl.common.utils import get_out_shape
-# from lightning_rl.models.networks.drq import SAC
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-# from stable_baselines3.common.buffers import ReplayBuffer
 from torch.utils.tensorboard import SummaryWriter
 from lightning_rl.common.buffers import ReplayBuffer
-# from lightning_rl.models.off_policy.drq import EncoderCNN
 from lightning_rl.models.off_policy.sac import squashed_gaussian_action
 
-from mpar_sim.interference.single_tone import SingleToneInterference
-from mpar_sim.interference.hopping import HoppingInterference
-
+# Configuration
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
 
@@ -40,6 +37,7 @@ class Actor(nn.Module):
                lr: float,
                action_scale: torch.Tensor,
                action_bias: torch.Tensor,
+               feature_dim: int = 50,
                logstd_min: float = -5,
                logstd_max: float = 2,
                ) -> None:
@@ -56,49 +54,29 @@ class Actor(nn.Module):
     self.logstd_min = logstd_min
     self.logstd_max = logstd_max
     self.encoder_dim = encoder_dim
+    self.feature_dim = feature_dim
 
     self.features = nn.Sequential(
-        nn.Linear(encoder_dim + self.fft_size, hidden_dim),
-        nn.LayerNorm(hidden_dim),
+        nn.Linear(encoder_dim, feature_dim),
+        nn.ReLU(),
+        nn.LayerNorm(feature_dim),
     )
 
-    self.fc_start = nn.Sequential(
-        nn.Linear(hidden_dim, hidden_dim),
-        nn.ReLU(inplace=True),
-        nn.Linear(hidden_dim, hidden_dim),
-        nn.ReLU(inplace=True),
-        nn.Linear(hidden_dim, 2),
-    )
-
-    # Input to this is the concatenation of the feature vector and the mean start frequency
-    self.fc_bandwidth = nn.Sequential(
-        nn.Linear(hidden_dim+1, hidden_dim),
-        nn.ReLU(inplace=True),
-        nn.Linear(hidden_dim, hidden_dim),
-        nn.ReLU(inplace=True),
-        nn.Linear(hidden_dim, 2),
+    self.action_head = nn.Sequential(
+        nn.Linear(feature_dim, hidden_dim),
+        nn.ReLU(),
+        nn.Linear(hidden_dim, 2*action_space.shape[0])
     )
 
     self.optimizer = optim.Adam(self.parameters(), lr=lr)
+    self.apply(weight_init)
 
   def forward(self, obs: torch.Tensor) -> torch.Tensor:
     obs = self.features(obs)
-
-    # Start frequency distribution
-    start_mean, start_logstd = self.fc_start(obs).chunk(2, dim=-1)
-    start_logstd = torch.tanh(start_logstd)
-    start_logstd = self.logstd_min + 0.5 * \
-        (self.logstd_max - self.logstd_min) * (start_logstd + 1)
-
-    # Bandwidth distribution
-    x = torch.cat([obs, start_mean], dim=-1)
-    bw_mean, bw_logstd = self.fc_bandwidth(x).chunk(2, dim=-1)
-    bw_logstd = torch.tanh(bw_logstd)
-    bw_logstd = self.logstd_min + 0.5 * \
-        (self.logstd_max - self.logstd_min) * (bw_logstd + 1)
-
-    mean = torch.cat([start_mean, bw_mean], dim=1)
-    logstd = torch.cat([start_logstd, bw_logstd], dim=1)
+    mean, logstd = self.action_head(obs).chunk(2, dim=-1)
+    logstd = torch.tanh(logstd)
+    logstd = self.logstd_min + 0.5 * \
+        (self.logstd_max - self.logstd_min) * (logstd + 1)
     return mean, logstd
 
   def get_action(self, x: torch.Tensor) -> Tuple[torch.Tensor, ...]:
@@ -135,6 +113,7 @@ class Critic(nn.Module):
                action_space: gym.Space,
                hidden_dim: int,
                lr: float,
+               feature_dim: int = 50,
                gamma: float = 0.99,
                ) -> None:
     super().__init__()
@@ -146,32 +125,34 @@ class Critic(nn.Module):
     self.lr = lr
     self.gamma = gamma
 
-    self.encoder = NatureEncoder(*self.image_shape)
+    self.encoder = ImpalaEncoder(*self.image_shape)
     self.encoder_dim = np.prod(get_out_shape(self.encoder, self.image_shape))
 
     self.features = nn.Sequential(
-        nn.Linear(self.encoder_dim + self.fft_size, hidden_dim),
-        nn.LayerNorm(hidden_dim),
+        nn.Linear(self.encoder_dim, feature_dim),
+        nn.ReLU(),
+        nn.LayerNorm(feature_dim),
     )
 
     self.Q1 = nn.Sequential(
-        nn.Linear(hidden_dim + action_space[0], hidden_dim),
+        nn.Linear(feature_dim + action_space[0], hidden_dim),
         nn.ReLU(inplace=True),
-        nn.Linear(hidden_dim, hidden_dim),
-        nn.ReLU(inplace=True),
+        # nn.Linear(hidden_dim, hidden_dim),
+        # nn.ReLU(inplace=True),
         nn.Linear(hidden_dim, 1),
     )
 
     self.Q2 = nn.Sequential(
-        nn.Linear(hidden_dim + action_space[0], hidden_dim),
+        nn.Linear(feature_dim + action_space[0], hidden_dim),
         nn.ReLU(inplace=True),
-        nn.Linear(hidden_dim, hidden_dim),
-        nn.ReLU(inplace=True),
+        # nn.Linear(hidden_dim, hidden_dim),
+        # nn.ReLU(inplace=True),
         nn.Linear(hidden_dim, 1),
     )
 
     self.optimizer = optim.Adam(self.parameters(), lr=lr)
     self.encoder_optimizer = optim.Adam(self.encoder.parameters(), lr=lr)
+    self.apply(weight_init)
 
   def forward(self, obs: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
     assert obs.size(0) == action.size(0)
@@ -230,27 +211,47 @@ class Critic(nn.Module):
                               (1 - tau) * target_param.data)
 
 
-def make_env(env_id, seed, idx, capture_video, run_name):
+def make_env(env_id, seed, idx, capture_video, run_name, render):
   def thunk():
+    if render:
+      render_mode = 'human'
+    else:
+      render_mode = 'rgb_array'
     env = gym.make(env_id,
                    filename='/home/shane/data/HOCAE_Snaps_bool.dat',
                    channel_bandwidth=100e6,
                    fft_size=1024,
                    n_image_snapshots=500,
-                   render_mode='human')
+                   render_mode=render_mode)
     if capture_video:
       if idx == 0:
         env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
     env = gym.wrappers.TimeLimit(env, max_episode_steps=1000)
     env = gym.wrappers.RecordEpisodeStatistics(env)
-    env = gym.wrappers.NormalizeReward(env)
-    env = gym.wrappers.TransformReward(env, lambda obs: np.clip(obs, -10, 10))
+    # TODO: Allow for frame stacking
+    # env = gym.wrappers.FrameStack(env, 4)
+    # TODO: Test without reward normalization wrappers
+    # env = gym.wrappers.NormalizeReward(env)
+    # env = gym.wrappers.TransformReward(env, lambda obs: np.clip(obs, -10, 10))
 
     env.action_space.seed(seed)
     env.observation_space.seed(seed)
     return env
 
   return thunk
+
+
+def weight_init(m):
+  """Custom weight init for Conv2D and Linear layers."""
+  if isinstance(m, nn.Linear):
+    nn.init.orthogonal_(m.weight.data)
+    if hasattr(m.bias, 'data'):
+      m.bias.data.fill_(0.0)
+  elif isinstance(m, nn.Conv2d) or isinstance(m, nn.ConvTranspose2d):
+    gain = nn.init.calculate_gain('relu')
+    nn.init.orthogonal_(m.weight.data, gain)
+    if hasattr(m.bias, 'data'):
+      m.bias.data.fill_(0.0)
 
 
 def parse_args():
@@ -268,6 +269,8 @@ def parse_args():
       help="if toggled, this experiment will be tracked with Weights and Biases")
   parser.add_argument("--capture-video", type=lambda x: bool(strtobool(x)), default=False, nargs="?", const=True,
       help="whether to capture videos of the agent performances (check out `videos` folder)")
+  parser.add_argument("--render", type=lambda x: bool(strtobool(x)), default=True, nargs="?", const=True,
+      help="if toggled, human render mode used")
 
   # Algorithm specific arguments
   parser.add_argument("--env-id", type=str, default="mpar_sim/SpectrumHopperRecorded-v0",
@@ -284,7 +287,7 @@ def parse_args():
       help="the batch size of sample from the reply memory")
   parser.add_argument("--exploration-noise", type=float, default=0.1,
       help="the scale of the exploration noise")
-  parser.add_argument("--learning_starts", type=int, default=5e3,
+  parser.add_argument("--learning_starts", type=int, default=1e3,
       help="timestep to start learning")
   parser.add_argument("--policy-lr", type=float, default=3e-4,
       help="the learning rate of the policy network optimizer")
@@ -324,9 +327,7 @@ if __name__ == '__main__':
                         and args.cuda else "cpu")
   # env setup
   envs = gym.vector.SyncVectorEnv(
-      [make_env(args.env_id, args.seed, 0, args.capture_video, run_name)])
-  test_envs = gym.vector.SyncVectorEnv(
-      [make_env(args.env_id, args.seed, 0, args.capture_video, run_name)])
+      [make_env(args.env_id, args.seed, 0, args.capture_video, run_name, True)])
   assert isinstance(envs.single_action_space,
                     gym.spaces.Box), "only continuous action space is supported"
 
@@ -339,6 +340,7 @@ if __name__ == '__main__':
                   action_space=envs.single_action_space.shape,
                   lr=args.q_lr,
                   hidden_dim=256,
+                  feature_dim=50,
                   gamma=args.gamma
                   ).to(device)
   critic_target = copy.deepcopy(critic).to(device)
@@ -346,6 +348,7 @@ if __name__ == '__main__':
                 action_space=envs.single_action_space,
                 hidden_dim=256,
                 encoder_dim=critic.encoder_dim,
+                feature_dim=50,
                 lr=args.policy_lr,
                 action_scale=action_scale,
                 action_bias=action_bias,
@@ -396,8 +399,9 @@ if __name__ == '__main__':
       with torch.no_grad():
         encoded_features = critic.encoder(
             torch.Tensor(obs['spectrogram']).to(device))
-        spectrum = torch.Tensor(obs['spectrum']).to(device)
-        encoded_obs = torch.cat([encoded_features, spectrum], dim=-1)
+        # spectrum = torch.Tensor(obs['spectrum']).to(device)
+        # encoded_obs = torch.cat([encoded_features, spectrum], dim=-1)
+        encoded_obs = encoded_features
         actions, _, _ = actor.get_action(encoded_obs)
         actions = actions.cpu().numpy()
 
@@ -444,9 +448,9 @@ if __name__ == '__main__':
       data = rb.sample(args.batch_size)
       # Observations (more complicated due to the dict space)
       spectrograms = torch.Tensor(data.spectrograms).to(device)
-      spectrums = torch.Tensor(data.spectrums).to(device)
+      # spectrums = torch.Tensor(data.spectrums).to(device)
       next_spectrograms = torch.Tensor(data.next_spectrograms).to(device)
-      next_spectrums = torch.Tensor(data.next_spectrums).to(device)
+      # next_spectrums = torch.Tensor(data.next_spectrums).to(device)
       actions = torch.Tensor(data.actions).to(device)
       rewards = torch.Tensor(data.rewards).to(device)
       dones = torch.Tensor(data.dones).to(device)
@@ -456,9 +460,11 @@ if __name__ == '__main__':
       with torch.no_grad():
         next_encoded_features = critic.encoder(next_spectrograms)
       # Concatenate before passing to SAC networks
-      encoded_obs = torch.cat((encoded_features, spectrums), dim=1)
-      next_encoded_obs = torch.cat(
-          (next_encoded_features, next_spectrums), dim=1)
+      encoded_obs = encoded_features
+      next_encoded_obs = next_encoded_features
+      # encoded_obs = torch.cat((encoded_features, spectrums), dim=1)
+      # next_encoded_obs = torch.cat(
+      #     (next_encoded_features, next_spectrums), dim=1)
 
       # Train critic
       with torch.no_grad():
