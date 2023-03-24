@@ -398,7 +398,7 @@ if __name__ == '__main__':
     else:
       with torch.no_grad():
         encoded_features = critic.encoder(
-            torch.Tensor(obs['spectrogram']).to(device))
+            torch.Tensor(obs['spectrogram']).to(device)/255.0)
         # spectrum = torch.Tensor(obs['spectrum']).to(device)
         # encoded_obs = torch.cat([encoded_features, spectrum], dim=-1)
         encoded_obs = encoded_features
@@ -447,9 +447,9 @@ if __name__ == '__main__':
       # Sample the replay buffer and convert to tensors
       data = rb.sample(args.batch_size)
       # Observations (more complicated due to the dict space)
-      spectrograms = torch.Tensor(data.spectrograms).to(device)
+      spectrograms = torch.Tensor(data.spectrograms).to(device)/255.0
       # spectrums = torch.Tensor(data.spectrums).to(device)
-      next_spectrograms = torch.Tensor(data.next_spectrograms).to(device)
+      next_spectrograms = torch.Tensor(data.next_spectrograms).to(device)/255.0
       # next_spectrums = torch.Tensor(data.next_spectrums).to(device)
       actions = torch.Tensor(data.actions).to(device)
       rewards = torch.Tensor(data.rewards).to(device)

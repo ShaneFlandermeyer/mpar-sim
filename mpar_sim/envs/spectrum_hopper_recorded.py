@@ -105,9 +105,9 @@ class SpectrumHopperRecorded(gym.Env):
 
     # Downsample the image to use as an observation
     self.spectrogram_obs[0] = cv2.resize(
-        self.spectrogram,
+        self.spectrogram*255,
         self.observation_space['spectrogram'].shape[1:],
-        interpolation=cv2.INTER_CUBIC)
+        interpolation=cv2.INTER_AREA)
 
     obs = {
         "spectrogram": self.spectrogram_obs,
@@ -135,9 +135,9 @@ class SpectrumHopperRecorded(gym.Env):
     self.current_spectrum = self.data[self.start_ind]
     self.spectrogram = self.data[self.start_ind:stop_ind]
     self.spectrogram_obs = cv2.resize(
-        self.spectrogram,
+        self.spectrogram*255,
         self.observation_space['spectrogram'].shape[1:],
-        interpolation=cv2.INTER_LINEAR)[np.newaxis, :]
+        interpolation=cv2.INTER_AREA)[np.newaxis, :]
 
     obs = {
         "spectrogram": self.spectrogram_obs,
