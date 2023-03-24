@@ -69,11 +69,14 @@ class SpectrumHopperRecorded(gym.Env):
     radar_bw = np.clip(action[1] * self.channel_bandwidth,
                        0, self.channel_bandwidth - radar_start_freq)
     radar_stop_freq = radar_start_freq + radar_bw
+    
     # Radar spectrum occupancy (with history)
     radar_spectrum = np.zeros(self.fft_size)
     radar_occupied = np.logical_and(self.fft_freq_axis >= radar_start_freq,
                                     self.fft_freq_axis <= radar_stop_freq)
     radar_spectrum[radar_occupied] = 1
+    self.radar_spectrogram = np.roll(self.radar_spectrogram, -1, axis=0)
+    self.radar_spectrogram[-1] = radar_spectrum
 
 
     # Update the communications occupancy
@@ -81,10 +84,7 @@ class SpectrumHopperRecorded(gym.Env):
     stop_ind = self.start_ind + self.n_image_snapshots
     self.spectrogram = np.roll(self.spectrogram, -1, axis=0)
     self.spectrogram[-1] = self.data[self.start_ind]
-    # "Ground truth" spectrum (without radar)
     self.current_spectrum = self.spectrogram[-1]
-    # Add radar to the observation
-    self.spectrogram[-1, radar_spectrum == 1] = 2
 
     # Compute reward
     bandwidth_reward = radar_bw / self.channel_bandwidth
@@ -102,6 +102,9 @@ class SpectrumHopperRecorded(gym.Env):
       self.spectrogram = np.roll(self.spectrogram, -1, axis=0)
       self.spectrogram[-1] = self.data[self.start_ind]
       self.current_spectrum = self.spectrogram[-1]
+      
+      self.radar_spectrogram = np.roll(self.radar_spectrogram, -1, axis=0)
+      self.radar_spectrogram[-1] = 0
 
     # Downsample the image to use as an observation
     self.spectrogram_obs[0] = cv2.resize(
@@ -138,6 +141,7 @@ class SpectrumHopperRecorded(gym.Env):
         self.spectrogram*255,
         self.observation_space['spectrogram'].shape[1:],
         interpolation=cv2.INTER_AREA)[np.newaxis, :]
+    self.radar_spectrogram = np.zeros_like(self.spectrogram)
 
     obs = {
         "spectrogram": self.spectrogram_obs,
@@ -189,7 +193,7 @@ class SpectrumHopperRecorded(gym.Env):
     b = 3
     w = 255
     pixels[self.spectrogram.T == 1] = g
-    pixels[self.spectrogram.T == 2] = w
+    pixels[self.radar_spectrogram.T == 1] = w
     canvas = pygame.surfarray.make_surface(pixels)
     
     if self.render_mode == "human":
