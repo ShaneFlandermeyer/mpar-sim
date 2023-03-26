@@ -65,6 +65,8 @@ class Actor(nn.Module):
     self.action_head = nn.Sequential(
         nn.Linear(feature_dim, hidden_dim),
         nn.ReLU(),
+        nn.Linear(hidden_dim, hidden_dim),
+        nn.ReLU(),
         nn.Linear(hidden_dim, 2*action_space.shape[0])
     )
 
@@ -137,16 +139,16 @@ class Critic(nn.Module):
     self.Q1 = nn.Sequential(
         nn.Linear(feature_dim + action_space[0], hidden_dim),
         nn.ReLU(inplace=True),
-        # nn.Linear(hidden_dim, hidden_dim),
-        # nn.ReLU(inplace=True),
+        nn.Linear(hidden_dim, hidden_dim),
+        nn.ReLU(inplace=True),
         nn.Linear(hidden_dim, 1),
     )
 
     self.Q2 = nn.Sequential(
         nn.Linear(feature_dim + action_space[0], hidden_dim),
         nn.ReLU(inplace=True),
-        # nn.Linear(hidden_dim, hidden_dim),
-        # nn.ReLU(inplace=True),
+        nn.Linear(hidden_dim, hidden_dim),
+        nn.ReLU(inplace=True),
         nn.Linear(hidden_dim, 1),
     )
 
@@ -287,7 +289,7 @@ def parse_args():
       help="the batch size of sample from the reply memory")
   parser.add_argument("--exploration-noise", type=float, default=0.1,
       help="the scale of the exploration noise")
-  parser.add_argument("--learning_starts", type=int, default=1e3,
+  parser.add_argument("--learning_starts", type=int, default=5e3,
       help="timestep to start learning")
   parser.add_argument("--policy-lr", type=float, default=3e-4,
       help="the learning rate of the policy network optimizer")
