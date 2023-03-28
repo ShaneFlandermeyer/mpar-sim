@@ -83,44 +83,30 @@ class SpectrumHopperRecorded(gym.Env):
     self.radar_spectrogram[-1] = radar_spectrum
 
     # Update the communications occupancy
-    self.start_ind += 1
-    stop_ind = self.start_ind + self.n_image_snapshots
+    self.start_ind = (self.start_ind + 1) % self.data.shape[0]
     self.spectrogram = np.roll(self.spectrogram, -1, axis=0)
     self.spectrogram[-1] = self.data[self.start_ind]
     self.current_spectrum = self.spectrogram[-1]
 
-    # Compute reward
-    z = [(x[0], len(list(x[1])))
+    # Penalize the radar for collisions and missed opportunities
+    gap_widths = [(x[0], len(list(x[1])))
          for x in itertools.groupby(self.current_spectrum)]
-    n_bins_widest = max(z, key=lambda x: x[1])[1]
+    n_bins_widest = max(gap_widths, key=lambda x: x[1])[1]
     n_radar_bins = np.count_nonzero(radar_spectrum)
     n_int_bins = np.count_nonzero(self.current_spectrum)
-    # union = np.count_nonzero(np.logical_or(
-    #     self.current_spectrum, radar_spectrum))
     intersection = np.count_nonzero(
         np.logical_and(self.current_spectrum, radar_spectrum))
-    bandwidth_reward = n_radar_bins / (n_bins_widest + 1e-6)
-    # collision_penalty = -intersection / (n_int_bins + 1e-6)
     collision_penalty = intersection / (n_int_bins + 1e-6)
     missed_penalty = (n_bins_widest - n_radar_bins) / self.fft_size
-    
-    bandwidth_reward = np.clip(bandwidth_reward, 0, 1)
+    # Limit the penalties to the same scale
     collision_penalty = np.clip(collision_penalty, 0, 1)
     missed_penalty = np.clip(missed_penalty, 0, 1)
-    # Don't give a reward if they perform too poorly
-    # if bandwidth_reward < 0.75:
-    #   bandwidth_reward = 0    
-    # if collision_penalty < -0.25:
-    #   collision_penalty = -1
     
     reward = -(0.5*collision_penalty + 0.5*missed_penalty)
 
     # Propagate the environment forward a bit
     for _ in range(10):
-      self.start_ind += 1
-      stop_ind = self.start_ind + self.n_image_snapshots
-      if stop_ind > self.data.shape[0]:
-        break
+      self.start_ind = (self.start_ind + 1) % self.data.shape[0]
       # To maintain a memory of where the radar transmitted, roll the spectrogram every time step
       self.spectrogram = np.roll(self.spectrogram, -1, axis=0)
       self.spectrogram[-1] = self.data[self.start_ind]
@@ -142,7 +128,7 @@ class SpectrumHopperRecorded(gym.Env):
     # }
     terminated = False
     # End the episode early if we reach the end of the data
-    truncated = stop_ind >= self.data.shape[0]
+    truncated = False
     info = {
     }
 
@@ -155,8 +141,8 @@ class SpectrumHopperRecorded(gym.Env):
 
     # Flip the data to get more diversity in the training
     axis = self.np_random.choice([0, 1])
-    self.data = np.flip(self.data, axis=axis)
-
+    # self.data = np.flip(self.data, axis=axis)
+    self.data = np.fft.fftshift(self.data, axes=axis)
     # Randomly sample spectrogram from a file
     self.start_ind = self.np_random.integers(
         0, self.data.shape[0] - self.n_image_snapshots)
