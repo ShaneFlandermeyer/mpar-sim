@@ -20,6 +20,8 @@ import torch.optim as optim
 from torch.utils.tensorboard import SummaryWriter
 from lightning_rl.common.buffers import ReplayBuffer
 from lightning_rl.models.off_policy.sac import squashed_gaussian_action
+from lightning_rl.wrappers import TransposeObservation
+import itertools
 
 # Configuration
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
@@ -42,10 +44,15 @@ def parse_args():
       help="whether to capture videos of the agent performances (check out `videos` folder)")
   parser.add_argument("--render", type=lambda x: bool(strtobool(x)), default=True, nargs="?", const=True,
       help="if toggled, human render mode used")
+  parser.add_argument("--eval-interval", type=int, default=5e3,
+      help="Number of steps between environment evaluations")
+  parser.add_argument("--n-eval-episodes", type=int, default=3,
+      help="Number of evaluation episodes")
 
   # Algorithm specific arguments
-  parser.add_argument("--env-id", type=str, default="mpar_sim/SpectrumHopperRecorded-v0",
-      help="the id of the environment")
+  parser.add_argument("--env-id", type=str, 
+                      default="mpar_sim/SpectrumHopperRecorded-v0",
+                      help="the id of the environment")
   parser.add_argument("--total-timesteps", type=int, default=1000000,
       help="total timesteps of the experiments")
   parser.add_argument("--buffer-size", type=int, default=int(1e6),
@@ -58,7 +65,7 @@ def parse_args():
       help="the batch size of sample from the reply memory")
   parser.add_argument("--exploration-noise", type=float, default=0.1,
       help="the scale of the exploration noise")
-  parser.add_argument("--learning_starts", type=int, default=2.5e3,
+  parser.add_argument("--learning_starts", type=int, default=1e3,
       help="timestep to start learning")
   parser.add_argument("--policy-lr", type=float, default=3e-4,
       help="the learning rate of the policy network optimizer")
@@ -92,10 +99,12 @@ def make_env(env_id, seed, idx, capture_video, run_name, render):
                    n_image_snapshots=512,
                    frame_stack=1,
                    render_mode=render_mode)
+    env = gym.wrappers.ResizeObservation(env, (84, 84))
+    env = TransposeObservation(env, [-1, 0, 1])
     if capture_video:
       if idx == 0:
         env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
-    env = gym.wrappers.TimeLimit(env, max_episode_steps=250)
+    env = gym.wrappers.TimeLimit(env, max_episode_steps=500)
     env = gym.wrappers.RecordEpisodeStatistics(env)
 
     env.action_space.seed(seed)
@@ -107,12 +116,19 @@ def make_env(env_id, seed, idx, capture_video, run_name, render):
 
 def evaluate(env, agent, n_episodes):
   episode_rewards = []
+  seed = 0
   for i in range(n_episodes):
-    obs, info = env.reset()
+    obs, info = env.reset(seed=seed)
     done = False
     episode_reward = 0
     while not done:
-      obs_tensor = torch.as_tensor(obs[0, :, -1, :], dtype=torch.float32).to(agent.device)
+      # TODO: Only using the "answer" as observation for now
+      obs = np.concatenate([
+        obs[0, 0, -1, :],
+        np.array([infos['widest_start'][0], infos['widest_bandwidth'][0]])
+      ]).reshape(1, -1)
+      obs_tensor = torch.as_tensor(
+          obs, dtype=torch.float32).to(agent.device)
       action, _ = agent.act(obs_tensor, deterministic=True)
       obs, reward, terminated, truncated, _ = env.step(action)
       done = terminated or truncated
@@ -122,9 +138,14 @@ def evaluate(env, agent, n_episodes):
 
   return np.mean(episode_rewards)
 
-LOG_STD_MIN = -10
+
+LOG_STD_MIN = -5
 LOG_STD_MAX = 2
 
+def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
+  torch.nn.init.orthogonal_(layer.weight, std)
+  torch.nn.init.constant_(layer.bias, bias_const)
+  return layer
 
 class Actor(nn.Module):
   def __init__(self,
@@ -134,11 +155,22 @@ class Actor(nn.Module):
                action_high: np.ndarray
                ) -> None:
     super().__init__()
-    self.mlp = nn.Sequential(
-        nn.Linear(np.prod(obs_shape), 256), nn.ReLU(),
-        nn.Linear(256, 256), nn.ReLU(),
-        nn.Linear(256, 2*np.prod(action_shape)),
+    self.network = nn.Sequential(
+        layer_init(nn.Conv2d(1, 32, 8, stride=4)),
+        nn.ReLU(),
+        layer_init(nn.Conv2d(32, 64, 4, stride=2)),
+        nn.ReLU(),
+        layer_init(nn.Conv2d(64, 64, 3, stride=1)),
+        nn.ReLU(),
+        nn.Flatten(start_dim=1, end_dim=-1),
+        layer_init(nn.Linear(64 * 7 * 7, 512)),
+        nn.ReLU(),
     )
+    self.action = nn.Sequential(
+        nn.Linear(512, 2*np.prod(action_shape)),
+    )
+    # self.start = nn.Linear(256, 2)
+    # self.bandwidth = nn.Linear(256+2, 2)
     # Action rescaling
     self.register_buffer(
         "action_scale", torch.tensor(
@@ -148,7 +180,8 @@ class Actor(nn.Module):
             (action_high + action_low) / 2.0, dtype=torch.float32))
 
   def forward(self, x):
-    mean, logstd = self.mlp(x).chunk(2, dim=-1)
+    x = self.network(x/255.0)
+    mean, logstd = self.action(x).chunk(2, dim=-1)
     logstd = LOG_STD_MIN + 0.5 * (LOG_STD_MAX - LOG_STD_MIN) * (logstd + 1)
     std = logstd.exp()
 
@@ -158,6 +191,17 @@ class Actor(nn.Module):
 class Critic(nn.Module):
   def __init__(self, obs_shape: Tuple[int], act_shape: Tuple[int]):
     super().__init__()
+    self.network = nn.Sequential(
+        layer_init(nn.Conv2d(1, 32, 8, stride=4)),
+        nn.ReLU(),
+        layer_init(nn.Conv2d(32, 64, 4, stride=2)),
+        nn.ReLU(),
+        layer_init(nn.Conv2d(64, 64, 3, stride=1)),
+        nn.ReLU(),
+        nn.Flatten(start_dim=1, end_dim=-1),
+        layer_init(nn.Linear(64 * 7 * 7, 512)),
+        nn.ReLU(),
+    )
     self.Q1 = nn.Sequential(
         nn.Linear(np.prod(obs_shape) + np.prod(act_shape), 256), nn.ReLU(),
         nn.Linear(256, 256), nn.ReLU(),
@@ -171,7 +215,8 @@ class Critic(nn.Module):
     )
 
   def forward(self, obs: torch.Tensor, act: torch.Tensor):
-    x = torch.cat([obs, act], dim=1)
+    features = self.network(obs/255.0)
+    x = torch.cat([features, act], dim=1)
     return self.Q1(x), self.Q2(x)
 
 
@@ -200,7 +245,10 @@ if __name__ == '__main__':
   assert isinstance(envs.single_action_space,
                     gym.spaces.Box), "only continuous action space is supported"
 
-  obs_shape = (envs.single_observation_space.shape[2],)
+  # evaluate(eval_envs, Deterministic(), 10)
+  # print("Optimal reward", evaluate(eval_envs, Deterministic(), 10))
+
+  obs_shape = envs.single_observation_space.shape
   action_shape = envs.single_action_space.shape
   action_min = envs.single_action_space.low
   action_max = envs.single_action_space.high
@@ -236,9 +284,7 @@ if __name__ == '__main__':
   start_time = time.time()
 
   # TRY NOT TO MODIFY: start the game
-  obs, info = envs.reset(seed=args.seed)
-  # TODO: Debugging without state history
-  obs = obs[:, 0, -1, :]
+  obs, infos = envs.reset(seed=args.seed)
   for global_step in range(args.total_timesteps):
     # ALSO LOGIC: put action logic here
     if global_step < args.learning_starts:
@@ -250,8 +296,6 @@ if __name__ == '__main__':
 
     # TRY NOT TO MODIFY: Execute the game and log data
     next_obs, rewards, terminated, truncated, infos = envs.step(actions)
-    # TODO: Debugging without state history
-    next_obs = next_obs[:, 0, -1, :]
     dones = terminated
 
     # TRY NOT TO MODIFY: record rewards for plotting purposes
@@ -272,8 +316,7 @@ if __name__ == '__main__':
     real_next_obs = next_obs.copy()
     for idx, d in enumerate(terminated | truncated):
       if d:
-        # TODO: Debugging without state history
-        real_next_obs[idx] = infos["final_observation"][idx][0, -1, :]
+        real_next_obs[idx] = infos["final_observation"][idx]
 
     rb.add(observations=obs,
            next_observations=real_next_obs,
@@ -329,8 +372,7 @@ if __name__ == '__main__':
                           (time.time() - start_time)), global_step)
 
       # Evaluate the agent periodically
-      eval_interval = 5000
-      if global_step % eval_interval == 0:
-        eval_reward = evaluate(eval_envs, sac, n_episodes=5)
+      if global_step % args.eval_interval == 0:
+        eval_reward = evaluate(eval_envs, sac, n_episodes=args.n_eval_episodes)
         print(f"Evaluation reward: {eval_reward:.2f}")
         writer.add_scalar("train/eval_reward", eval_reward, global_step)
