@@ -7,6 +7,7 @@ import pygame
 import cv2
 import itertools
 
+
 class SpectrumHopperRecorded(gym.Env):
   metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 50}
   """
@@ -21,7 +22,6 @@ class SpectrumHopperRecorded(gym.Env):
   def __init__(self,
                filename: str,
                channel_bandwidth: float = 100e6,
-               min_bandwidth: float = 20e6,
                fft_size: int = 1024,
                n_image_snapshots: int = 512,
                frame_stack: int = 1,
@@ -30,7 +30,6 @@ class SpectrumHopperRecorded(gym.Env):
         low=0, high=255, shape=(n_image_snapshots, fft_size, frame_stack), dtype=np.uint8)
 
     # Action space is the start and span of the radar waveform
-    
     self.action_space = gym.spaces.Box(
         low=np.array([-1, -1]), high=np.array([1, 1]), shape=(2,), dtype=np.float32)
 
@@ -47,6 +46,7 @@ class SpectrumHopperRecorded(gym.Env):
     self.data = np.fromfile(filename, dtype=np.uint8)
     n_snapshots = int(self.data.size / fft_size)
     self.data = self.data.reshape((n_snapshots, fft_size), order='F')
+
     # Zero out the dc component and X310 spur. Messes up the visualization and bandwidth computations
     idc = int(self.fft_size/2)
     ispur = np.digitize(10e6, self.fft_freq_axis)
@@ -61,6 +61,7 @@ class SpectrumHopperRecorded(gym.Env):
 
   def step(self, action: np.ndarray):
     # Update the radar waveform
+    # TODO: Actions in visualRL are in the range [-1, 1]
     action = action*0.5 + 0.5
     radar_start_freq = action[0] * self.channel_bandwidth
     radar_bw = np.clip(action[1] * self.channel_bandwidth,
@@ -77,32 +78,32 @@ class SpectrumHopperRecorded(gym.Env):
 
     # Update the communications occupancy
     self.start_ind = (self.start_ind + 1) % self.data.shape[0]
-    self.current_spectrum, widest_start, _ = self._merge_bins(
-        self.data[self.start_ind])
-    self.current_spectrum = self.data[self.start_ind]
+    self.current_spectrum, widest_start, widest_bw = \
+          self._merge_bins(self.data[self.start_ind])
     self.spectrogram = np.roll(self.spectrogram, -1, axis=0)
     self.spectrogram[-1] = self.current_spectrum
-    
-    reward = self._compute_reward(radar_spectrum, widest_start)
+    reward = self._compute_reward(radar_spectrum, widest_bw)
 
     # Propagate the environment forward a bit
-    for _ in range(10):
+    for _ in range(20):
       self.start_ind = (self.start_ind + 1) % self.data.shape[0]
-      self.current_spectrum = self.data[self.start_ind]
+      self.current_spectrum, new_widest_start, new_widest_bw = \
+          self._merge_bins(self.data[self.start_ind])
       self.spectrogram = np.roll(self.spectrogram, -1, axis=0)
       self.spectrogram[-1] = self.current_spectrum
-      self.spectrogram[-1], new_widest_start, new_widest_bandwidth = \
-          self._merge_bins(self.spectrogram[-1])
 
       self.radar_spectrogram = np.roll(self.radar_spectrogram, -1, axis=0)
       self.radar_spectrogram[-1] = 0
 
-    obs = self.spectrogram.reshape(self.observation_space.shape)*255
+    # Re-order into frames, then swap the axes to get the correct output shape
+    obs = 255*self.spectrogram.reshape(
+        (self.frame_stack, self.n_image_snapshots, self.fft_size))
+    obs = np.transpose(obs, (1, 2, 0))
     terminated = False
     truncated = False
     info = {
         "widest_start": new_widest_start/self.fft_size,
-        "widest_bandwidth": new_widest_bandwidth/self.fft_size,
+        "widest_bandwidth": new_widest_bw/self.fft_size,
     }
 
     if self.render_mode == "human":
@@ -113,20 +114,21 @@ class SpectrumHopperRecorded(gym.Env):
     super().reset(seed=seed)
 
     # Flip the data to get more diversity in the training
-    axis = self.np_random.choice([0, 1])
     self.data = np.roll(self.data, self.np_random.integers(0, 512), axis=1)
-    # self.data = np.fft.fftshift(self.data, axes=1)
 
     # Randomly sample spectrogram from a file
+    total_length = self.n_image_snapshots * self.frame_stack
     self.start_ind = self.np_random.integers(
-        0, self.data.shape[0] - self.n_image_snapshots)
-    stop_ind = self.start_ind + self.n_image_snapshots
+        0, self.data.shape[0] - total_length)
+    stop_ind = self.start_ind + total_length
     self.spectrogram = self.data[self.start_ind:stop_ind]
-    self.spectrogram[-1], widest_start, widest_bandwidth = \
-          self._merge_bins(self.spectrogram[-1])
+    self.spectrogram[-1], widest_start, widest_bandwidth = self._merge_bins(self.spectrogram[-1])
     self.radar_spectrogram = np.zeros_like(self.spectrogram)
 
-    obs = self.spectrogram.reshape(self.observation_space.shape)*255
+    # Re-order into frames, then swap the axes to get the correct output shape
+    obs = 255*self.spectrogram.reshape(
+        (self.frame_stack, self.n_image_snapshots, self.fft_size))
+    obs = np.transpose(obs, (1, 2, 0))
     info = {
         "widest_start": widest_start/self.fft_size,
         "widest_bandwidth": widest_bandwidth/self.fft_size,
@@ -150,7 +152,9 @@ class SpectrumHopperRecorded(gym.Env):
   # Helper methods
   ##########################
 
-  def _compute_reward(self, radar_spectrum, widest_gap):
+  def _compute_reward(self, 
+                      radar_spectrum: np.ndarray, 
+                      widest_bandwidth: np.ndarray):
     n_radar_bins = np.count_nonzero(radar_spectrum)
     n_int_bins = np.count_nonzero(self.current_spectrum)
     intersection = np.count_nonzero(
@@ -158,8 +162,8 @@ class SpectrumHopperRecorded(gym.Env):
     if n_int_bins == 0:
       collision_penalty = 0
     else:
-      collision_penalty = intersection / n_int_bins
-    missed_penalty = (widest_gap - n_radar_bins) / self.fft_size
+      collision_penalty = intersection / self.fft_size
+    missed_penalty = (widest_bandwidth - n_radar_bins) / self.fft_size
     # Limit the penalties to the same scale
     collision_penalty = np.clip(collision_penalty, 0, 1)
     missed_penalty = np.clip(missed_penalty, 0, 1)
@@ -178,7 +182,7 @@ class SpectrumHopperRecorded(gym.Env):
     if self.window is None and self.render_mode == "human":
       pygame.init()
       pygame.display.init()
-      image_shape = (self.fft_size, self.n_image_snapshots)
+      image_shape = (self.fft_size, self.n_image_snapshots*self.frame_stack)
       self.window = pygame.display.set_mode(image_shape)
 
     if self.clock is None and self.render_mode == "human":
@@ -187,6 +191,7 @@ class SpectrumHopperRecorded(gym.Env):
     # Draw canvas from pixels
     # The observation gets inverted here because I want black pixels on a white background.
     pixels = self.spectrogram.T.copy()
+    pixels = pixels.reshape((-1, *pixels.shape[1:]))
     r = 96
     g = 28
     b = 3
@@ -223,10 +228,8 @@ class SpectrumHopperRecorded(gym.Env):
     # Merge bins if they are separated by less than "threshold" zeros
     # Also remove "speckle" bins that are less than 3 bins wide
     for start, val, width in zip(starts, vals, widths):
-      if val == 1 and width < 3:
-        spectrum[start:start+width] = 0
-      if val == 0 and width < threshold:
-        spectrum[start:start+width] = 1
+      if width < threshold:
+        spectrum[start:start+width] = 1 - val
 
     return spectrum, widest_start, widest_bw
 
@@ -236,10 +239,16 @@ if __name__ == '__main__':
       filename='/home/shane/data/HOCAE_Snaps_bool.dat',
       channel_bandwidth=100e6,
       fft_size=1024,
-      n_image_snapshots=500,
+      n_image_snapshots=200,
+      frame_stack=4,
       render_mode='human')
   obs, info = env.reset()
-  x = 1
-  plt.imshow(obs[0])
+  # obs, reward, term, trunc, = env.step(env.action_space.sample())
+  # x = 1
+  plt.figure()
+  plt.imshow(obs[:, :, 0])
+  plt.colorbar()
+  plt.figure()
+  plt.imshow(obs[:, :, 1])
   plt.colorbar()
   plt.show()
