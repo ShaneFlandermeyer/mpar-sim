@@ -169,10 +169,10 @@ class SpectrumHopperRecorded(gym.Env):
     n_open_bins = open_bin_inds[0] if len(open_bin_inds) > 0 else 0
     start_reward = n_open_bins / widest_bw_bins
     # Penalize the bandwidth selection if it exceeds the available bandwidth
-    if radar_bw_bins <= widest_bw_bins:
-      bw_reward = radar_bw_bins / widest_bw_bins
+    if radar_bw_bins <= n_open_bins:
+      bw_reward = radar_bw_bins / n_open_bins
     else:
-      bw_reward = 1 - (radar_bw_bins - widest_bw_bins) / widest_bw_bins
+      bw_reward = 1 - (radar_bw_bins - n_open_bins) / n_open_bins
     reward = start_reward + bw_reward
     info = {
         'start_reward': start_reward,
