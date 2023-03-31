@@ -32,7 +32,7 @@ def parse_args():
   parser = argparse.ArgumentParser()
   parser.add_argument("--exp-name", type=str, default=os.path.basename(__file__).rstrip(".py"),
       help="the name of this experiment")
-  parser.add_argument("--seed", type=int, default=1,
+  parser.add_argument("--seed", type=int, default=np.random.randint(0, 100000),
       help="seed of the experiment")
   parser.add_argument("--torch-deterministic", type=lambda x: bool(strtobool(x)), default=True, nargs="?", const=True,
       help="if toggled, `torch.backends.cudnn.deterministic=False`")
@@ -44,7 +44,7 @@ def parse_args():
       help="whether to capture videos of the agent performances (check out `videos` folder)")
   parser.add_argument("--render", type=lambda x: bool(strtobool(x)), default=True, nargs="?", const=True,
       help="if toggled, human render mode used")
-  parser.add_argument("--eval-interval", type=int, default=5e3,
+  parser.add_argument("--eval-interval", type=int, default=10e3,
       help="Number of steps between environment evaluations")
   parser.add_argument("--n-eval-episodes", type=int, default=3,
       help="Number of evaluation episodes")
@@ -61,7 +61,7 @@ def parse_args():
       help="the discount factor gamma")
   parser.add_argument("--tau", type=float, default=0.005,
       help="target smoothing coefficient (default: 0.005)")
-  parser.add_argument("--batch-size", type=int, default=512,
+  parser.add_argument("--batch-size", type=int, default=64,
       help="the batch size of sample from the reply memory")
   parser.add_argument("--exploration-noise", type=float, default=0.1,
       help="the scale of the exploration noise")
@@ -96,9 +96,10 @@ def make_env(env_id, seed, idx, capture_video, run_name, render):
                    filename='/home/shane/data/HOCAE_Snaps_bool.dat',
                    channel_bandwidth=100e6,
                    fft_size=1024,
-                   n_image_snapshots=512,
-                   frame_stack=1,
+                   n_image_snapshots=256,
+                   frame_stack=2,
                    render_mode=render_mode)
+    # TODO: This fails if more than two frames are stacked
     env = gym.wrappers.ResizeObservation(env, (84, 84))
     env = TransposeObservation(env, [-1, 0, 1])
     if capture_video:
@@ -122,14 +123,10 @@ def evaluate(env, agent, n_episodes):
     done = False
     episode_reward = 0
     while not done:
-      # TODO: Only using the "answer" as observation for now
-      obs = np.concatenate([
-        obs[0, 0, -1, :],
-        np.array([infos['widest_start'][0], infos['widest_bandwidth'][0]])
-      ]).reshape(1, -1)
       obs_tensor = torch.as_tensor(
           obs, dtype=torch.float32).to(agent.device)
       action, _ = agent.act(obs_tensor, deterministic=True)
+      action = action.detach().cpu().numpy()
       obs, reward, terminated, truncated, _ = env.step(action)
       done = terminated or truncated
       episode_reward += reward
@@ -142,10 +139,12 @@ def evaluate(env, agent, n_episodes):
 LOG_STD_MIN = -5
 LOG_STD_MAX = 2
 
+
 def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
   torch.nn.init.orthogonal_(layer.weight, std)
   torch.nn.init.constant_(layer.bias, bias_const)
   return layer
+
 
 class Actor(nn.Module):
   def __init__(self,
@@ -155,22 +154,23 @@ class Actor(nn.Module):
                action_high: np.ndarray
                ) -> None:
     super().__init__()
-    self.network = nn.Sequential(
-        layer_init(nn.Conv2d(1, 32, 8, stride=4)),
+    self.convnet = nn.Sequential(
+        layer_init(nn.Conv2d(obs_shape[0], 32, 8, stride=4)),
         nn.ReLU(),
         layer_init(nn.Conv2d(32, 64, 4, stride=2)),
         nn.ReLU(),
         layer_init(nn.Conv2d(64, 64, 3, stride=1)),
         nn.ReLU(),
         nn.Flatten(start_dim=1, end_dim=-1),
-        layer_init(nn.Linear(64 * 7 * 7, 512)),
+        layer_init(nn.Linear(64 * 7 * 7, 256)),
         nn.ReLU(),
     )
-    self.action = nn.Sequential(
-        nn.Linear(512, 2*np.prod(action_shape)),
-    )
-    # self.start = nn.Linear(256, 2)
-    # self.bandwidth = nn.Linear(256+2, 2)
+    # self.action = nn.Sequential(
+    #     nn.Linear(512, 2*np.prod(action_shape)),
+    # )
+    self.start = layer_init(nn.Linear(256, 2), std=0.1)
+    self.bw = layer_init(nn.Linear(256+1, 2), std=0.1)
+
     # Action rescaling
     self.register_buffer(
         "action_scale", torch.tensor(
@@ -180,8 +180,14 @@ class Actor(nn.Module):
             (action_high + action_low) / 2.0, dtype=torch.float32))
 
   def forward(self, x):
-    x = self.network(x/255.0)
-    mean, logstd = self.action(x).chunk(2, dim=-1)
+    x = self.convnet(x / 255.0)
+    s_mean, s_logstd = self.start(x).chunk(2, dim=-1)
+    
+    x = torch.cat([x, s_mean], dim=-1)
+    bw_mean, bw_logstd = self.bw(x).chunk(2, dim=-1)
+    
+    mean = torch.cat([s_mean, bw_mean], dim=-1)
+    logstd = torch.cat([s_logstd, bw_logstd], dim=-1)
     logstd = LOG_STD_MIN + 0.5 * (LOG_STD_MAX - LOG_STD_MIN) * (logstd + 1)
     std = logstd.exp()
 
@@ -189,10 +195,10 @@ class Actor(nn.Module):
 
 
 class Critic(nn.Module):
-  def __init__(self, obs_shape: Tuple[int], act_shape: Tuple[int]):
+  def __init__(self, obs_shape: Tuple[int], action_shape: Tuple[int]):
     super().__init__()
-    self.network = nn.Sequential(
-        layer_init(nn.Conv2d(1, 32, 8, stride=4)),
+    self.convnet = nn.Sequential(
+        layer_init(nn.Conv2d(obs_shape[0], 32, 8, stride=4)),
         nn.ReLU(),
         layer_init(nn.Conv2d(32, 64, 4, stride=2)),
         nn.ReLU(),
@@ -202,20 +208,22 @@ class Critic(nn.Module):
         layer_init(nn.Linear(64 * 7 * 7, 512)),
         nn.ReLU(),
     )
+
+    out_shape = np.prod(get_out_shape(self.convnet, obs_shape))
     self.Q1 = nn.Sequential(
-        nn.Linear(np.prod(obs_shape) + np.prod(act_shape), 256), nn.ReLU(),
+        nn.Linear(out_shape + np.prod(action_shape), 256), nn.ReLU(),
         nn.Linear(256, 256), nn.ReLU(),
         nn.Linear(256, 1),
     )
 
     self.Q2 = nn.Sequential(
-        nn.Linear(np.prod(obs_shape) + np.prod(act_shape), 256), nn.ReLU(),
+        nn.Linear(out_shape + np.prod(action_shape), 256), nn.ReLU(),
         nn.Linear(256, 256), nn.ReLU(),
         nn.Linear(256, 1),
     )
 
   def forward(self, obs: torch.Tensor, act: torch.Tensor):
-    features = self.network(obs/255.0)
+    features = self.convnet(obs/255.0)
     x = torch.cat([features, act], dim=1)
     return self.Q1(x), self.Q2(x)
 
@@ -245,15 +253,15 @@ if __name__ == '__main__':
   assert isinstance(envs.single_action_space,
                     gym.spaces.Box), "only continuous action space is supported"
 
-  # evaluate(eval_envs, Deterministic(), 10)
-  # print("Optimal reward", evaluate(eval_envs, Deterministic(), 10))
-
-  obs_shape = envs.single_observation_space.shape
   action_shape = envs.single_action_space.shape
-  action_min = envs.single_action_space.low
-  action_max = envs.single_action_space.high
-  actor = Actor(obs_shape, action_shape, action_min, action_max).to(device)
-  critic = Critic(obs_shape, action_shape).to(device)
+  obs_shape = envs.single_observation_space.shape
+  action_low = envs.single_action_space.low
+  action_high = envs.single_action_space.high
+  actor = Actor(obs_shape=obs_shape,
+                action_shape=action_shape,
+                action_low=action_low,
+                action_high=action_high).to(device)
+  critic = Critic(obs_shape=obs_shape, action_shape=action_shape).to(device)
   critic_target = copy.deepcopy(critic).to(device)
   sac = SAC(actor=actor,
             critic=critic,
@@ -263,7 +271,7 @@ if __name__ == '__main__':
             obs_shape=obs_shape,
             gamma=args.gamma,
             tau=args.tau,
-            init_temperature=0.1,
+            init_temperature=1,
             actor_lr=args.policy_lr,
             critic_lr=args.q_lr,
             alpha_lr=args.q_lr,
@@ -284,7 +292,7 @@ if __name__ == '__main__':
   start_time = time.time()
 
   # TRY NOT TO MODIFY: start the game
-  obs, infos = envs.reset(seed=args.seed)
+  obs, info = envs.reset(seed=args.seed)
   for global_step in range(args.total_timesteps):
     # ALSO LOGIC: put action logic here
     if global_step < args.learning_starts:
@@ -293,11 +301,21 @@ if __name__ == '__main__':
     else:
       obs_tensor = torch.FloatTensor(obs).to(sac.device)
       actions, _ = sac.act(obs_tensor, deterministic=False)
+      actions = actions.detach().cpu().numpy()
 
     # TRY NOT TO MODIFY: Execute the game and log data
     next_obs, rewards, terminated, truncated, infos = envs.step(actions)
     dones = terminated
+    
+    if global_step % 100 == 0:
+      if "start_reward" in infos:
+        start_reward = infos["start_reward"]
+        writer.add_scalar("charts/start_reward", start_reward, global_step)
 
+      if "bw_reward" in infos:
+        bw_reward = infos["bw_reward"]
+        writer.add_scalar("charts/bw_reward", bw_reward, global_step)
+    
     # TRY NOT TO MODIFY: record rewards for plotting purposes
     # Only print when at least 1 env is done
     if "final_info" in infos:
@@ -337,13 +355,11 @@ if __name__ == '__main__':
       next_observations = torch.Tensor(data.next_observations).to(device)
       actions = torch.Tensor(data.actions).to(device)
       rewards = torch.Tensor(data.rewards).to(device)
+      # TODO: Necessary or helpful?
+      # rewards = (rewards - rewards.mean()) / (rewards.std() + 1e-8)
       dones = torch.Tensor(data.dones).to(device)
 
       # Train critic
-      with torch.no_grad():
-        next_actions, next_logprobs = sac.act(
-            next_observations, deterministic=False)
-
       critic_info = sac.update_critic(obs=observations,
                                       actions=actions,
                                       rewards=rewards,
@@ -355,7 +371,7 @@ if __name__ == '__main__':
       if global_step % args.policy_frequency == 0:
         for _ in range(args.policy_frequency):
           actor_info = sac.update_actor(obs=observations)
-          alpha_info = sac.update_alpha(logprobs=next_logprobs)
+          alpha_info = sac.update_alpha(obs=observations)
           train_info.update(actor_info)
           train_info.update(alpha_info)
 
@@ -367,12 +383,12 @@ if __name__ == '__main__':
       if global_step % 100 == 0:
         for key, value in train_info.items():
           writer.add_scalar(key, value, global_step)
+        # writer.add_scalar("losses/actor_loss", actor_loss.item(), global_step)
         print("SPS:", int(global_step / (time.time() - start_time)))
         writer.add_scalar("train/SPS", int(global_step /
                           (time.time() - start_time)), global_step)
 
-      # Evaluate the agent periodically
       if global_step % args.eval_interval == 0:
-        eval_reward = evaluate(eval_envs, sac, n_episodes=args.n_eval_episodes)
-        print(f"Evaluation reward: {eval_reward:.2f}")
-        writer.add_scalar("train/eval_reward", eval_reward, global_step)
+        r = evaluate(eval_envs, sac, args.n_eval_episodes)
+        print("Evaluation reward:", r)
+        writer.add_scalar("train/eval_reward", r, global_step)
