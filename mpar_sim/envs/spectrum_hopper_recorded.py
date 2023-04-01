@@ -152,7 +152,7 @@ class SpectrumHopperRecorded(gym.Env):
     collisions = np.logical_and(radar_spectrum, interference)
     n_radar_bins = np.sum(radar_spectrum)
     n_collisions = np.sum(collisions)
-    return (n_radar_bins - 5*n_collisions) / self.fft_size
+    return (n_radar_bins - 10*n_collisions) / self.fft_size
     # return reward
     # Reward the agent for starting in a location with a lot of open bandwidth and for utilizing the bandwidth without collision
     radar_nonzero = np.flatnonzero(radar_spectrum)
