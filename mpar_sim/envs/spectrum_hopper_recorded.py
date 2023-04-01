@@ -47,7 +47,7 @@ class SpectrumHopperRecorded(gym.Env):
     self.data = np.fromfile(filename, dtype=np.uint8)
     n_snapshots = int(self.data.size / fft_size)
     self.data = self.data.reshape((n_snapshots, fft_size), order='C')
-    
+
     assert render_mode is None or render_mode in self.metadata["render_modes"]
     self.render_mode = render_mode
     # PyGame objects
@@ -61,32 +61,31 @@ class SpectrumHopperRecorded(gym.Env):
                        0, self.channel_bandwidth - radar_start_freq)
     radar_stop_freq = radar_start_freq + radar_bw
     # Radar spectrum occupancy (with history)
-    radar_spectrum = np.logical_and(self.fft_freq_axis >= radar_start_freq,
-                                    self.fft_freq_axis <= radar_stop_freq)
     self.radar_spectrogram = np.roll(self.radar_spectrogram, -1, axis=0)
-    self.radar_spectrogram[-1] = radar_spectrum
+    self.radar_spectrogram[-1] = np.logical_and(
+        self.fft_freq_axis >= radar_start_freq,
+        self.fft_freq_axis <= radar_stop_freq)
 
     # Update the communications occupancy
     self.spectrogram = np.roll(self.spectrogram, -1, axis=0)
     self.start_ind = (self.start_ind + 1) % self.data.shape[0]
-    self.current_spectrum = self.data[self.start_ind]
-    _, widest_bw_bins = self._get_widest(self.current_spectrum)
-    # self.spectrogram[-1] = self.current_spectrum
-    reward, info = self._compute_reward(
-        radar_spectrum, self.current_spectrum, widest_bw_bins)
+    self.spectrogram[-1] = self.data[self.start_ind]
+    _, widest_bw_bins = self._get_widest(self.spectrogram[-1])
+    reward = self._compute_reward(
+        self.radar_spectrogram[-1], self.spectrogram[-1], widest_bw_bins)
 
     # Propagate the environment forward a bit
     # for _ in range(10):
     #   self.start_ind = (self.start_ind + 1) % self.data.shape[0]
-    #   self.current_spectrum = self.data[self.start_ind]
     #   self.spectrogram = np.roll(self.spectrogram, -1, axis=0)
-    #   self.spectrogram[-1] = self.current_spectrum
+    #   self.spectrogram[-1] = self.data[self.start_ind]
 
     #   self.radar_spectrogram = np.roll(self.radar_spectrogram, -1, axis=0)
     #   self.radar_spectrogram[-1] = 0
 
     # Re-order into frames, then swap the axes to get the correct output shape
     obs = self._get_obs()
+    info = {}
     terminated = False
     truncated = False
 
@@ -146,6 +145,10 @@ class SpectrumHopperRecorded(gym.Env):
                       widest_bw_bins):
     # TODO: Only penalize collisions the agent can "see"
     collisions = np.logical_and(radar_spectrum, interference)
+    n_radar_bins = np.sum(radar_spectrum)
+    n_collisions = np.sum(collisions)
+    return (n_radar_bins - 10*n_collisions) / self.fft_size
+    # return reward
     # Reward the agent for starting in a location with a lot of open bandwidth and for utilizing the bandwidth without collision
     radar_nonzero = np.flatnonzero(radar_spectrum)
     if len(radar_nonzero) == 0:
@@ -229,6 +232,7 @@ class SpectrumHopperRecorded(gym.Env):
       self.clock.tick(self.metadata["render_fps"])
     else:
       return pixels
+
 
 if __name__ == '__main__':
   env = SpectrumHopperRecorded(
