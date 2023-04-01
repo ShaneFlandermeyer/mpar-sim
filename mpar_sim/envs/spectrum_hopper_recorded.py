@@ -9,7 +9,7 @@ import itertools
 
 
 class SpectrumHopperRecorded(gym.Env):
-  metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 50}
+  metadata = {"render_modes": ["human", "rgb_array"], "obs_modes": ["spectrogram", "fft"], "render_fps": 50}
   """
   This gym environment formulates the interference avoidance problem as a continuous control task.
   
@@ -25,12 +25,18 @@ class SpectrumHopperRecorded(gym.Env):
                fft_size: int = 1024,
                n_image_snapshots: int = 512,
                frame_stack: int = 1,
+               obs_mode: str = "spectrogram",
                render_mode: str = None) -> None:
-    self.observation_space = gym.spaces.Box(
-        low=0, high=255, shape=(n_image_snapshots, fft_size, frame_stack), dtype=np.uint8)
+    assert obs_mode in self.metadata["obs_modes"]
+    if obs_mode == "spectrogram":
+      self.observation_space = gym.spaces.Box(
+          low=0, high=255, shape=(n_image_snapshots, fft_size, frame_stack), dtype=np.uint8)
+    else:
+      self.observation_space = gym.spaces.Box(
+          low=0, high=1, shape=(fft_size, ), dtype=np.uint8)
+    self.obs_mode = obs_mode
 
     # Action space is the start and span of the radar waveform
-    # TODO: Only choosing start freq for now
     self.action_space = gym.spaces.Box(
         low=np.array([0, 0]), high=np.array([1, 1]), shape=(2,), dtype=np.float32)
 
@@ -130,13 +136,12 @@ class SpectrumHopperRecorded(gym.Env):
   ##########################
 
   def _get_obs(self):
-    spectro_obs = self.spectrogram.reshape(
-        (self.frame_stack, self.n_image_snapshots, self.fft_size))
-    # radar_obs = self.radar_spectrogram.reshape(
-    #     (self.frame_stack, self.n_image_snapshots, self.fft_size))
-    # obs = 255*np.concatenate((spectro_obs, radar_obs), axis=0)
-    obs = 255*spectro_obs
-    obs = np.transpose(obs, (1, 2, 0))
+    if self.obs_mode == "spectrogram":
+      obs = 255*self.spectrogram.reshape(
+          (self.frame_stack, self.n_image_snapshots, self.fft_size))
+      obs = np.transpose(obs, (1, 2, 0))
+    else:
+      obs = self.spectrogram[-1]
     return obs
 
   def _compute_reward(self,
@@ -147,7 +152,7 @@ class SpectrumHopperRecorded(gym.Env):
     collisions = np.logical_and(radar_spectrum, interference)
     n_radar_bins = np.sum(radar_spectrum)
     n_collisions = np.sum(collisions)
-    return (n_radar_bins - 10*n_collisions) / self.fft_size
+    return (n_radar_bins - 5*n_collisions) / self.fft_size
     # return reward
     # Reward the agent for starting in a location with a lot of open bandwidth and for utilizing the bandwidth without collision
     radar_nonzero = np.flatnonzero(radar_spectrum)
@@ -219,6 +224,9 @@ class SpectrumHopperRecorded(gym.Env):
     w = 255
     pixels[self.spectrogram.T == 1] = g
     pixels[self.radar_spectrogram.T == 1] = w
+    overlap = np.logical_and(self.spectrogram.T == 1,
+                             self.radar_spectrogram.T == 1)
+    pixels[overlap] = r
     canvas = pygame.surfarray.make_surface(pixels)
 
     if self.render_mode == "human":

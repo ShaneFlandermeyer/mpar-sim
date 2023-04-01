@@ -21,6 +21,7 @@ from torch.utils.tensorboard import SummaryWriter
 from lightning_rl.common.buffers import ReplayBuffer
 from lightning_rl.models.off_policy.sac import squashed_gaussian_action
 from lightning_rl.wrappers import TransposeObservation
+from lightning_rl.modules.cnn import SACAECNN
 import itertools
 
 # Configuration
@@ -69,7 +70,7 @@ def parse_args():
       help="timestep to start learning")
   parser.add_argument("--policy-lr", type=float, default=3e-4,
       help="the learning rate of the policy network optimizer")
-  parser.add_argument("--q-lr", type=float, default=3e-4,
+  parser.add_argument("--q-lr", type=float, default=1e-3,
       help="the learning rate of the Q network optimizer")
   parser.add_argument("--policy-frequency", type=int, default=2,
       help="the frequency of training the policy (delayed)")
@@ -96,8 +97,9 @@ def make_env(env_id, seed, idx, capture_video, run_name, render):
                    filename='/home/shane/data/HOCAE_Snaps_bool_cleaned.dat',
                    channel_bandwidth=100e6,
                    fft_size=1024,
-                   n_image_snapshots=512,
-                   frame_stack=1,
+                   n_image_snapshots=256,
+                   frame_stack=2,
+                   obs_mode='spectrogram',
                    render_mode=render_mode)
     # TODO: This fails if more than two frames are stacked
     env = gym.wrappers.ResizeObservation(env, (84, 84))
@@ -105,7 +107,7 @@ def make_env(env_id, seed, idx, capture_video, run_name, render):
     if capture_video:
       if idx == 0:
         env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
-    env = gym.wrappers.TimeLimit(env, max_episode_steps=500)
+    env = gym.wrappers.TimeLimit(env, max_episode_steps=1000)
     env = gym.wrappers.RecordEpisodeStatistics(env)
 
     env.action_space.seed(seed)
@@ -117,9 +119,8 @@ def make_env(env_id, seed, idx, capture_video, run_name, render):
 
 def evaluate(env, agent, n_episodes):
   episode_rewards = []
-  seed = 0
   for i in range(n_episodes):
-    obs, info = env.reset(seed=seed)
+    obs, info = env.reset()
     done = False
     episode_reward = 0
     while not done:
@@ -154,22 +155,10 @@ class Actor(nn.Module):
                action_high: np.ndarray
                ) -> None:
     super().__init__()
-    self.convnet = nn.Sequential(
-        layer_init(nn.Conv2d(obs_shape[0], 32, 8, stride=4)),
-        nn.ReLU(),
-        layer_init(nn.Conv2d(32, 64, 4, stride=2)),
-        nn.ReLU(),
-        layer_init(nn.Conv2d(64, 64, 3, stride=1)),
-        nn.ReLU(),
-        nn.Flatten(start_dim=1, end_dim=-1),
-        layer_init(nn.Linear(64 * 7 * 7, 256)),
-        nn.ReLU(),
-    )
-    # self.action = nn.Sequential(
-    #     nn.Linear(512, 2*np.prod(action_shape)),
-    # )
-    self.start = layer_init(nn.Linear(256, 2), std=0.1)
-    self.bw = layer_init(nn.Linear(256+1, 2), std=0.1)
+    self.convnet = SACAECNN(*obs_shape)
+    out_shape = get_out_shape(self.convnet, obs_shape)
+    self.start = layer_init(nn.Linear(np.prod(out_shape), 2), std=0.1)
+    self.bw = layer_init(nn.Linear(np.prod(out_shape)+1, 2), std=0.1)
 
     # Action rescaling
     self.register_buffer(
@@ -180,7 +169,7 @@ class Actor(nn.Module):
             (action_high + action_low) / 2.0, dtype=torch.float32))
 
   def forward(self, x):
-    x = self.convnet(x / 255.0)
+    x = self.convnet(x / 255.0).view(x.shape[0], -1)
     s_mean, s_logstd = self.start(x).chunk(2, dim=-1)
     
     x = torch.cat([x, s_mean], dim=-1)
@@ -197,17 +186,7 @@ class Actor(nn.Module):
 class Critic(nn.Module):
   def __init__(self, obs_shape: Tuple[int], action_shape: Tuple[int]):
     super().__init__()
-    self.convnet = nn.Sequential(
-        layer_init(nn.Conv2d(obs_shape[0], 32, 8, stride=4)),
-        nn.ReLU(),
-        layer_init(nn.Conv2d(32, 64, 4, stride=2)),
-        nn.ReLU(),
-        layer_init(nn.Conv2d(64, 64, 3, stride=1)),
-        nn.ReLU(),
-        nn.Flatten(start_dim=1, end_dim=-1),
-        layer_init(nn.Linear(64 * 7 * 7, 256)),
-        nn.ReLU(),
-    )
+    self.convnet = SACAECNN(*obs_shape)
 
     out_shape = np.prod(get_out_shape(self.convnet, obs_shape))
     self.Q1 = nn.Sequential(
@@ -223,8 +202,8 @@ class Critic(nn.Module):
     )
 
   def forward(self, obs: torch.Tensor, act: torch.Tensor):
-    features = self.convnet(obs/255.0)
-    x = torch.cat([features, act], dim=1)
+    x = self.convnet(obs / 255.0).view(obs.shape[0], -1)
+    x = torch.cat([x, act], dim=1)
     return self.Q1(x), self.Q2(x)
 
 
