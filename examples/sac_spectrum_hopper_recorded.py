@@ -93,11 +93,11 @@ def make_env(env_id, seed, idx, capture_video, run_name, render):
     else:
       render_mode = 'rgb_array'
     env = gym.make(env_id,
-                   filename='/home/shane/data/HOCAE_Snaps_bool.dat',
+                   filename='/home/shane/data/HOCAE_Snaps_bool_cleaned.dat',
                    channel_bandwidth=100e6,
                    fft_size=1024,
-                   n_image_snapshots=256,
-                   frame_stack=2,
+                   n_image_snapshots=512,
+                   frame_stack=1,
                    render_mode=render_mode)
     # TODO: This fails if more than two frames are stacked
     env = gym.wrappers.ResizeObservation(env, (84, 84))
@@ -205,7 +205,7 @@ class Critic(nn.Module):
         layer_init(nn.Conv2d(64, 64, 3, stride=1)),
         nn.ReLU(),
         nn.Flatten(start_dim=1, end_dim=-1),
-        layer_init(nn.Linear(64 * 7 * 7, 512)),
+        layer_init(nn.Linear(64 * 7 * 7, 256)),
         nn.ReLU(),
     )
 
@@ -306,15 +306,6 @@ if __name__ == '__main__':
     # TRY NOT TO MODIFY: Execute the game and log data
     next_obs, rewards, terminated, truncated, infos = envs.step(actions)
     dones = terminated
-    
-    if global_step % 100 == 0:
-      if "start_reward" in infos:
-        start_reward = infos["start_reward"]
-        writer.add_scalar("charts/start_reward", start_reward, global_step)
-
-      if "bw_reward" in infos:
-        bw_reward = infos["bw_reward"]
-        writer.add_scalar("charts/bw_reward", bw_reward, global_step)
     
     # TRY NOT TO MODIFY: record rewards for plotting purposes
     # Only print when at least 1 env is done

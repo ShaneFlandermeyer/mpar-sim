@@ -27,7 +27,7 @@ class SpectrumHopperRecorded(gym.Env):
                frame_stack: int = 1,
                render_mode: str = None) -> None:
     self.observation_space = gym.spaces.Box(
-        low=0, high=255, shape=(n_image_snapshots, fft_size, 2*frame_stack), dtype=np.uint8)
+        low=0, high=255, shape=(n_image_snapshots, fft_size, frame_stack), dtype=np.uint8)
 
     # Action space is the start and span of the radar waveform
     # TODO: Only choosing start freq for now
@@ -46,14 +46,8 @@ class SpectrumHopperRecorded(gym.Env):
 
     self.data = np.fromfile(filename, dtype=np.uint8)
     n_snapshots = int(self.data.size / fft_size)
-    self.data = self.data.reshape((n_snapshots, fft_size), order='F')
-
-    # Zero out the dc component and X310 spur. Messes up the visualization and bandwidth computations
-    idc = int(self.fft_size/2)
-    ispur = np.digitize(10e6, self.fft_freq_axis)
-    self.data[:, idc] = 0
-    self.data[:, ispur-1:ispur+1] = 0
-
+    self.data = self.data.reshape((n_snapshots, fft_size), order='C')
+    
     assert render_mode is None or render_mode in self.metadata["render_modes"]
     self.render_mode = render_mode
     # PyGame objects
@@ -73,23 +67,23 @@ class SpectrumHopperRecorded(gym.Env):
     self.radar_spectrogram[-1] = radar_spectrum
 
     # Update the communications occupancy
+    self.spectrogram = np.roll(self.spectrogram, -1, axis=0)
     self.start_ind = (self.start_ind + 1) % self.data.shape[0]
     self.current_spectrum = self.data[self.start_ind]
-    widest_start_bin, widest_bw_bins = self._get_widest(self.current_spectrum)
-    self.spectrogram = np.roll(self.spectrogram, -1, axis=0)
-    self.spectrogram[-1] = self.current_spectrum
+    _, widest_bw_bins = self._get_widest(self.current_spectrum)
+    # self.spectrogram[-1] = self.current_spectrum
     reward, info = self._compute_reward(
         radar_spectrum, self.current_spectrum, widest_bw_bins)
 
     # Propagate the environment forward a bit
-    for _ in range(10):
-      self.start_ind = (self.start_ind + 1) % self.data.shape[0]
-      self.current_spectrum = self.data[self.start_ind]
-      self.spectrogram = np.roll(self.spectrogram, -1, axis=0)
-      self.spectrogram[-1] = self.current_spectrum
+    # for _ in range(10):
+    #   self.start_ind = (self.start_ind + 1) % self.data.shape[0]
+    #   self.current_spectrum = self.data[self.start_ind]
+    #   self.spectrogram = np.roll(self.spectrogram, -1, axis=0)
+    #   self.spectrogram[-1] = self.current_spectrum
 
-      self.radar_spectrogram = np.roll(self.radar_spectrogram, -1, axis=0)
-      self.radar_spectrogram[-1] = 0
+    #   self.radar_spectrogram = np.roll(self.radar_spectrogram, -1, axis=0)
+    #   self.radar_spectrogram[-1] = 0
 
     # Re-order into frames, then swap the axes to get the correct output shape
     obs = self._get_obs()
@@ -103,7 +97,7 @@ class SpectrumHopperRecorded(gym.Env):
   def reset(self, seed: int = None, options: dict = None):
     super().reset(seed=seed)
 
-    # Flip the data to get more diversity in the training
+    # Shift the data to get more diversity in the training
     self.data = np.roll(self.data, self.np_random.integers(0, 512), axis=1)
 
     # Randomly sample spectrogram from a file
@@ -116,10 +110,7 @@ class SpectrumHopperRecorded(gym.Env):
 
     # Re-order into frames, then swap the axes to get the correct output shape
     obs = self._get_obs()
-    info = {
-        # "widest_start": widest_start/self.fft_size,
-        # "widest_bandwidth": widest_bandwidth/self.fft_size,
-    }
+    info = {}
 
     if self.render_mode == "human":
       self._render_frame()
@@ -142,9 +133,10 @@ class SpectrumHopperRecorded(gym.Env):
   def _get_obs(self):
     spectro_obs = self.spectrogram.reshape(
         (self.frame_stack, self.n_image_snapshots, self.fft_size))
-    radar_obs = self.radar_spectrogram.reshape(
-        (self.frame_stack, self.n_image_snapshots, self.fft_size))
-    obs = 255*np.concatenate((spectro_obs, radar_obs), axis=0)
+    # radar_obs = self.radar_spectrogram.reshape(
+    #     (self.frame_stack, self.n_image_snapshots, self.fft_size))
+    # obs = 255*np.concatenate((spectro_obs, radar_obs), axis=0)
+    obs = 255*spectro_obs
     obs = np.transpose(obs, (1, 2, 0))
     return obs
 
@@ -169,17 +161,19 @@ class SpectrumHopperRecorded(gym.Env):
     n_open_bins = open_bin_inds[0] if len(open_bin_inds) > 0 else 0
     start_reward = n_open_bins / widest_bw_bins
     # Penalize the bandwidth selection if it exceeds the available bandwidth
-    if radar_bw_bins <= n_open_bins:
-      bw_reward = radar_bw_bins / n_open_bins
+    if n_open_bins == 0:
+      bw_reward = 0
     else:
-      bw_reward = 1 - (radar_bw_bins - n_open_bins) / n_open_bins
+      bw_reward = max(radar_bw_bins, n_open_bins) / n_open_bins + \
+          min(n_open_bins - radar_bw_bins, 0) / n_open_bins
+
     reward = start_reward + bw_reward
     info = {
         'start_reward': start_reward,
         'bw_reward': bw_reward,
     }
     return reward, info
-  
+
   def _get_widest(self, spectrum):
     # Group consecutive bins by value
     gap_widths = np.array([[x[0], len(list(x[1]))]
@@ -191,7 +185,7 @@ class SpectrumHopperRecorded(gym.Env):
     istart_widest = np.argmax(widths)
     widest_start = starts[istart_widest]
     widest_bw = widths[istart_widest]
-    
+
     return widest_start, widest_bw
 
   def _render_frame(self) -> Optional[np.ndarray]:
@@ -235,33 +229,10 @@ class SpectrumHopperRecorded(gym.Env):
       self.clock.tick(self.metadata["render_fps"])
     else:
       return pixels
-    
-  # def _merge_bins(self, spectrum, threshold=20):
-  #   # TODO: Compute the maximum possible bandwidth without collisions from the given start frequency
-  #   # Group consecutive bins by value
-  #   gap_widths = np.array([[x[0], len(list(x[1]))]
-  #                         for x in itertools.groupby(spectrum)])
-  #   vals = gap_widths[:, 0]
-  #   widths = gap_widths[:, 1]
-  #   starts = np.cumsum(widths) - widths
-
-  #   # Compute the start frequency and width of the widest gap (in bins)
-  #   istart_widest = np.argmax(widths)
-  #   widest_start = starts[istart_widest]
-  #   widest_bw = widths[istart_widest]
-
-  #   # Merge bins if they are separated by less than "threshold" zeros
-  #   # Also remove "speckle" bins that are less than 3 bins wide
-  #   for start, val, width in zip(starts, vals, widths):
-  #     if width < threshold:
-  #       spectrum[start:start+width] = 1 - val
-
-  #   return spectrum, widest_start, widest_bw
-
 
 if __name__ == '__main__':
   env = SpectrumHopperRecorded(
-      filename='/home/shane/data/HOCAE_Snaps_bool.dat',
+      filename='/home/shane/data/HOCAE_Snaps_bool_cleaned.dat',
       channel_bandwidth=100e6,
       fft_size=1024,
       n_image_snapshots=200,
