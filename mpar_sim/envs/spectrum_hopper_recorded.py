@@ -9,7 +9,8 @@ import itertools
 
 
 class SpectrumHopperRecorded(gym.Env):
-  metadata = {"render_modes": ["human", "rgb_array"], "obs_modes": ["spectrogram", "fft"], "render_fps": 50}
+  metadata = {"render_modes": ["human", "rgb_array"], "obs_modes": [
+      "spectrogram", "fft"], "render_fps": 50}
   """
   This gym environment formulates the interference avoidance problem as a continuous control task.
   
@@ -26,11 +27,12 @@ class SpectrumHopperRecorded(gym.Env):
                n_image_snapshots: int = 512,
                frame_stack: int = 1,
                obs_mode: str = "spectrogram",
+               image_shape = (84, 84),
                render_mode: str = None) -> None:
     assert obs_mode in self.metadata["obs_modes"]
     if obs_mode == "spectrogram":
       self.observation_space = gym.spaces.Box(
-          low=0, high=255, shape=(n_image_snapshots, fft_size, frame_stack), dtype=np.uint8)
+          low=0, high=255, shape=(frame_stack, *image_shape), dtype=np.uint8)
     else:
       self.observation_space = gym.spaces.Box(
           low=0, high=1, shape=(fft_size, ), dtype=np.uint8)
@@ -63,9 +65,10 @@ class SpectrumHopperRecorded(gym.Env):
   def step(self, action: np.ndarray):
     # Update the radar waveform
     radar_start_freq = action[0] * self.channel_bandwidth
-    radar_bw = np.clip(action[1] * self.channel_bandwidth,
-                       0, self.channel_bandwidth - radar_start_freq)
-    radar_stop_freq = radar_start_freq + radar_bw
+    radar_stop_freq = np.clip(
+        radar_start_freq+20e6, radar_start_freq, self.channel_bandwidth)
+
+    
     # Radar spectrum occupancy (with history)
     self.radar_spectrogram = np.roll(self.radar_spectrogram, -1, axis=0)
     self.radar_spectrogram[-1] = np.logical_and(
@@ -79,24 +82,15 @@ class SpectrumHopperRecorded(gym.Env):
     _, widest_bw_bins = self._get_widest(self.spectrogram[-1])
     reward = self._compute_reward(
         self.radar_spectrogram[-1], self.spectrogram[-1], widest_bw_bins)
+    
+    if self.render_mode == "human":
+      self._render_frame()
 
-    # Propagate the environment forward a bit
-    # for _ in range(10):
-    #   self.start_ind = (self.start_ind + 1) % self.data.shape[0]
-    #   self.spectrogram = np.roll(self.spectrogram, -1, axis=0)
-    #   self.spectrogram[-1] = self.data[self.start_ind]
-
-    #   self.radar_spectrogram = np.roll(self.radar_spectrogram, -1, axis=0)
-    #   self.radar_spectrogram[-1] = 0
-
-    # Re-order into frames, then swap the axes to get the correct output shape
     obs = self._get_obs()
     info = {}
     terminated = False
     truncated = False
-
-    if self.render_mode == "human":
-      self._render_frame()
+    done = terminated or truncated
     return obs, reward, terminated, truncated, info
 
   def reset(self, seed: int = None, options: dict = None):
@@ -137,50 +131,27 @@ class SpectrumHopperRecorded(gym.Env):
 
   def _get_obs(self):
     if self.obs_mode == "spectrogram":
-      obs = 255*self.spectrogram.reshape(
+      spectro = self.spectrogram.reshape(
           (self.frame_stack, self.n_image_snapshots, self.fft_size))
-      obs = np.transpose(obs, (1, 2, 0))
+      obs = np.zeros(self.observation_space.shape)
+      # for i in range(obs.shape[0]):
+      for i in range(self.frame_stack):
+        obs[i] = cv2.resize(spectro[i], self.observation_space.shape[1:],interpolation=cv2.INTER_AREA)
+      obs[obs > 0] = 255
     else:
       obs = self.spectrogram[-1]
-    return obs
+    return obs.astype(np.uint8)
 
   def _compute_reward(self,
                       radar_spectrum: np.ndarray,
                       interference: np.ndarray,
                       widest_bw_bins):
-    # TODO: Only penalize collisions the agent can "see"
     collisions = np.logical_and(radar_spectrum, interference)
     n_radar_bins = np.sum(radar_spectrum)
+    n_int_bins = np.sum(interference)
     n_collisions = np.sum(collisions)
-    return (n_radar_bins - 10*n_collisions) / self.fft_size
-    # return reward
-    # Reward the agent for starting in a location with a lot of open bandwidth and for utilizing the bandwidth without collision
-    radar_nonzero = np.flatnonzero(radar_spectrum)
-    if len(radar_nonzero) == 0:
-      reward = 0
-      info = {
-          'start_reward': 0,
-          'bw_reward': 0,
-      }
-      return reward, info
-    istart, istop = radar_nonzero[0], radar_nonzero[-1]
-    radar_bw_bins = istop - istart
-    open_bin_inds = np.flatnonzero(self.current_spectrum[istart:])
-    n_open_bins = open_bin_inds[0] if len(open_bin_inds) > 0 else 0
-    start_reward = n_open_bins / widest_bw_bins
-    # Penalize the bandwidth selection if it exceeds the available bandwidth
-    if n_open_bins == 0:
-      bw_reward = 0
-    else:
-      bw_reward = max(radar_bw_bins, n_open_bins) / n_open_bins + \
-          min(n_open_bins - radar_bw_bins, 0) / n_open_bins
-
-    reward = start_reward + bw_reward
-    info = {
-        'start_reward': start_reward,
-        'bw_reward': bw_reward,
-    }
-    return reward, info
+    reward = 1 if n_collisions < 10 else -1
+    return reward
 
   def _get_widest(self, spectrum):
     # Group consecutive bins by value
@@ -247,15 +218,17 @@ if __name__ == '__main__':
       filename='/home/shane/data/HOCAE_Snaps_bool_cleaned.dat',
       channel_bandwidth=100e6,
       fft_size=1024,
-      n_image_snapshots=200,
-      frame_stack=3,
+      n_image_snapshots=512,
+      frame_stack=4,
       render_mode='human')
-  obs, info = env.reset()
+  obs = env.reset()
   # obs, reward, term, trunc, = env.step(env.action_space.sample())
   # x = 1
   plt.figure()
-  plt.imshow(obs[:, :, 0])
+  plt.imshow(obs[0, :, :], aspect='auto')
   plt.colorbar()
+  # plt.savefig('./test.png')
+# 
   plt.figure()
   plt.imshow(obs[:, :, 1])
   plt.colorbar()

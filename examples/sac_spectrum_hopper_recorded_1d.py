@@ -22,7 +22,9 @@ from lightning_rl.common.buffers import ReplayBuffer
 from lightning_rl.models.off_policy.sac import squashed_gaussian_action
 from lightning_rl.wrappers import TransposeObservation
 from lightning_rl.modules.cnn import SACAECNN
+from skimage.measure import block_reduce
 import itertools
+import mpar_sim.envs
 
 # Configuration
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
@@ -47,28 +49,28 @@ def parse_args():
       help="if toggled, human render mode used")
   parser.add_argument("--eval-interval", type=int, default=10e3,
       help="Number of steps between environment evaluations")
-  parser.add_argument("--n-eval-episodes", type=int, default=10,
+  parser.add_argument("--n-eval-episodes", type=int, default=5,
       help="Number of evaluation episodes")
 
   # Algorithm specific arguments
   parser.add_argument("--env-id", type=str, 
                       default="mpar_sim/SpectrumHopperRecorded-v0",
                       help="the id of the environment")
-  parser.add_argument("--total-timesteps", type=int, default=1000000,
+  parser.add_argument("--total-timesteps", type=int, default=100000,
       help="total timesteps of the experiments")
-  parser.add_argument("--buffer-size", type=int, default=int(1e6),
+  parser.add_argument("--buffer-size", type=int, default=int(1e5),
       help="the replay memory buffer size")
   parser.add_argument("--gamma", type=float, default=0.99,
       help="the discount factor gamma")
   parser.add_argument("--tau", type=float, default=0.005,
       help="target smoothing coefficient (default: 0.005)")
-  parser.add_argument("--batch-size", type=int, default=64,
+  parser.add_argument("--batch-size", type=int, default=256,
       help="the batch size of sample from the reply memory")
   parser.add_argument("--exploration-noise", type=float, default=0.1,
       help="the scale of the exploration noise")
-  parser.add_argument("--learning_starts", type=int, default=1e3,
+  parser.add_argument("--learning_starts", type=int, default=5e3,
       help="timestep to start learning")
-  parser.add_argument("--policy-lr", type=float, default=3e-4,
+  parser.add_argument("--policy-lr", type=float, default=1e-4,
       help="the learning rate of the policy network optimizer")
   parser.add_argument("--q-lr", type=float, default=1e-3,
       help="the learning rate of the Q network optimizer")
@@ -101,9 +103,7 @@ def make_env(env_id, seed, idx, capture_video, run_name, render):
                    frame_stack=2,
                    obs_mode='fft',
                    render_mode=render_mode)
-    # TODO: This fails if more than two frames are stacked
-    # env = gym.wrappers.ResizeObservation(env, (84, 84))
-    # env = TransposeObservation(env, [-1, 0, 1])
+    env = gym.wrappers.FrameStack(env, 10)
     if capture_video:
       if idx == 0:
         env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
@@ -138,7 +138,7 @@ def evaluate(env, agent, n_episodes):
 
 
 LOG_STD_MIN = -5
-LOG_STD_MAX = 2
+LOG_STD_MAX = 0
 
 
 def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
@@ -155,15 +155,22 @@ class Actor(nn.Module):
                action_high: np.ndarray
                ) -> None:
     super().__init__()
-    # self.convnet = SACAECNN(*obs_shape)
     self.feature_net = nn.Sequential(
-      nn.Linear(np.prod(obs_shape), 256), nn.ReLU(),
-      nn.Linear(256, 256), nn.ReLU(),
+        nn.MaxPool1d(4),
+        nn.Conv1d(obs_shape[0], 16, kernel_size=8, stride=4), nn.ELU(),
+        nn.Conv1d(16, 32, kernel_size=4, stride=3), nn.ELU(),
+        nn.Conv1d(32, 32, kernel_size=3, stride=2), nn.ELU(),
+        # nn.Conv1d(16, 32, kernel_size=3, stride=2), nn.ELU(), 
+        nn.Flatten(start_dim=1, end_dim=-1)  
+        # nn.MaxPool1d(64),
     )
-      
-    # self.start = layer_init(nn.Linear(256, 2), std=0.1)
-    # self.bw = layer_init(nn.Linear(256+1, 2), std=0.1)
-    self.action = nn.Linear(256, 2*np.prod(action_shape))
+    out_shape = get_out_shape(self.feature_net, obs_shape)
+    print(out_shape)
+    self.action = nn.Sequential(
+      nn.Linear(np.prod(out_shape), 256), nn.ELU(),
+      nn.Linear(256, 256), nn.ELU(),
+      nn.Linear(256, 2*np.prod(action_shape))
+    )
 
     # Action rescaling
     self.register_buffer(
@@ -175,13 +182,6 @@ class Actor(nn.Module):
 
   def forward(self, x):
     x = self.feature_net(x)
-    # s_mean, s_logstd = self.start(x).chunk(2, dim=-1)
-    
-    # x = torch.cat([x, s_mean], dim=-1)
-    # bw_mean, bw_logstd = self.bw(x).chunk(2, dim=-1)
-    
-    # mean = torch.cat([s_mean, bw_mean], dim=-1)
-    # logstd = torch.cat([s_logstd, bw_logstd], dim=-1)
     mean, logstd = self.action(x).chunk(2, dim=-1)
     logstd = LOG_STD_MIN + 0.5 * (LOG_STD_MAX - LOG_STD_MIN) * (logstd + 1)
     std = logstd.exp()
@@ -192,20 +192,31 @@ class Actor(nn.Module):
 class Critic(nn.Module):
   def __init__(self, obs_shape: Tuple[int], action_shape: Tuple[int]):
     super().__init__()
-
+    
+    self.feature_net = nn.Sequential(
+        nn.MaxPool1d(4),
+        nn.Conv1d(obs_shape[0], 16, kernel_size=8, stride=4), nn.ELU(),
+        nn.Conv1d(16, 32, kernel_size=4, stride=3), nn.ELU(),
+        nn.Conv1d(32, 32, kernel_size=3, stride=2), nn.ELU(),
+        # nn.Conv1d(16, 32, kernel_size=3, stride=2), nn.ELU(), 
+        nn.Flatten(start_dim=1, end_dim=-1)  
+        # nn.MaxPool1d(64),
+    )
+    out_shape = get_out_shape(self.feature_net, obs_shape)
     self.Q1 = nn.Sequential(
-        nn.Linear(np.prod(obs_shape) + np.prod(action_shape), 256), nn.ReLU(),
-        nn.Linear(256, 256), nn.ReLU(),
+        nn.Linear(np.prod(out_shape) + np.prod(action_shape), 256), nn.ELU(),
+        nn.Linear(256, 256), nn.ELU(),
         nn.Linear(256, 1),
     )
 
     self.Q2 = nn.Sequential(
-        nn.Linear(np.prod(obs_shape) + np.prod(action_shape), 256), nn.ReLU(),
-        nn.Linear(256, 256), nn.ReLU(),
+        nn.Linear(np.prod(out_shape) + np.prod(action_shape), 256), nn.ELU(),
+        nn.Linear(256, 256), nn.ELU(),
         nn.Linear(256, 1),
     )
 
   def forward(self, obs: torch.Tensor, act: torch.Tensor):
+    obs = self.feature_net(obs)
     x = torch.cat([obs, act], dim=1)
     return self.Q1(x), self.Q2(x)
 
@@ -288,7 +299,7 @@ if __name__ == '__main__':
     # TRY NOT TO MODIFY: Execute the game and log data
     next_obs, rewards, terminated, truncated, infos = envs.step(actions)
     dones = terminated
-    
+
     # TRY NOT TO MODIFY: record rewards for plotting purposes
     # Only print when at least 1 env is done
     if "final_info" in infos:
@@ -361,7 +372,7 @@ if __name__ == '__main__':
         writer.add_scalar("train/SPS", int(global_step /
                           (time.time() - start_time)), global_step)
 
-      if global_step % args.eval_interval == 0:
-        r = evaluate(eval_envs, sac, args.n_eval_episodes)
-        print("Evaluation reward:", r)
-        writer.add_scalar("train/eval_reward", r, global_step)
+      # if global_step % args.eval_interval == 0:
+      #   r = evaluate(eval_envs, sac, args.n_eval_episodes)
+      #   print("Evaluation reward:", r)
+      #   writer.add_scalar("train/eval_reward", r, global_step)
