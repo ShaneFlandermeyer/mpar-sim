@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import pygame
 import cv2
 import itertools
+from mpar_sim.interference.hopping import HoppingInterference
 
 
 class SpectrumHopper1D(gym.Env):
@@ -43,6 +44,8 @@ class SpectrumHopper1D(gym.Env):
     self.data = np.fromfile(filename, dtype=np.uint8)
     n_snapshots = int(self.data.size / fft_size)
     self.data = self.data.reshape((n_snapshots, fft_size), order='C')
+    
+    self.interference = HoppingInterference(-50e6, 20e6, 5, 20e6, -50e6, 50e6)
 
     # Rendering
     assert render_mode is None or render_mode in self.metadata["render_modes"]
@@ -64,7 +67,13 @@ class SpectrumHopper1D(gym.Env):
     # Update communications spectrum
     self.spectrogram = np.roll(self.spectrogram, 1, axis=0)
     self.start_ind = (self.start_ind + 1) % self.data.shape[0]
-    self.spectrogram[0] = self.data[self.start_ind]
+    # self.spectrogram[0] = self.data[self.start_ind]
+    # TODO: Using interference object here
+    self.interference.step(self.time)
+    self.spectrogram[0] = np.logical_and(
+        self.fft_freq_axis >= self.interference.start_freq,
+        self.fft_freq_axis <= self.interference.start_freq + self.interference.bandwidth)
+    self.time += 1
 
     if self.render_mode == "human":
       self._render_frame()
@@ -88,6 +97,12 @@ class SpectrumHopper1D(gym.Env):
     stop_ind = self.start_ind + self.n_image_snapshots
     self.spectrogram = self.data[self.start_ind:stop_ind]
     self.radar_spectrogram = np.zeros_like(self.spectrogram)
+    self.time = 0
+    self.interference.reset()
+    self.spectrogram[0] = np.logical_and(
+        self.fft_freq_axis >= self.interference.start_freq,
+        self.fft_freq_axis <= self.interference.start_freq + self.interference.bandwidth)
+    
 
     obs = self._get_obs()
     info = {}
@@ -111,9 +126,9 @@ class SpectrumHopper1D(gym.Env):
   ##########################
 
   def _parse_action(self, action):
-    start_freq = action[0] * self.channel_bandwidth / 2
-    stop_freq = np.clip(action[1] * self.channel_bandwidth / 2,
-                        start_freq, None)
+    freqs = action * self.channel_bandwidth / 2
+    start_freq = min(freqs)
+    stop_freq = max(freqs)
     return start_freq, stop_freq
 
   def _compute_reward(self,
@@ -124,7 +139,7 @@ class SpectrumHopper1D(gym.Env):
     n_widest = widest_stop - widest_start
     n_radar_bins = np.sum(radar_spectrum)
     n_collisions = np.sum(np.logical_and(radar_spectrum, interference))
-    reward = n_radar_bins / n_widest if n_collisions < 10 else 0
+    reward = n_radar_bins / n_widest if n_collisions < 10 else -1
     return reward
 
   def _get_obs(self):
@@ -136,27 +151,28 @@ class SpectrumHopper1D(gym.Env):
     starts = np.cumsum(widths) - widths
 
     # Compute the start frequency and width of the widest gap (in bins)
-    open = (vals == 0)
-    n_open = np.count_nonzero(open)
-    n_used = np.count_nonzero(~open)
-    n_fft = len(self.spectrogram[0])
     n_obs = 5
-    open_starts = np.sort(starts[open])[::-1] / n_fft
-    open_widths = np.sort(widths[open])[::-1] / n_fft
-    used_starts = np.sort(starts[~open])[::-1] / n_fft
-    used_widths = np.sort(widths[~open])[::-1] / n_fft
-
     open_start_obs = np.zeros(n_obs,)
     open_width_obs = np.zeros(n_obs,)
     used_start_obs = np.zeros(n_obs,)
     used_width_obs = np.zeros(n_obs,)
+
+    open = (vals == 0)
+    n_open = np.count_nonzero(open)
+    n_used = np.count_nonzero(~open)
+    n_fft = len(self.spectrogram[0])
+    open_starts = np.sort(starts[open])[::-1] / n_fft
+    open_widths = np.sort(widths[open])[::-1] / n_fft
+    used_starts = np.sort(starts[~open])[::-1] / n_fft
+    used_widths = np.sort(widths[~open])[::-1] / n_fft
     open_start_obs[:min(n_open, n_obs)] = open_starts[:min(n_open, n_obs)]
     open_width_obs[:min(n_open, n_obs)] = open_widths[:min(n_open, n_obs)]
     used_start_obs[:min(n_used, n_obs)] = used_starts[:min(n_used, n_obs)]
     used_width_obs[:min(n_used, n_obs)] = used_widths[:min(n_used, n_obs)]
 
     obs = np.concatenate(
-      (open_start_obs, open_width_obs, used_start_obs, used_width_obs))
+        (open_start_obs, open_width_obs, used_start_obs, used_width_obs))
+    # obs = self.spectrogram[0]
     return obs.astype(np.float32)
 
   def _get_widest(self, spectrum: np.ndarray):
@@ -174,7 +190,6 @@ class SpectrumHopper1D(gym.Env):
     widest_bw = widths[open][istart_widest]
     widest_stop = widest_start + widest_bw
 
-    nfft = len(spectrum)
     widest_start = widest_start
     widest_stop = widest_stop
     return np.array([widest_start, widest_stop])
