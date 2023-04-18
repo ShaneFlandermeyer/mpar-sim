@@ -7,10 +7,11 @@ import pygame
 import cv2
 import itertools
 from mpar_sim.interference.hopping import HoppingInterference
+from mpar_sim.interference.single_tone import SingleToneInterference
 
 
 class SpectrumHopper1D(gym.Env):
-  metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 50}
+  metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 60}
   """
   This gym environment formulates the interference avoidance problem as a continuous control task.
   
@@ -27,7 +28,7 @@ class SpectrumHopper1D(gym.Env):
                n_image_snapshots: int = 512,
                render_mode: str = None) -> None:
     self.observation_space = gym.spaces.Box(
-        low=0, high=1, shape=(20, ), dtype=np.float32)
+        low=0, high=1, shape=(40, ), dtype=np.float32)
 
     # Action space is the start and span of the radar waveform
     self.action_space = gym.spaces.Box(
@@ -44,52 +45,31 @@ class SpectrumHopper1D(gym.Env):
     self.data = np.fromfile(filename, dtype=np.uint8)
     n_snapshots = int(self.data.size / fft_size)
     self.data = self.data.reshape((n_snapshots, fft_size), order='C')
-    
-    self.interference = HoppingInterference(-50e6, 20e6, 5, 20e6, -50e6, 50e6)
+
+    self.interference = HoppingInterference(
+        start_freq=-50e6,
+        bandwidth=20e6,
+        duration=1,
+        hop_size=20e6,
+        min_freq=-50e6,
+        max_freq=50e6)
+    # self.interference = SingleToneInterference(
+    #     start_freq=0,
+    #     bandwidth=20e6,
+    #     duration=5,
+    #     duty_cycle=0.5)
 
     # Rendering
     assert render_mode is None or render_mode in self.metadata["render_modes"]
     self.render_mode = render_mode
     self.window = None
     self.clock = None
-
-  def step(self, action: np.ndarray):
-    # Update the radar waveform
-    start_freq, stop_freq = self._parse_action(action)
-    self.radar_spectrogram = np.roll(self.radar_spectrogram, 1, axis=0)
-    self.radar_spectrogram[0] = np.logical_and(
-        self.fft_freq_axis >= start_freq,
-        self.fft_freq_axis <= stop_freq)
-
-    reward = self._compute_reward(
-        self.radar_spectrogram[0], self.spectrogram[0])
-
-    # Update communications spectrum
-    self.spectrogram = np.roll(self.spectrogram, 1, axis=0)
-    self.start_ind = (self.start_ind + 1) % self.data.shape[0]
-    # self.spectrogram[0] = self.data[self.start_ind]
-    # TODO: Using interference object here
-    self.interference.step(self.time)
-    self.spectrogram[0] = np.logical_and(
-        self.fft_freq_axis >= self.interference.start_freq,
-        self.fft_freq_axis <= self.interference.start_freq + self.interference.bandwidth)
-    self.time += 1
-
-    if self.render_mode == "human":
-      self._render_frame()
-
-    obs = self._get_obs()
-    info = {}
-    terminated = False
-    truncated = False
-    done = terminated or truncated
-    return obs, reward, terminated, truncated, info
-
+    
   def reset(self, seed: int = None, options: dict = None):
     super().reset(seed=seed)
 
     # Shift the data to get more diversity in the training
-    # self.data = np.roll(self.data, self.np_random.integers(0, 512), axis=1)
+    # self.data = np.roll(self.data, self.np_random.integers(-64, 64), axis=1)
 
     # Randomly sample spectrogram from a file
     self.start_ind = self.np_random.integers(
@@ -97,20 +77,62 @@ class SpectrumHopper1D(gym.Env):
     stop_ind = self.start_ind + self.n_image_snapshots
     self.spectrogram = self.data[self.start_ind:stop_ind]
     self.radar_spectrogram = np.zeros_like(self.spectrogram)
+    # TODO: Using interference object here
     self.time = 0
     self.interference.reset()
-    self.spectrogram[0] = np.logical_and(
-        self.fft_freq_axis >= self.interference.start_freq,
-        self.fft_freq_axis <= self.interference.start_freq + self.interference.bandwidth)
-    
+    self.spectrogram[-1] = np.logical_and(
+        self.fft_freq_axis > self.interference.start_freq,
+        self.fft_freq_axis < self.interference.start_freq + self.interference.bandwidth)
 
     obs = self._get_obs()
-    info = {}
-
+    info = {
+      'widest': None,
+      'collisions': None,
+    }
     if self.render_mode == "human":
       self._render_frame()
 
     return obs, info
+
+  def step(self, action: np.ndarray):
+    # Update the radar waveform
+    start_freq, stop_freq = self._parse_action(action)
+    self.radar_spectrogram = np.roll(self.radar_spectrogram, -1, axis=0)
+    self.radar_spectrogram[-1] = np.logical_and(
+        self.fft_freq_axis > start_freq,
+        self.fft_freq_axis < stop_freq)
+    
+    reward, info = self._compute_reward(
+        self.radar_spectrogram[-1], self.spectrogram[-1])
+
+    
+    # Update communications spectrum
+    self.spectrogram = np.roll(self.spectrogram, -1, axis=0)
+    # self.start_ind = (self.start_ind + 1) % self.data.shape[0]
+    # self.spectrogram[-1] = self.data[self.start_ind]
+    # # Roll the rest of the simulation forward to the next time step
+    # for _ in range(5):
+    #   self.spectrogram = np.roll(self.spectrogram, -1, axis=0)
+    #   self.radar_spectrogram = np.roll(self.radar_spectrogram, -1, axis=0)
+    #   self.start_ind = (self.start_ind + 1) % self.data.shape[0]
+    #   self.spectrogram[-1] = self.data[self.start_ind]
+    #   self.radar_spectrogram[-1] = 0
+      
+    # TODO: Using interference object here
+    self.interference.step(self.time)
+    self.spectrogram[-1] = np.logical_and(
+        self.fft_freq_axis > self.interference.start_freq,
+        self.fft_freq_axis < self.interference.start_freq + self.interference.bandwidth)
+    self.time += 1
+    
+    if self.render_mode == "human":
+      self._render_frame()
+
+    obs = self._get_obs()
+    terminated = False
+    truncated = False
+    done = terminated or truncated
+    return obs, reward, terminated, truncated, info
 
   def render(self):
     if self.render_mode == "rgb_array":
@@ -125,7 +147,7 @@ class SpectrumHopper1D(gym.Env):
   # Helper methods
   ##########################
 
-  def _parse_action(self, action):
+  def _parse_action(self, action: np.ndarray):
     freqs = action * self.channel_bandwidth / 2
     start_freq = min(freqs)
     stop_freq = max(freqs)
@@ -139,19 +161,28 @@ class SpectrumHopper1D(gym.Env):
     n_widest = widest_stop - widest_start
     n_radar_bins = np.sum(radar_spectrum)
     n_collisions = np.sum(np.logical_and(radar_spectrum, interference))
-    reward = n_radar_bins / n_widest if n_collisions < 10 else -1
-    return reward
+    n_tol = 5
+    if n_collisions <= n_tol:
+      reward = n_radar_bins / self.fft_size
+    else:
+      reward = n_radar_bins / self.fft_size / (n_collisions - n_tol)
+    
+    info = {
+      'widest': float(n_widest / self.fft_size),
+      'collisions': n_collisions,
+    }
+    return reward, info
 
   def _get_obs(self):
     # Group consecutive bins by value
     gap_widths = np.array([[x[0], len(list(x[1]))]
-                          for x in itertools.groupby(self.spectrogram[0])])
+                          for x in itertools.groupby(self.spectrogram[-1])])
     vals = gap_widths[:, 0]
     widths = gap_widths[:, 1]
     starts = np.cumsum(widths) - widths
 
     # Compute the start frequency and width of the widest gap (in bins)
-    n_obs = 5
+    n_obs = 10
     open_start_obs = np.zeros(n_obs,)
     open_width_obs = np.zeros(n_obs,)
     used_start_obs = np.zeros(n_obs,)
@@ -172,7 +203,7 @@ class SpectrumHopper1D(gym.Env):
 
     obs = np.concatenate(
         (open_start_obs, open_width_obs, used_start_obs, used_width_obs))
-    # obs = self.spectrogram[0]
+    # obs = self.spectrogram[-1]
     return obs.astype(np.float32)
 
   def _get_widest(self, spectrum: np.ndarray):
@@ -185,6 +216,8 @@ class SpectrumHopper1D(gym.Env):
 
     # Compute the start frequency and width of the widest gap (in bins)
     open = (vals == 0)
+    if not np.any(open):
+      return np.array([0, 0])
     istart_widest = np.argmax(widths[open])
     widest_start = starts[open][istart_widest]
     widest_bw = widths[open][istart_widest]

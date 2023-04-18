@@ -30,7 +30,7 @@ class HoppingInterference():
       # Reverse sweep direction at the ends of the channel
       end_freq = self.start_freq + self.bandwidth
       step = self.hop_size*self.direction
-      if end_freq + step > self.max_freq or \
+      if end_freq > self.max_freq or \
               self.start_freq + step < self.min_freq:
         self.direction *= -1
 
