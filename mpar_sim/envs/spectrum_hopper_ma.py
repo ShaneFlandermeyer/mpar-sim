@@ -24,12 +24,11 @@ class MultiAgentSpectrum(MultiAgentEnv):
     self.channel_bw = config.get("channel_bw", 1)
     self.freq_axis = np.linspace(0, self.channel_bw, self.fft_size)
     self.interference = HoppingInterference(
-        start_freq=np.min(self.freq_axis),
         bandwidth=0.2*self.channel_bw,
         duration=1,
         hop_size=0.2*self.channel_bw,
-        min_freq=np.min(self.freq_axis),
-        max_freq=np.max(self.freq_axis)
+        channel_bw=self.channel_bw,
+        fft_size=self.fft_size,
     )
 
     self.agents = ["start", "bw"]
@@ -96,9 +95,9 @@ class MultiAgentSpectrum(MultiAgentEnv):
     # TODO: Update the interference before computing the reward
     if self.agent_ind == len(self.agents) - 1:
       self.time += 1
-      self.interference.step(self.time)
+      interference_state = self.interference.step(self.time)
       # TODO: Try group reward before dividing into individual components
-      reward = self._get_reward()
+      reward = self._get_reward(interference_state)
       self.rewards[self.agents[0]
                    ], self.rewards[self.agents[1]] = reward, reward
 
@@ -140,10 +139,7 @@ class MultiAgentSpectrum(MultiAgentEnv):
       obs = np.concatenate((spectrum, self.state['start']))
     return obs.astype(self.observation_space[agent].dtype)
 
-  def _get_reward(self):
-    interference = np.logical_and(
-        self.freq_axis >= self.interference.start_freq,
-        self.freq_axis <= self.interference.start_freq + self.interference.bandwidth)
+  def _get_reward(self, interference):
     start_freq = self.state['start'].item()*self.channel_bw
     stop_freq = start_freq + self.state['bw'].item()*self.channel_bw
     radar_spectrum = np.logical_and(
@@ -223,7 +219,7 @@ if __name__ == "__main__":
         .resources(
             # Use GPUs iff `RLLIB_NUM_GPUS` env var set to > 0.
             # num_gpus=int(os.environ.get("RLLIB_NUM_GPUS", "0")),
-            num_gpus=1,
+            num_gpus=0,
         )
         .training(
           train_batch_size=1024, model={
@@ -233,7 +229,7 @@ if __name__ == "__main__":
             },
           gamma=0,
           )
-        .rollouts(num_rollout_workers=14, rollout_fragment_length="auto")
+        .rollouts(num_rollout_workers=8, rollout_fragment_length="auto")
         .framework(args.framework, eager_tracing=args.eager_tracing)
         .multi_agent(
             # Use a simple set of policy IDs. Spaces for the individual policies
