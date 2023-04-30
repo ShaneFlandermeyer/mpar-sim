@@ -5,21 +5,29 @@ from mpar_sim.interference.interference import Interference
 
 class SingleToneInterference(Interference):
   def __init__(self,
-               start_freq: float,
                bandwidth: float,
                duration: float,
                duty_cycle: float,
+               channel_bw: float,
+               fft_size: float,
+               start_freq: float = 0,
                ):
     self.start_freq = start_freq
     self.bandwidth = bandwidth
     self.duration = duration
     self.duty_cycle = duty_cycle
+    self.channel_bw = channel_bw
+    self.fft_size = fft_size
 
-    self.last_update_time = 0
-    self.is_active = True
+    self.freq_axis = np.linspace(0, self.channel_bw, self.fft_size)
+    
+    self.spectrum = np.logical_and(
+      self.freq_axis >= self.start_freq,
+      self.freq_axis <= self.start_freq + self.bandwidth)
+    self.reset()
     
   def step(self, time):
-    if self.is_active == 1:
+    if self.is_active:
       update_interval = self.duration * self.duty_cycle
     else:
       update_interval = self.duration * (1 - self.duty_cycle)
@@ -27,55 +35,12 @@ class SingleToneInterference(Interference):
     if time - self.last_update_time >= update_interval and self.duty_cycle < 1:
       self.is_active = ~self.is_active
       self.last_update_time = time
-
-  def update_spectrogram(self,
-                         spectrogram: np.ndarray,
-                         freq_axis: np.ndarray,
-                         start_time: float,
-                         ) -> np.ndarray:
-    """
-    Modify the spectrogram to include the binary mask of the interferer
-
-    Parameters
-    ----------
-    spectrogram : np.ndarray
-        _description_
-    time_axis : np.ndarray
-        _description_
-    freq_axis : np.ndarray
-        _description_
-    start_time : float
-        _description_
-    stop_time : float
-        _description_
-
-    Returns
-    -------
-    np.ndarray
-        _description_
-    """
-    n_freq_bins = np.digitize(
-        self.bandwidth, freq_axis - np.min(freq_axis))
-    i_start_freq = np.digitize(
-        self.start_freq, freq_axis - np.min(freq_axis), right=True)
-    i_stop_freq = i_start_freq + n_freq_bins
-
-    # Compute the number of time bins to update
-    if self.is_active == 1:
-      update_interval = self.duration * self.duty_cycle
-    else:
-      update_interval = self.duration * (1 - self.duty_cycle)
-
-    if start_time - self.last_update_time >= update_interval and self.duty_cycle < 1:
-      self.is_active = 1 - self.is_active
-      self.last_update_time = start_time + self.duration
-    # Move the spectrogram to the current time
-    spectrogram = np.roll(spectrogram, -1, axis=0)
-    spectrogram[-1:, :] = 0
-    spectrogram[-1, i_start_freq:i_stop_freq] = 255*self.is_active
-
-    return spectrogram
+    
+    self.state = self.spectrum if self.is_active else np.zeros_like(self.spectrum)
+    return self.state
 
   def reset(self):
     self.last_update_time = 0
-    self.is_active = np.random.choice([True, False])
+    self.is_active = True
+    self.state = self.spectrum if self.is_active else np.zeros_like(self.spectrum)
+    
