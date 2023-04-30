@@ -1,3 +1,4 @@
+import pprint
 from ray.tune.registry import get_trainable_cls
 from ray.rllib.env.multi_agent_env import MultiAgentEnv
 from ray import air, tune
@@ -5,7 +6,7 @@ import ray
 import os
 import argparse
 from ray.rllib.algorithms.ppo import PPOConfig
-
+from ray.rllib.algorithms.algorithm_config import AlgorithmConfig
 
 import gymnasium as gym
 import numpy as np
@@ -19,23 +20,24 @@ class MultiAgentSpectrum(MultiAgentEnv):
     super().__init__()
     self.max_timesteps = config.get("max_timesteps", 250)
     self.fft_size = config.get("fft_size", 1024)
-    self.channel_bw = config.get("channel_bw", 1)
-    # self.interference = config.get("interference", HoppingInterference(
+    self.channel_bw = config.get("channel_bw", 100e6)
+    self.interference = config.get("interference", HoppingInterference(
+        bandwidth=0.2*self.channel_bw,
+        duration=1,
+        hop_size=0.2*self.channel_bw,
+        channel_bw=self.channel_bw,
+        fft_size=self.fft_size,
+    ))
+    # self.interference = config.get("interference", SingleToneInterference(
     #     bandwidth=0.2*self.channel_bw,
-    #     duration=1,
-    #     hop_size=0.2*self.channel_bw,
+    #     duration=2,
+    #     duty_cycle=0.5,
     #     channel_bw=self.channel_bw,
     #     fft_size=self.fft_size,
     # ))
-    self.interference = config.get("interference", SingleToneInterference(
-        start_freq=0,
-        bandwidth=0.2*self.channel_bw,
-        duration=1,
-        duty_cycle=1,
-    ))
     self.freq_axis = np.linspace(0, self.channel_bw, self.fft_size)
-    
-    # Create the agents. The 
+
+    # Create the agents. The
     self.agents = ["start", "bw"]
     self._agent_ids = set(self.agents)
     self._obs_space_in_preferred_format = True
@@ -54,11 +56,11 @@ class MultiAgentSpectrum(MultiAgentEnv):
     )
 
   def reset(self, *, seed=None, options=None):
-    # Reset 
+    # Reset
     self.time = 0
-    self.interference.reset()
+    self.interference.reset(False)
 
-    # Reset environment 
+    # Reset environment
     self.rewards = {agent: 0 for agent in self.agents}
     self._cumulative_rewards = {agent: 0 for agent in self.agents}
     self.terminations = {agent: False for agent in self.agents + ["__all__"]}
@@ -76,7 +78,7 @@ class MultiAgentSpectrum(MultiAgentEnv):
     self.agent_selection = self.agents[self.agent_ind]
     obs = {self.agent_selection: self.observations[self.agent_selection]}
     infos = {self.agent_selection: self.infos[self.agent_selection]}
-    return obs, infos 
+    return obs, infos
 
   def step(self, action):
     # Extract the action for the current agent
@@ -109,7 +111,6 @@ class MultiAgentSpectrum(MultiAgentEnv):
       # Reward is only given after the full waveform has been generated.
       for agent in self.agents:
         self.rewards[agent] = 0
-      
 
     # selects the next agent.
     self.agent_ind = (self.agent_ind + 1) % len(self.agents)
@@ -125,6 +126,10 @@ class MultiAgentSpectrum(MultiAgentEnv):
     truncations = self.truncations
     infos = self.infos[active_agent]
     return obs, rewards, terminations, truncations, infos
+
+  def render(self, mode="human"):
+    print("Test")
+    return np.zeros((64, 64, 3))
 
   def _get_obs(self, agent):
     spectrum = self.interference.state
@@ -153,93 +158,105 @@ class MultiAgentSpectrum(MultiAgentEnv):
 
 
 def get_cli_args():
-    """Create CLI parser and return parsed arguments"""
-    parser = argparse.ArgumentParser()
+  """Create CLI parser and return parsed arguments"""
+  parser = argparse.ArgumentParser()
 
-    # general args
-    parser.add_argument(
-        "--run", type=str, default="PPO", help="The RLlib-registered algorithm to use."
-    )
-    parser.add_argument(
-        "--framework",
-        choices=["tf", "tf2", "torch"],
-        default="torch",
-        help="The DL framework specifier.",
-    )
-    parser.add_argument("--eager-tracing", action="store_true")
-    parser.add_argument(
-        "--stop-iters", type=int, default=100, help="Number of iterations to train."
-    )
-    parser.add_argument(
-        "--stop-timesteps",
-        type=int,
-        default=1_000_000,
-        help="Number of timesteps to train.",
-    )
-    parser.add_argument(
-        "--stop-reward",
-        type=float,
-        default=490.0,
-        help="Reward at which we stop training.",
-    )
+  # general args
+  parser.add_argument(
+      "--run", type=str, default="PPO", help="The RLlib-registered algorithm to use."
+  )
+  parser.add_argument(
+      "--framework",
+      choices=["tf", "tf2", "torch"],
+      default="torch",
+      help="The DL framework specifier.",
+  )
+  parser.add_argument("--eager-tracing", action="store_true")
+  parser.add_argument(
+      "--stop-iters", type=int, default=500, help="Number of iterations to train."
+  )
+  parser.add_argument(
+      "--stop-timesteps",
+      type=int,
+      default=1_000_000,
+      help="Number of timesteps to train.",
+  )
+  parser.add_argument(
+      "--stop-reward",
+      type=float,
+      default=490.0,
+      help="Reward at which we stop training.",
+  )
 
-    args = parser.parse_args()
-    print(f"Running with following CLI args: {args}")
-    return args
+  args = parser.parse_args()
+  print(f"Running with following CLI args: {args}")
+  return args
 
 
 if __name__ == "__main__":
-    args = get_cli_args()
+  args = get_cli_args()
 
-    ray.init()
+  ray.init()
 
-    stop = {
-        # "training_iteration": args.stop_iters,
-        "timesteps_total": args.stop_timesteps,
-        "episode_reward_mean": args.stop_reward,
-    }
+  stop = {
+      "training_iteration": args.stop_iters,
+      "timesteps_total": args.stop_timesteps,
+      "episode_reward_mean": args.stop_reward,
+  }
 
-    # TODO (Artur): in PPORLModule vf_share_layers = True is broken in tf2. fix it.
-    vf_share_layers = not bool(os.environ.get("RLLIB_ENABLE_RL_MODULE", False))
-    config = (
-        PPOConfig()
-        .environment(env=MultiAgentSpectrum)
-        .resources(
-            # Use GPUs iff `RLLIB_NUM_GPUS` env var set to > 0.
-            # num_gpus=int(os.environ.get("RLLIB_NUM_GPUS", "0")),
-            num_gpus=1,
-        )
-        .training(
+  vf_share_layers = not bool(os.environ.get("RLLIB_ENABLE_RL_MODULE", False))
+
+  config = (
+      PPOConfig()
+      .environment(env=MultiAgentSpectrum)
+      .resources(
+          num_gpus=int(os.environ.get("RLLIB_NUM_GPUS", "0")),
+      )
+      .training(
           train_batch_size=1024, model={
-            "vf_share_layers": vf_share_layers, 
-            "use_lstm": True,
-            "lstm_cell_size": 32,
-            },
-          gamma=0.5,
-          )
-        .rollouts(num_rollout_workers=10, rollout_fragment_length='auto')
-        .framework(args.framework, eager_tracing=args.eager_tracing)
-        .multi_agent(
-            policies={"start", "bw"},
-            policy_mapping_fn=(lambda agent_id, episode, worker, **kw: agent_id),
-        )
-    )
-    # Uncommet this and set num_rollout_workers=0 to debug the env
-    # print(config.to_dict())
-    # algo = config.build()
-    # algo.train()
+              "vf_share_layers": False,
+              "use_lstm": True,
+              "lstm_cell_size": 64,
+          },
+          gamma=0.,
+      )
+      .rollouts(num_rollout_workers=6, rollout_fragment_length='auto')
+      .framework(args.framework, eager_tracing=args.eager_tracing)
+      .multi_agent(
+          policies={"start", "bw"},
+          policy_mapping_fn=(lambda agent_id, episode, worker, **kw: agent_id),
+      )
+  )
+  # algo = config.build()
+  # for i in range(250):
+  #   results = algo.train()
+  #   del results['config']
+  #   mean_reward = np.mean(results['hist_stats']['episode_reward'])
+  #   print(f"{i}: {mean_reward}")
     
+  results = tune.run(args.run, config=config, stop=stop)
+  # results = tune.Tuner(
+  #   args.run,
+  #   run_config=air.RunConfig(stop=stop),
+  #   param_space=config,
+  # ).fit()
+  # pprint.pprint(results)
 
-    results = tune.Tuner(
-        args.run,
-        run_config=air.RunConfig(
-            stop=stop,
-        ),
-        param_space=config,
-    ).fit()
+  # Evaluate the agent outside the RLLib training loop
+  env = MultiAgentSpectrum()
+  obs, info = env.reset()
+  init_state = start_state = bw_state = [
+      np.zeros([config["model"]["lstm_cell_size"]],
+               dtype=np.float32) for _ in range(2)
+  ]
+    
+  total_reward = 0
+  for i in range(250):
+    start, start_state, _ = algo.compute_single_action(obs['start'], start_state, policy_id='start')
+    obs, _, _, _, _ = env.step({'start': start})
+    bw, bw_state, _ = algo.compute_single_action(obs['bw'], bw_state, policy_id='bw')
+    obs, reward, terminated, truncated, info = env.step({'bw': bw})
+    total_reward += reward['start']
+  print(total_reward)
 
-    if not results:
-        raise ValueError(
-            "No results returned from tune.run(). Something must have gone wrong."
-        )
-    ray.shutdown()
+  ray.shutdown()
