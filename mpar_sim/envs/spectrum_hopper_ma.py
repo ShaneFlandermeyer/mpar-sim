@@ -1,15 +1,19 @@
-import pprint
 from ray.tune.registry import get_trainable_cls
 from ray.rllib.env.multi_agent_env import MultiAgentEnv
 from ray import air, tune
 import ray
 import os
 import argparse
-from ray.rllib.algorithms.ppo import PPOConfig
-from ray.rllib.algorithms.algorithm_config import AlgorithmConfig
+import functools
+import ray.rllib.algorithms.ppo as ppo
+
 
 import gymnasium as gym
 import numpy as np
+from gymnasium.spaces import Discrete
+
+from pettingzoo import AECEnv
+from pettingzoo.utils import agent_selector, wrappers
 
 from mpar_sim.interference.hopping import HoppingInterference
 from mpar_sim.interference.single_tone import SingleToneInterference
@@ -20,34 +24,31 @@ class MultiAgentSpectrum(MultiAgentEnv):
     super().__init__()
     self.max_timesteps = config.get("max_timesteps", 250)
     self.fft_size = config.get("fft_size", 1024)
-    self.channel_bw = config.get("channel_bw", 100e6)
-    self.interference = config.get("interference", HoppingInterference(
+    self.channel_bw = config.get("channel_bw", 1)
+    self.freq_axis = np.linspace(0, self.channel_bw, self.fft_size)
+    self.interference = HoppingInterference(
+        start_freq=np.min(self.freq_axis),
         bandwidth=0.2*self.channel_bw,
         duration=1,
+        # duty_cycle=1,
         hop_size=0.2*self.channel_bw,
         channel_bw=self.channel_bw,
-        fft_size=self.fft_size,
-    ))
-    # self.interference = config.get("interference", SingleToneInterference(
-    #     bandwidth=0.2*self.channel_bw,
-    #     duration=2,
-    #     duty_cycle=0.5,
-    #     channel_bw=self.channel_bw,
-    #     fft_size=self.fft_size,
-    # ))
-    self.freq_axis = np.linspace(0, self.channel_bw, self.fft_size)
+        fft_size=self.fft_size
+    )
 
-    # Create the agents. The
     self.agents = ["start", "bw"]
     self._agent_ids = set(self.agents)
+
+    # Provide full (preferred format) observation- and action-spaces as Dicts
+    # mapping agent IDs to the individual agents' spaces.
     self._obs_space_in_preferred_format = True
-    self._action_space_in_preferred_format = True
     self.observation_space = gym.spaces.Dict(
         {
             "start": gym.spaces.Box(low=0.0, high=1.0, shape=(self.fft_size,)),
             "bw": gym.spaces.Box(low=0.0, high=1.0, shape=(self.fft_size+1,)),
         }
     )
+    self._action_space_in_preferred_format = True
     self.action_space = gym.spaces.Dict(
         {
             "start": gym.spaces.Box(low=0.0, high=1.0),
@@ -55,16 +56,19 @@ class MultiAgentSpectrum(MultiAgentEnv):
         }
     )
 
-  def reset(self, *, seed=None, options=None):
-    # Reset
-    self.time = 0
-    self.interference.reset(False)
+    super().__init__()
 
-    # Reset environment
+  def reset(self, *, seed=None, options=None):
+    # Reset 
+    self.time = 0
+    self.interference.reset()
+
+    # Reset environment 
     self.rewards = {agent: 0 for agent in self.agents}
     self._cumulative_rewards = {agent: 0 for agent in self.agents}
-    self.terminations = {agent: False for agent in self.agents + ["__all__"]}
-    self.truncations = {agent: False for agent in self.agents + ["__all__"]}
+    self.terminations = {agent: False for agent in self.agents}
+    self.truncations = {agent: False for agent in self.agents}
+    self.terminations["__all__"] = self.truncations["__all__"] = False
     self.infos = {agent: {} for agent in self.agents}
     self.state = {
         agent: self.action_space[agent].sample()
@@ -78,27 +82,27 @@ class MultiAgentSpectrum(MultiAgentEnv):
     self.agent_selection = self.agents[self.agent_ind]
     obs = {self.agent_selection: self.observations[self.agent_selection]}
     infos = {self.agent_selection: self.infos[self.agent_selection]}
-    return obs, infos
+    return obs, infos 
 
   def step(self, action):
     # Extract the action for the current agent
-    active_agent = self.agent_selection
-    action = action[active_agent]
+    agent = self.agent_selection
+    action = action[agent]
 
     # the agent which stepped last had its _cumulative_rewards accounted for
     # (because it was returned by last()), so the _cumulative_rewards for this
     # agent should start again at 0
-    self._cumulative_rewards[active_agent] = 0
+    self._cumulative_rewards[agent] = 0
 
     # stores action of current agent
     self.state[self.agent_selection] = action
 
     if self.agent_ind == len(self.agents) - 1:
       self.time += 1
-      interference_state = self.interference.step(self.time)
-      reward = self._get_reward(interference_state)
-      for agent in self.agents:
-        self.rewards[agent] += reward
+      self.interference.step(self.time)
+      reward = self._get_reward()
+      self.rewards[self.agents[0]
+                   ], self.rewards[self.agents[1]] = reward, reward
 
       # The truncations dictionary must be updated for all players.
       self.truncations["__all__"] = self.time >= self.max_timesteps
@@ -107,8 +111,8 @@ class MultiAgentSpectrum(MultiAgentEnv):
       for agent in self.agents:
         self.observations[agent] = self._get_obs(agent)
     else:
-      self.observations[active_agent][-1] = action
-      # Reward is only given after the full waveform has been generated.
+      self.observations[self.agents[1 - self.agent_ind]][-1] = action
+      # no rewards are allocated until both players give an action
       for agent in self.agents:
         self.rewards[agent] = 0
 
@@ -124,22 +128,19 @@ class MultiAgentSpectrum(MultiAgentEnv):
     rewards = self.rewards
     terminations = self.terminations
     truncations = self.truncations
-    infos = self.infos[active_agent]
+    infos = self.infos[agent]
     return obs, rewards, terminations, truncations, infos
 
-  def render(self, mode="human"):
-    print("Test")
-    return np.zeros((64, 64, 3))
-
   def _get_obs(self, agent):
-    spectrum = self.interference.state
+    interference = self.interference.state
     if agent == "start":
-      obs = spectrum
+      obs = interference
     else:
-      obs = np.concatenate((spectrum, self.state['start']))
+      obs = np.concatenate((interference, self.state['start']))
     return obs.astype(self.observation_space[agent].dtype)
 
-  def _get_reward(self, interference):
+  def _get_reward(self):
+    interference = self.interference.state
     start_freq = self.state['start'].item()*self.channel_bw
     stop_freq = start_freq + self.state['bw'].item()*self.channel_bw
     radar_spectrum = np.logical_and(
@@ -158,105 +159,102 @@ class MultiAgentSpectrum(MultiAgentEnv):
 
 
 def get_cli_args():
-  """Create CLI parser and return parsed arguments"""
-  parser = argparse.ArgumentParser()
+    """Create CLI parser and return parsed arguments"""
+    parser = argparse.ArgumentParser()
 
-  # general args
-  parser.add_argument(
-      "--run", type=str, default="PPO", help="The RLlib-registered algorithm to use."
-  )
-  parser.add_argument(
-      "--framework",
-      choices=["tf", "tf2", "torch"],
-      default="torch",
-      help="The DL framework specifier.",
-  )
-  parser.add_argument("--eager-tracing", action="store_true")
-  parser.add_argument(
-      "--stop-iters", type=int, default=500, help="Number of iterations to train."
-  )
-  parser.add_argument(
-      "--stop-timesteps",
-      type=int,
-      default=1_000_000,
-      help="Number of timesteps to train.",
-  )
-  parser.add_argument(
-      "--stop-reward",
-      type=float,
-      default=490.0,
-      help="Reward at which we stop training.",
-  )
+    # general args
+    parser.add_argument(
+        "--run", type=str, default="PPO", help="The RLlib-registered algorithm to use."
+    )
+    parser.add_argument("--num-cpus", type=int, default=0)
+    parser.add_argument(
+        "--framework",
+        choices=["tf", "tf2", "torch"],
+        default="torch",
+        help="The DL framework specifier.",
+    )
+    parser.add_argument("--eager-tracing", action="store_true")
+    parser.add_argument(
+        "--stop-iters", type=int, default=100, help="Number of iterations to train."
+    )
+    parser.add_argument(
+        "--stop-timesteps",
+        type=int,
+        default=1_000_000,
+        help="Number of timesteps to train.",
+    )
+    parser.add_argument(
+        "--stop-reward",
+        type=float,
+        default=600.0,
+        help="Reward at which we stop training.",
+    )
+    parser.add_argument(
+        "--local-mode",
+        action="store_true",
+        help="Init Ray in local mode for easier debugging.",
+    )
 
-  args = parser.parse_args()
-  print(f"Running with following CLI args: {args}")
-  return args
+    args = parser.parse_args()
+    print(f"Running with following CLI args: {args}")
+    return args
 
 
 if __name__ == "__main__":
-  args = get_cli_args()
+    args = get_cli_args()
 
-  ray.init()
+    ray.init(num_cpus=args.num_cpus or None, local_mode=args.local_mode)
 
-  stop = {
-      "training_iteration": args.stop_iters,
-      "timesteps_total": args.stop_timesteps,
-      "episode_reward_mean": args.stop_reward,
-  }
+    stop = {
+        # "training_iteration": args.stop_iters,
+        "timesteps_total": args.stop_timesteps,
+        "episode_reward_mean": args.stop_reward,
+    }
 
-  vf_share_layers = not bool(os.environ.get("RLLIB_ENABLE_RL_MODULE", False))
+    # TODO (Artur): in PPORLModule vf_share_layers = True is broken in tf2. fix it.
+    vf_share_layers = not bool(os.environ.get("RLLIB_ENABLE_RL_MODULE", False))
+    config = (
+        get_trainable_cls(args.run)
+        .get_default_config()
+        .environment(env=MultiAgentSpectrum)
+        .resources(
+            # Use GPUs iff `RLLIB_NUM_GPUS` env var set to > 0.
+            num_gpus=int(os.environ.get("RLLIB_NUM_GPUS", "0")),
+            # num_gpus=1,
+        )
+        .training(
+          train_batch_size=1024, 
+          model={
+            "vf_share_layers": vf_share_layers, 
+            "use_lstm": True,
+            "lstm_cell_size": 64,
+            },
+          gamma=0,
+          )
+        .rollouts(num_rollout_workers=6, rollout_fragment_length="auto")
+        .framework(args.framework, eager_tracing=args.eager_tracing)
+        .multi_agent(
+            # Use a simple set of policy IDs. Spaces for the individual policies
+            # will be inferred automatically using reverse lookup via the
+            # `policy_mapping_fn` and the env provided spaces for the different
+            # agents. Alternatively, you could use:
+            # policies: {main0: PolicySpec(...), main1: PolicySpec}
+            policies={"start", "bw"},
+            # Simple mapping fn, mapping agent0 to main0 and agent1 to main1.
+            policy_mapping_fn=(lambda aid, episode, worker, **kw: aid),
+        )
+    )
 
-  config = (
-      PPOConfig()
-      .environment(env=MultiAgentSpectrum)
-      .resources(
-          num_gpus=int(os.environ.get("RLLIB_NUM_GPUS", "0")),
-      )
-      .training(
-          train_batch_size=1024, model={
-              "vf_share_layers": False,
-              "use_lstm": True,
-              "lstm_cell_size": 64,
-          },
-          gamma=0.,
-      )
-      .rollouts(num_rollout_workers=6, rollout_fragment_length='auto')
-      .framework(args.framework, eager_tracing=args.eager_tracing)
-      .multi_agent(
-          policies={"start", "bw"},
-          policy_mapping_fn=(lambda agent_id, episode, worker, **kw: agent_id),
-      )
-  )
-  # algo = config.build()
-  # for i in range(250):
-  #   results = algo.train()
-  #   del results['config']
-  #   mean_reward = np.mean(results['hist_stats']['episode_reward'])
-  #   print(f"{i}: {mean_reward}")
-    
-  results = tune.run(args.run, config=config, stop=stop)
-  # results = tune.Tuner(
-  #   args.run,
-  #   run_config=air.RunConfig(stop=stop),
-  #   param_space=config,
-  # ).fit()
-  # pprint.pprint(results)
+    results = tune.Tuner(
+        args.run,
+        run_config=air.RunConfig(
+            stop=stop,
+        ),
+        param_space=config,
+    ).fit()
 
-  # Evaluate the agent outside the RLLib training loop
-  env = MultiAgentSpectrum()
-  obs, info = env.reset()
-  init_state = start_state = bw_state = [
-      np.zeros([config["model"]["lstm_cell_size"]],
-               dtype=np.float32) for _ in range(2)
-  ]
-    
-  total_reward = 0
-  for i in range(250):
-    start, start_state, _ = algo.compute_single_action(obs['start'], start_state, policy_id='start')
-    obs, _, _, _, _ = env.step({'start': start})
-    bw, bw_state, _ = algo.compute_single_action(obs['bw'], bw_state, policy_id='bw')
-    obs, reward, terminated, truncated, info = env.step({'bw': bw})
-    total_reward += reward['start']
-  print(total_reward)
-
-  ray.shutdown()
+    if not results:
+        raise ValueError(
+            "No results returned from tune.run(). Something must have gone wrong."
+        )
+    ray.shutdown()
