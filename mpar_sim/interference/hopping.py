@@ -21,32 +21,29 @@ class HoppingInterference():
     self.freq_axis = np.linspace(0, self.channel_bw, self.fft_size)
     self.reset()
     
-    
-
   def step(self, time):
     if time - self.last_update_time >= self.duration:
       self.last_update_time = time
-
-      # Reverse sweep direction at the ends of the channel
-      end_freq = self.start_freq + self.bandwidth
-      step = self.hop_size*self.direction
-      if end_freq > np.max(self.freq_axis) or \
-              self.start_freq + step < np.min(self.freq_axis):
-        self.direction *= -1
-
-      self.start_freq += self.hop_size*self.direction
       
-      self.state = np.logical_and(
-        self.freq_axis >= self.start_freq,
-        self.freq_axis <= self.start_freq + self.bandwidth
-      )
+      # Reverse the sweep at the end of the frequency axis
+      n_shift = self.direction*round(self.hop_size/self.freq_axis[-1]*self.fft_size)
+      if self.start_ind + n_shift >= self.fft_size or self.start_ind + n_shift <= 0:
+        self.direction *= -1
+      self.start_ind += n_shift
+        
+      # Update the state
+      self.state = np.roll(self.state, n_shift)
       
     return self.state
       
   def reset(self):
     self.last_update_time = 0
     self.direction = 1
+    self.start_ind = 0
     self.is_active = True
+    
+    # TODO: Randomize this guy
+    # self.start_freq = np.random.uniform(0, self.channel_bw)
     
     self.state = np.logical_and(
         self.freq_axis >= self.start_freq,
