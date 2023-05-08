@@ -43,7 +43,7 @@ class HoppingInterference():
     self.is_active = True
     
     # TODO: Randomize this guy
-    # self.start_freq = np.random.uniform(0, self.channel_bw)
+    self.start_freq = np.random.uniform(0, self.channel_bw-self.bandwidth)
     
     self.state = np.logical_and(
         self.freq_axis >= self.start_freq,
