@@ -1,4 +1,5 @@
 import argparse
+import itertools
 import os
 
 import gymnasium as gym
@@ -17,7 +18,6 @@ from ray.rllib.algorithms.algorithm import Algorithm
 from ray.rllib.models import ModelCatalog
 
 
-
 class SpectrumHopper(gym.Env):
   metadata = {"render.modes": ["rgb_array", "human"], "render_fps": 60}
 
@@ -27,18 +27,19 @@ class SpectrumHopper(gym.Env):
     self.max_steps = config.get("max_steps", 100)
     self.history_len = config.get("history_len", 256)
     self.fft_size = config.get("fft_size", 1024)
-    self.max_collision_bw_frac = config.get("max_collision_bw_frac", 0.1)
+    self.max_collision_bw_frac = config.get("max_collision_bw_frac", 0.2)
 
     self.freq_axis = np.linspace(0, 1, self.fft_size)
-    self.interference = HoppingInterference(
-        start_freq=np.min(self.freq_axis),
-        bandwidth=0.2,
-        duration=5,
-        hop_size=0.2,
-        channel_bw=1,
-        fft_size=self.fft_size
-    )
-    self.interference = RecordedInterference("/home/shane/data/HOCAE_Snaps_bool.dat", self.fft_size)
+    # self.interference = HoppingInterference(
+    #     start_freq=np.min(self.freq_axis),
+    #     bandwidth=0.2,
+    #     duration=5,
+    #     hop_size=0.2,
+    #     channel_bw=1,
+    #     fft_size=self.fft_size
+    # )
+    self.interference = RecordedInterference(
+        "/home/shane/data/HOCAE_Snaps_bool_cleaned.dat", self.fft_size)
     self.observation_space = gym.spaces.Box(
         low=0.0, high=1.0, shape=(self.fft_size,))
     self.action_space = gym.spaces.Box(low=0.0, high=1.0, shape=(2,))
@@ -86,8 +87,6 @@ class SpectrumHopper(gym.Env):
     start_freq = action[0]
     stop_freq = np.clip(action[1], start_freq, None)
     radar_bw = stop_freq - start_freq
-    max_collision_bw = np.clip(
-        self.max_collision_bw_frac*radar_bw, 1/self.fft_size, None)
     radar_spectrum = np.logical_and(
         self.freq_axis >= start_freq,
         self.freq_axis <= stop_freq)
@@ -96,17 +95,45 @@ class SpectrumHopper(gym.Env):
     n_collisions = np.count_nonzero(np.logical_and(
         radar_spectrum, self.interference.state))
     collision_bw = n_collisions / self.fft_size
+    max_collision_bw = np.clip(
+        self.max_collision_bw_frac*radar_bw, 1/self.fft_size, None)
 
+    widest = self._get_widest(self.interference.state)
+    widest_bw = np.clip((widest[1] - widest[0]) /
+                        self.fft_size, 1/self.fft_size, None)
     # Reward is proportional to the radar bandwidth, and decreases linearly as the collision bandwidth increases to the maximum allowable value.
     # The result is clipped so that the reward is non-negative. This just makes analysis easier, and is not strictly necessary.
-    reward = radar_bw * (1 - np.clip(collision_bw/max_collision_bw, 0, 1))
-
+    if n_collisions < 10:
+      reward = (radar_bw/widest_bw)
+    else:
+      reward = (radar_bw/widest_bw) * (1 - np.clip(collision_bw/max_collision_bw, 0, 1))
     # Update histories
     self.history["radar"].append(radar_spectrum.astype(np.uint8))
     self.history["interference"].append(
         self.interference.state.astype(np.uint8))
 
     return reward
+
+  def _get_widest(self, spectrum: np.ndarray):
+    # Group consecutive bins by value
+    gap_widths = np.array([[x[0], len(list(x[1]))]
+                          for x in itertools.groupby(spectrum)])
+    vals = gap_widths[:, 0]
+    widths = gap_widths[:, 1]
+    starts = np.cumsum(widths) - widths
+
+    # Compute the start frequency and width of the widest gap (in bins)
+    open = (vals == 0)
+    if not np.any(open):
+      return np.array([0, 0])
+    istart_widest = np.argmax(widths[open])
+    widest_start = starts[open][istart_widest]
+    widest_bw = widths[open][istart_widest]
+    widest_stop = widest_start + widest_bw
+
+    widest_start = widest_start
+    widest_stop = widest_stop
+    return np.array([widest_start, widest_stop])
 
   def _render_frame(self):
     if self.window is None and self.render_mode == "human":
@@ -161,7 +188,7 @@ def get_cli_args():
   parser.add_argument(
       "--stop-reward",
       type=float,
-      default=310.0,
+      default=500.0,
       help="Reward at which we stop training.",
   )
 
@@ -196,7 +223,7 @@ if __name__ == '__main__':
               # Attention config
               # "use_attention": True,
               # "attention_num_transformer_units": 2,
-              # "attention_dim": 64,
+              # "attention_dim": 256,
               # "attention_memory_inference": 512,
               # "attention_memory_training": 512,
               # "attention_num_heads": 4,
@@ -208,14 +235,6 @@ if __name__ == '__main__':
           num_sgd_iter=10,
           lr=3e-4,
       )
-      # .evaluation(
-      #   evaluation_interval=10,
-      #   evaluation_duration=1,
-      #   evaluation_config=PPOConfig.overrides(
-      #     render_env=True,
-      #     explore=False,
-      #   )
-      # )
       .rollouts(num_rollout_workers=args.num_cpus, rollout_fragment_length="auto")
       .framework(args.framework, eager_tracing=args.eager_tracing)
   )
