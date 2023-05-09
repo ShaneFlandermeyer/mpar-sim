@@ -9,7 +9,7 @@ class RecordedInterference(Interference):
                ) -> None:
     self.fft_size = fft_size
     
-    self.data = np.fromfile(filename)
+    self.data = np.fromfile(filename, dtype=np.uint8)
     self.data = self.data.reshape((-1, fft_size))
     self.n_snapshots = self.data.shape[0]
     

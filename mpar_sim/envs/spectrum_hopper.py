@@ -38,6 +38,7 @@ class SpectrumHopper(gym.Env):
         channel_bw=1,
         fft_size=self.fft_size
     )
+    self.interference = RecordedInterference("/home/shane/data/HOCAE_Snaps_bool.dat", self.fft_size)
     self.observation_space = gym.spaces.Box(
         low=0.0, high=1.0, shape=(self.fft_size,))
     self.action_space = gym.spaces.Box(low=0.0, high=1.0, shape=(2,))
@@ -143,7 +144,7 @@ def get_cli_args():
   parser = argparse.ArgumentParser()
 
   # general args
-  parser.add_argument("--num-cpus", type=int, default=14)
+  parser.add_argument("--num-cpus", type=int, default=8)
   parser.add_argument(
       "--framework",
       choices=["tf", "tf2", "torch"],
@@ -154,13 +155,13 @@ def get_cli_args():
   parser.add_argument(
       "--stop-timesteps",
       type=int,
-      default=500_000,
+      default=1_000_000,
       help="Number of timesteps to train.",
   )
   parser.add_argument(
       "--stop-reward",
       type=float,
-      default=500.0,
+      default=310.0,
       help="Reward at which we stop training.",
   )
 
@@ -184,26 +185,28 @@ if __name__ == '__main__':
       .training(
           train_batch_size=2048,
           model={
+              "fcnet_hiddens": [256, 256],
               # LSTM config
+              # NOTE: This architecture plays basically optimally for the hopper once the first few steps are in the latent space.
               "use_lstm": True,
               "lstm_cell_size": 256,
               "lstm_use_prev_action": True,
               "lstm_use_prev_reward": True,
 
-          #     # "use_attention": True,
-          #     # "max_seq_len": 10,
-          #     # "attention_num_transformer_units": 1,
-          #     # "attention_dim": 32,
-          #     # "attention_memory_inference": 10,
-          #     # "attention_memory_training": 10,
-          #     # "attention_num_heads": 1,
-          #     # "attention_head_dim": 32,
-          #     # "attention_position_wise_mlp_dim": 32,
+              # Attention config
+              # "use_attention": True,
+              # "attention_num_transformer_units": 2,
+              # "attention_dim": 64,
+              # "attention_memory_inference": 512,
+              # "attention_memory_training": 512,
+              # "attention_num_heads": 4,
+              # "attention_head_dim": 64,
+              # "attention_position_wise_mlp_dim": 256,
           },
           gamma=0.5,
           sgd_minibatch_size=256,
           num_sgd_iter=10,
-          lr=5e-4,
+          lr=3e-4,
       )
       # .evaluation(
       #   evaluation_interval=10,
