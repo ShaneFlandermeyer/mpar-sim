@@ -7,6 +7,7 @@ import numpy as np
 import pygame
 import ray
 from ray.rllib.algorithms.ppo import PPOConfig
+from ray.rllib.algorithms.pg import PGConfig
 from ray.tune.logger import pretty_print
 
 from mpar_sim.interference.hopping import HoppingInterference
@@ -16,6 +17,9 @@ from collections import deque
 import cv2
 from ray.rllib.algorithms.algorithm import Algorithm
 from ray.rllib.models import ModelCatalog
+from ray import air, tune
+
+# from mpar_sim.models.networks.rllib_rnn import TorchLSTMModel
 
 
 class SpectrumHopper(gym.Env):
@@ -27,7 +31,10 @@ class SpectrumHopper(gym.Env):
     self.max_steps = config.get("max_steps", 100)
     self.history_len = config.get("history_len", 256)
     self.fft_size = config.get("fft_size", 1024)
-    self.max_collision_bw_frac = config.get("max_collision_bw_frac", 0.2)
+
+    # Number of collisions that can be tolerated for reward function
+    self.min_collisions = config.get("min_collisions", 0)
+    self.max_collisions = config.get("max_collisions", self.fft_size)
 
     self.freq_axis = np.linspace(0, 1, self.fft_size)
     # self.interference = HoppingInterference(
@@ -94,19 +101,16 @@ class SpectrumHopper(gym.Env):
     # Compute collision metrics
     n_collisions = np.count_nonzero(np.logical_and(
         radar_spectrum, self.interference.state))
-    collision_bw = n_collisions / self.fft_size
-    max_collision_bw = np.clip(
-        self.max_collision_bw_frac*radar_bw, 1/self.fft_size, None)
 
     widest = self._get_widest(self.interference.state)
     widest_bw = np.clip((widest[1] - widest[0]) /
                         self.fft_size, 1/self.fft_size, None)
     # Reward is proportional to the radar bandwidth, and decreases linearly as the collision bandwidth increases to the maximum allowable value.
     # The result is clipped so that the reward is non-negative. This just makes analysis easier, and is not strictly necessary.
-    if n_collisions < 10:
-      reward = (radar_bw/widest_bw)
-    else:
-      reward = (radar_bw/widest_bw) * (1 - np.clip(collision_bw/max_collision_bw, 0, 1))
+    reward = (radar_bw/widest_bw)
+    if n_collisions > self.min_collisions:
+      reward *= np.clip(
+          1 - (n_collisions - self.min_collisions) / (self.max_collisions - self.min_collisions), 0, 1)
     # Update histories
     self.history["radar"].append(radar_spectrum.astype(np.uint8))
     self.history["interference"].append(
@@ -171,7 +175,7 @@ def get_cli_args():
   parser = argparse.ArgumentParser()
 
   # general args
-  parser.add_argument("--num-cpus", type=int, default=8)
+  parser.add_argument("--num-cpus", type=int, default=12)
   parser.add_argument(
       "--framework",
       choices=["tf", "tf2", "torch"],
@@ -182,13 +186,13 @@ def get_cli_args():
   parser.add_argument(
       "--stop-timesteps",
       type=int,
-      default=1_000_000,
+      default=2_000_000,
       help="Number of timesteps to train.",
   )
   parser.add_argument(
       "--stop-reward",
       type=float,
-      default=500.0,
+      default=4500.0,
       help="Reward at which we stop training.",
   )
 
@@ -205,57 +209,54 @@ if __name__ == '__main__':
   config = (
       PPOConfig()
       .environment(env=SpectrumHopper, normalize_actions=True,
-                   env_config={"max_steps": 500})
+                   env_config={"max_steps": 2500, "min_collisions": 5, "max_collisions": 10})
       .resources(
           num_gpus=int(os.environ.get("RLLIB_NUM_GPUS", "0")),
       )
       .training(
-          train_batch_size=2048,
+          train_batch_size=max(1024, 512*args.num_cpus),
           model={
               "fcnet_hiddens": [256, 256],
+              
               # LSTM config
-              # NOTE: This architecture plays basically optimally for the hopper once the first few steps are in the latent space.
+              # NOTE: This architecture plays basically optimallyk for the hopper once the first few steps are in the latent space.
               "use_lstm": True,
               "lstm_cell_size": 256,
-              "lstm_use_prev_action": True,
-              "lstm_use_prev_reward": True,
-
-              # Attention config
-              # "use_attention": True,
-              # "attention_num_transformer_units": 2,
-              # "attention_dim": 256,
-              # "attention_memory_inference": 512,
-              # "attention_memory_training": 512,
-              # "attention_num_heads": 4,
-              # "attention_head_dim": 64,
-              # "attention_position_wise_mlp_dim": 256,
+              "lstm_use_prev_action": False,
+              "lstm_use_prev_reward": False,
           },
-          gamma=0.5,
-          sgd_minibatch_size=256,
+          lr=2.5e-4,
+          gamma=0.8,
+          lambda_=0.95,
+          clip_param=0.2,
+          sgd_minibatch_size=512*args.num_cpus//4,
           num_sgd_iter=10,
-          lr=3e-4,
+          vf_loss_coeff=0.25,
       )
       .rollouts(num_rollout_workers=args.num_cpus, rollout_fragment_length="auto")
       .framework(args.framework, eager_tracing=args.eager_tracing)
   )
+  
+  
 
   # Training loop
   print("Configuration successful. Running training loop.")
   algo = config.build()
+  highest_mean_reward = -np.inf
   while True:
     result = algo.train()
     print(pretty_print(result))
-    if (
-        result["timesteps_total"] >= args.stop_timesteps
-        or result["episode_reward_mean"] >= args.stop_reward
-    ):
-      # Save the trained result
+    # Save the best performing model found so far
+    if result["episode_reward_mean"] > highest_mean_reward:
+      highest_mean_reward = result["episode_reward_mean"]
       save_path = algo.save()
+      
+    if result["timesteps_total"] >= args.stop_timesteps or result["episode_reward_mean"] >= args.stop_reward:
       break
 
-  print("Finished training. Running manual test/inference loop.")
+  # print("Finished training. Running manual test/inference loop.")
   if 'save_path' not in locals():
-    save_path = "/home/shane/ray_results/PPO_SpectrumHopper_2023-05-08_11-47-12bqmlie7_/checkpoint_000123"
+    save_path = "/home/shane/ray_results/PPO_SpectrumHopper_2023-05-09_15-17-14x7g9ev68/checkpoint_000215"
   algo = Algorithm.from_checkpoint(save_path)
   # Prepare env
   env_config = config["env_config"]

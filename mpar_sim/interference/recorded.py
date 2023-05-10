@@ -6,11 +6,13 @@ class RecordedInterference(Interference):
   def __init__(self,
                filename: str,
                fft_size: int = 1024,
+               dtype=np.uint8,
+               order='C'
                ) -> None:
     self.fft_size = fft_size
     
-    self.data = np.fromfile(filename, dtype=np.uint8)
-    self.data = self.data.reshape((-1, fft_size))
+    self.data = np.fromfile(filename, dtype=dtype)
+    self.data = self.data.reshape((-1, fft_size), order=order)
     self.n_snapshots = self.data.shape[0]
     
   def step(self, time): 
