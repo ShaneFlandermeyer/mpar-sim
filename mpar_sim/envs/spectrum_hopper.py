@@ -1,23 +1,24 @@
 import argparse
 import itertools
 import os
+from collections import deque
 
+import cv2
 import gymnasium as gym
 import numpy as np
 import pygame
 import ray
-from ray.rllib.algorithms.ppo import PPOConfig
+from ray import air, tune
+from ray.rllib.algorithms.algorithm import Algorithm
 from ray.rllib.algorithms.pg import PGConfig
+from ray.rllib.algorithms.ppo import PPOConfig
+from ray.rllib.models import ModelCatalog
 from ray.tune.logger import pretty_print
 
 from mpar_sim.interference.hopping import HoppingInterference
 from mpar_sim.interference.recorded import RecordedInterference
 from mpar_sim.interference.single_tone import SingleToneInterference
-from collections import deque
-import cv2
-from ray.rllib.algorithms.algorithm import Algorithm
-from ray.rllib.models import ModelCatalog
-from ray import air, tune
+from gymnasium.wrappers.normalize import NormalizeReward
 
 # from mpar_sim.models.networks.rllib_rnn import TorchLSTMModel
 
@@ -62,17 +63,20 @@ class SpectrumHopper(gym.Env):
 
   def reset(self, *, seed=None, options=None):
     self.time = 0
-    self.interference.reset()
     self.history = {
         "radar": deque([np.zeros(self.fft_size, dtype=np.uint8) for _ in range(self.history_len)], maxlen=self.history_len),
         "interference": deque([np.zeros(self.fft_size, dtype=np.uint8) for _ in range(self.history_len)], maxlen=self.history_len),
     }
+    self.interference.reset()
+    self.n_shift = self.np_random.integers(-self.fft_size//4, self.fft_size//4)
+    self.interference.state = np.roll(self.interference.state, self.n_shift)
     obs = self.interference.state
     info = {}
     return obs, info
 
   def step(self, action):
     self.interference.step(self.time)
+    self.interference.state = np.roll(self.interference.state, self.n_shift)
     reward = self._get_reward(action)
     self.time += 1
     terminated = False
@@ -103,14 +107,14 @@ class SpectrumHopper(gym.Env):
         radar_spectrum, self.interference.state))
 
     widest = self._get_widest(self.interference.state)
-    widest_bw = np.clip((widest[1] - widest[0]) /
-                        self.fft_size, 1/self.fft_size, None)
+    widest_bw = np.clip((widest[1] - widest[0]) / self.fft_size,
+                        1/self.fft_size, None)
     # Reward is proportional to the radar bandwidth, and decreases linearly as the collision bandwidth increases to the maximum allowable value.
     # The result is clipped so that the reward is non-negative. This just makes analysis easier, and is not strictly necessary.
-    reward = (radar_bw/widest_bw)
+    reward = radar_bw/widest_bw
     if n_collisions > self.min_collisions:
-      reward *= np.clip(
-          1 - (n_collisions - self.min_collisions) / (self.max_collisions - self.min_collisions), 0, 1)
+      reward *= 1 - (n_collisions-self.min_collisions) / (self.max_collisions-self.min_collisions)
+    reward = np.clip(reward, 0, None)
     # Update histories
     self.history["radar"].append(radar_spectrum.astype(np.uint8))
     self.history["interference"].append(
@@ -150,9 +154,11 @@ class SpectrumHopper(gym.Env):
 
     radar_spectrogram = np.stack(self.history["radar"], axis=0)
     spectrogram = np.stack(self.history["interference"], axis=0)
+    intersection = np.logical_and(radar_spectrogram.T, spectrogram.T)
 
     pixels = spectrogram.T*100
     pixels[radar_spectrogram.T == 1] = 255
+    pixels[intersection] = 150
     pixels = cv2.resize(pixels, self.window_size, interpolation=cv2.INTER_AREA)
 
     if self.render_mode == "human":
@@ -175,7 +181,8 @@ def get_cli_args():
   parser = argparse.ArgumentParser()
 
   # general args
-  parser.add_argument("--num-cpus", type=int, default=12)
+  parser.add_argument("--num-cpus", type=int, default=8)
+  parser.add_argument("--num-envs-per-worker", type=int, default=1)
   parser.add_argument(
       "--framework",
       choices=["tf", "tf2", "torch"],
@@ -203,41 +210,48 @@ def get_cli_args():
 
 if __name__ == '__main__':
   args = get_cli_args()
+  train_batch_size = max(1024, 128*args.num_cpus*args.num_envs_per_worker)
 
   # ray.init(num_cpus=args.num_cpus or None)
   # ModelCatalog.register_custom_model("gru", TorchGRUModel)
+  # env = SpectrumHopper({"max_steps": 2500, "min_collisions": 5, "max_collisions": 20})
+  # env = NormalizeReward(env)
+  tune.register_env("SpectrumHopper", lambda env_config: SpectrumHopper(env_config))
+  
   config = (
       PPOConfig()
-      .environment(env=SpectrumHopper, normalize_actions=True,
-                   env_config={"max_steps": 2500, "min_collisions": 5, "max_collisions": 10})
+      # .environment(env="SpectrumHopper", normalize_actions=True)
+      .environment(env="SpectrumHopper", normalize_actions=True,
+                   env_config={"max_steps": 2000, "min_collisions": 5, "max_collisions": 10})
       .resources(
           num_gpus=int(os.environ.get("RLLIB_NUM_GPUS", "0")),
       )
       .training(
-          train_batch_size=max(1024, 512*args.num_cpus),
+          train_batch_size=train_batch_size,
           model={
-              "fcnet_hiddens": [256, 256],
-              
+              "fcnet_hiddens": [256, 128, 64],
+
               # LSTM config
-              # NOTE: This architecture plays basically optimallyk for the hopper once the first few steps are in the latent space.
               "use_lstm": True,
-              "lstm_cell_size": 256,
-              "lstm_use_prev_action": False,
-              "lstm_use_prev_reward": False,
+              "lstm_cell_size": 64,
+              "lstm_use_prev_action": True,
+              "lstm_use_prev_reward": True,
           },
-          lr=2.5e-4,
+          lr=3e-4,
           gamma=0.8,
-          lambda_=0.95,
-          clip_param=0.2,
-          sgd_minibatch_size=512*args.num_cpus//4,
-          num_sgd_iter=10,
+          lambda_=0.9,
+          clip_param=0.25,
+          sgd_minibatch_size=train_batch_size,
+          num_sgd_iter=6,
+          grad_clip=10,
           vf_loss_coeff=0.25,
       )
-      .rollouts(num_rollout_workers=args.num_cpus, rollout_fragment_length="auto")
+      .rollouts(num_rollout_workers=args.num_cpus,
+                num_envs_per_worker=args.num_envs_per_worker,
+                rollout_fragment_length="auto",
+                observation_filter="MeanStdFilter",)
       .framework(args.framework, eager_tracing=args.eager_tracing)
   )
-  
-  
 
   # Training loop
   print("Configuration successful. Running training loop.")
@@ -250,13 +264,15 @@ if __name__ == '__main__':
     if result["episode_reward_mean"] > highest_mean_reward:
       highest_mean_reward = result["episode_reward_mean"]
       save_path = algo.save()
-      
+
     if result["timesteps_total"] >= args.stop_timesteps or result["episode_reward_mean"] >= args.stop_reward:
       break
 
   # print("Finished training. Running manual test/inference loop.")
   if 'save_path' not in locals():
-    save_path = "/home/shane/ray_results/PPO_SpectrumHopper_2023-05-09_15-17-14x7g9ev68/checkpoint_000215"
+    save_path = "/home/shane/ray_results/PPO_SpectrumHopper_2023-05-10_12-36-42f96dytzf/checkpoint_002461"
+  print("Model path:", save_path)
+  del algo
   algo = Algorithm.from_checkpoint(save_path)
   # Prepare env
   env_config = config["env_config"]
@@ -284,3 +300,5 @@ if __name__ == '__main__':
     total_reward += reward
     env.render()
   print("Total eval. reward:", total_reward)
+
+  ray.shutdown()
