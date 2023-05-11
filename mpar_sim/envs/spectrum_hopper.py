@@ -99,7 +99,7 @@ class SpectrumHopper(gym.Env):
 
   def _get_reward(self, action):
     # Compute radar spectrum
-    start_freq = action[0]
+    start_freq = np.clip(action[0], None, 1-self.min_bandwidth)
     stop_freq = np.clip(action[1], start_freq+self.min_bandwidth, None)
     center_freq = 0.5*(start_freq + stop_freq)
     bandwidth = stop_freq - start_freq
@@ -126,8 +126,8 @@ class SpectrumHopper(gym.Env):
     if n_collisions > self.min_collisions:
       reward *= 1 - n_collisions / self.max_collisions
     # Penalize for waveform changes
-    # reward -= 0.1 * np.var(self.bw_history)
-    # reward -= 0.1 * np.var(self.fc_history)
+    reward -= 0.1 * np.var(self.bw_history)
+    reward -= 0.1 * np.var(self.fc_history)
     
     # Update histories
     self.history["radar"].append(radar_spectrum.astype(np.uint8))
