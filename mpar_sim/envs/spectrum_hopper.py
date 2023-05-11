@@ -113,8 +113,10 @@ class SpectrumHopper(gym.Env):
     # The result is clipped so that the reward is non-negative. This just makes analysis easier, and is not strictly necessary.
     reward = radar_bw/widest_bw
     if n_collisions > self.min_collisions:
-      reward *= 1 - (n_collisions-self.min_collisions) / (self.max_collisions-self.min_collisions)
-    reward = np.clip(reward, 0, None)
+      reward *= 1 - n_collisions / self.max_collisions
+      # reward *= 1 - (n_collisions - self.min_collisions) / \
+      #     (self.max_collisions - self.min_collisions)
+    # reward = np.clip(reward, 0, None)
     # Update histories
     self.history["radar"].append(radar_spectrum.astype(np.uint8))
     self.history["interference"].append(
@@ -193,7 +195,7 @@ def get_cli_args():
   parser.add_argument(
       "--stop-timesteps",
       type=int,
-      default=2_000_000,
+      default=2_500_000,
       help="Number of timesteps to train.",
   )
   parser.add_argument(
@@ -212,17 +214,14 @@ if __name__ == '__main__':
   args = get_cli_args()
   train_batch_size = max(1024, 128*args.num_cpus*args.num_envs_per_worker)
 
-  # ray.init(num_cpus=args.num_cpus or None)
-  # ModelCatalog.register_custom_model("gru", TorchGRUModel)
-  # env = SpectrumHopper({"max_steps": 2500, "min_collisions": 5, "max_collisions": 20})
-  # env = NormalizeReward(env)
-  tune.register_env("SpectrumHopper", lambda env_config: SpectrumHopper(env_config))
-  
+  tune.register_env(
+      "SpectrumHopper", lambda env_config: SpectrumHopper(env_config))
+
   config = (
       PPOConfig()
       # .environment(env="SpectrumHopper", normalize_actions=True)
       .environment(env="SpectrumHopper", normalize_actions=True,
-                   env_config={"max_steps": 2000, "min_collisions": 5, "max_collisions": 10})
+                   env_config={"max_steps": 2000, "min_collisions": 5, "max_collisions": 30})
       .resources(
           num_gpus=int(os.environ.get("RLLIB_NUM_GPUS", "0")),
       )
@@ -270,7 +269,7 @@ if __name__ == '__main__':
 
   # print("Finished training. Running manual test/inference loop.")
   if 'save_path' not in locals():
-    save_path = "/home/shane/ray_results/PPO_SpectrumHopper_2023-05-10_12-36-42f96dytzf/checkpoint_002461"
+    save_path = "/home/shane/ray_results/PPO_SpectrumHopper_2023-05-10_23-48-24jlk8d1rn/checkpoint_003047"
   print("Model path:", save_path)
   del algo
   algo = Algorithm.from_checkpoint(save_path)
