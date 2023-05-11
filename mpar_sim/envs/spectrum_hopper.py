@@ -30,10 +30,11 @@ class SpectrumHopper(gym.Env):
     super().__init__()
     # Environment config
     self.max_steps = config.get("max_steps", 100)
-    self.history_len = config.get("history_len", 256)
+    self.cpi_len = config.get("cpi_len", 256)
     self.fft_size = config.get("fft_size", 1024)
 
     # Number of collisions that can be tolerated for reward function
+    self.min_bandwidth = config.get("min_bandwidth", 0.1)
     self.min_collisions = config.get("min_collisions", 0)
     self.max_collisions = config.get("max_collisions", self.fft_size)
 
@@ -64,9 +65,12 @@ class SpectrumHopper(gym.Env):
   def reset(self, *, seed=None, options=None):
     self.time = 0
     self.history = {
-        "radar": deque([np.zeros(self.fft_size, dtype=np.uint8) for _ in range(self.history_len)], maxlen=self.history_len),
-        "interference": deque([np.zeros(self.fft_size, dtype=np.uint8) for _ in range(self.history_len)], maxlen=self.history_len),
+        "radar": deque([np.zeros(self.fft_size, dtype=np.uint8) for _ in range(self.cpi_len)], maxlen=self.cpi_len),
+        "interference": deque([np.zeros(self.fft_size, dtype=np.uint8) for _ in range(self.cpi_len)], maxlen=self.cpi_len),
     }
+    self.bw_history = []
+    self.fc_history = []
+
     self.interference.reset()
     self.n_shift = self.np_random.integers(-self.fft_size//4, self.fft_size//4)
     self.interference.state = np.roll(self.interference.state, self.n_shift)
@@ -96,11 +100,18 @@ class SpectrumHopper(gym.Env):
   def _get_reward(self, action):
     # Compute radar spectrum
     start_freq = action[0]
-    stop_freq = np.clip(action[1], start_freq, None)
-    radar_bw = stop_freq - start_freq
+    stop_freq = np.clip(action[1], start_freq+self.min_bandwidth, None)
+    center_freq = 0.5*(start_freq + stop_freq)
+    bandwidth = stop_freq - start_freq
     radar_spectrum = np.logical_and(
         self.freq_axis >= start_freq,
         self.freq_axis <= stop_freq)
+    
+    if self.time % self.cpi_len == 0:
+      self.bw_history = []
+      self.fc_history = []
+    self.bw_history.append(bandwidth)
+    self.fc_history.append(center_freq)
 
     # Compute collision metrics
     n_collisions = np.count_nonzero(np.logical_and(
@@ -109,14 +120,15 @@ class SpectrumHopper(gym.Env):
     widest = self._get_widest(self.interference.state)
     widest_bw = np.clip((widest[1] - widest[0]) / self.fft_size,
                         1/self.fft_size, None)
-    # Reward is proportional to the radar bandwidth, and decreases linearly as the collision bandwidth increases to the maximum allowable value.
-    # The result is clipped so that the reward is non-negative. This just makes analysis easier, and is not strictly necessary.
-    reward = radar_bw/widest_bw
+    # Reward the agent for bandwidth utilization
+    reward = bandwidth/widest_bw
+    # Penalize for collisions
     if n_collisions > self.min_collisions:
       reward *= 1 - n_collisions / self.max_collisions
-      # reward *= 1 - (n_collisions - self.min_collisions) / \
-      #     (self.max_collisions - self.min_collisions)
-    # reward = np.clip(reward, 0, None)
+    # Penalize for waveform changes
+    # reward -= 0.1 * np.var(self.bw_history)
+    # reward -= 0.1 * np.var(self.fc_history)
+    
     # Update histories
     self.history["radar"].append(radar_spectrum.astype(np.uint8))
     self.history["interference"].append(
@@ -127,7 +139,7 @@ class SpectrumHopper(gym.Env):
   def _get_widest(self, spectrum: np.ndarray):
     # Group consecutive bins by value
     gap_widths = np.array([[x[0], len(list(x[1]))]
-                          for x in itertools.groupby(spectrum)])
+                           for x in itertools.groupby(spectrum)])
     vals = gap_widths[:, 0]
     widths = gap_widths[:, 1]
     starts = np.cumsum(widths) - widths
@@ -195,7 +207,7 @@ def get_cli_args():
   parser.add_argument(
       "--stop-timesteps",
       type=int,
-      default=2_500_000,
+      default=2_000_000,
       help="Number of timesteps to train.",
   )
   parser.add_argument(
@@ -221,18 +233,18 @@ if __name__ == '__main__':
       PPOConfig()
       # .environment(env="SpectrumHopper", normalize_actions=True)
       .environment(env="SpectrumHopper", normalize_actions=True,
-                   env_config={"max_steps": 2000, "min_collisions": 5, "max_collisions": 30})
+                   env_config={"max_steps": 2000, "min_collisions": 5, "max_collisions": 25})
       .resources(
           num_gpus=int(os.environ.get("RLLIB_NUM_GPUS", "0")),
       )
       .training(
           train_batch_size=train_batch_size,
           model={
-              "fcnet_hiddens": [256, 128, 64],
+              "fcnet_hiddens": [256, 192, 128],
 
               # LSTM config
               "use_lstm": True,
-              "lstm_cell_size": 64,
+              "lstm_cell_size": 128,
               "lstm_use_prev_action": True,
               "lstm_use_prev_reward": True,
           },
@@ -269,7 +281,7 @@ if __name__ == '__main__':
 
   # print("Finished training. Running manual test/inference loop.")
   if 'save_path' not in locals():
-    save_path = "/home/shane/ray_results/PPO_SpectrumHopper_2023-05-10_23-48-24jlk8d1rn/checkpoint_003047"
+    save_path = "/home/shane/ray_results/PPO_SpectrumHopper_2023-05-11_14-03-44u345edtn/checkpoint_001782"
   print("Model path:", save_path)
   del algo
   algo = Algorithm.from_checkpoint(save_path)
@@ -290,7 +302,7 @@ if __name__ == '__main__':
   while not done:
     # action = env.action_space.sample()
     action, state, _ = algo.compute_single_action(
-        obs, state, prev_action=prev_action, prev_reward=prev_reward, explore=False)
+        obs, state, prev_action=prev_action, prev_reward=prev_reward, explore=True)
     obs, reward, terminated, truncated, info = env.step(action)
     done = terminated or truncated
     prev_action = action
