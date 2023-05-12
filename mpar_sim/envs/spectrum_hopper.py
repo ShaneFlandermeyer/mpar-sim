@@ -52,7 +52,7 @@ class SpectrumHopper(gym.Env):
     self.interference = RecordedInterference(
         "/home/shane/data/HOCAE_Snaps_bool_cleaned.dat", self.fft_size)
     self.observation_space = gym.spaces.Box(
-        low=0.0, high=1.0, shape=(self.fft_size,))
+        low=0.0, high=1.0, shape=(self.fft_size+3,))
     self.action_space = gym.spaces.Box(low=0.0, high=1.0, shape=(2,))
 
     # Render config
@@ -77,8 +77,8 @@ class SpectrumHopper(gym.Env):
     self.n_shift = self.np_random.integers(-self.fft_size//4, self.fft_size//4)
     self.interference.state = np.roll(self.interference.state, self.n_shift)
     obs = self.interference.state
-    # obs = np.append(self.interference.state, [0, 0])
-    # obs = np.append(obs, (self.time % self.cpi_len) / self.cpi_len)
+    obs = np.append(self.interference.state, [0, 0])
+    obs = np.append(obs, (self.time % self.cpi_len) / self.cpi_len)
     info = {}
     return obs, info
 
@@ -90,9 +90,9 @@ class SpectrumHopper(gym.Env):
     terminated = False
     truncated = self.time >= self.max_steps
     obs = self.interference.state
-    # obs = np.append(self.interference.state, [
-    #                 np.mean(self.history["bandwidth"]), np.mean(self.history["center_freq"])])
-    # obs = np.append(obs, (self.time % self.cpi_len) / self.cpi_len)
+    obs = np.append(self.interference.state, [
+                    np.mean(self.history["bandwidth"]), np.mean(self.history["center_freq"])])
+    obs = np.append(obs, (self.time % self.cpi_len) / self.cpi_len)
     info = {}
 
     if self.render_mode == "human":
@@ -133,8 +133,8 @@ class SpectrumHopper(gym.Env):
     if n_collisions > self.min_collisions:
       reward *= 1 - n_collisions / self.max_collisions
     # Penalize for waveform changes
-    # reward -= 0.05 * np.var(self.history["bandwidth"])
-    # reward -= 0.05 * np.var(self.history["center_freq"])
+    reward -= 0.10 * np.var(self.history["bandwidth"])
+    reward -= 0.10 * np.var(self.history["center_freq"])
 
     # Update histories
     self.history["radar"].append(radar_spectrum.astype(np.uint8))
@@ -245,7 +245,7 @@ if __name__ == '__main__':
                      "max_steps": 1000, 
                      "min_collisions": 5, 
                      "max_collisions": 25, 
-                     "min_bandwidth": 0.1})
+                     "min_bandwidth": 0.2})
       .resources(
           num_gpus=int(os.environ.get("RLLIB_NUM_GPUS", "0")),
       )
@@ -275,7 +275,7 @@ if __name__ == '__main__':
   print("Configuration successful. Running training loop.")
   algo = config.build()
   highest_mean_reward = -np.inf
-  while False:
+  while True:
     result = algo.train()
     print(pretty_print(result))
     # Save the best performing model found so far

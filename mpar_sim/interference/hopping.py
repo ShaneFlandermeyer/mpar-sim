@@ -55,8 +55,8 @@ class HoppingInterference():
     self.is_active = True
 
     # TODO: Randomize this guy
-    self.start_freq = np.random.choice(np.arange(5))*self.bandwidth
-    self.direction = np.random.choice([-1, 1])
+    # self.start_freq = np.random.choice(np.arange(5))*self.bandwidth
+    # self.direction = np.random.choice([-1, 1])
 
     self.state = np.logical_and(
         self.freq_axis >= self.start_freq,
