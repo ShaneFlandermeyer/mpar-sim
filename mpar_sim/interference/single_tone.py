@@ -33,7 +33,7 @@ class SingleToneInterference(Interference):
       update_interval = self.duration * (1 - self.duty_cycle)
       
     if time - self.last_update_time >= update_interval and self.duty_cycle < 1:
-      self.is_active = ~self.is_active
+      self.is_active = 1 - self.is_active
       self.last_update_time = time
     
     self.state = self.spectrum if self.is_active else np.zeros_like(self.spectrum)
