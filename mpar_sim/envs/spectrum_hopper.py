@@ -20,6 +20,8 @@ from mpar_sim.interference.recorded import RecordedInterference
 from mpar_sim.interference.single_tone import SingleToneInterference
 from gymnasium.wrappers.normalize import NormalizeReward
 
+from mpar_sim.models.networks.rnn import LSTMActorCritic
+
 # from mpar_sim.models.networks.rllib_rnn import TorchLSTMModel
 
 
@@ -34,7 +36,7 @@ class SpectrumHopper(gym.Env):
     self.fft_size = config.get("fft_size", 1024)
 
     # Number of collisions that can be tolerated for reward function
-    self.min_bandwidth = config.get("min_bandwidth", 0.1)
+    self.min_bandwidth = config.get("min_bandwidth", 0)
     self.min_collisions = config.get("min_collisions", 0)
     self.max_collisions = config.get("max_collisions", self.fft_size)
 
@@ -67,14 +69,16 @@ class SpectrumHopper(gym.Env):
     self.history = {
         "radar": deque([np.zeros(self.fft_size, dtype=np.uint8) for _ in range(self.cpi_len)], maxlen=self.cpi_len),
         "interference": deque([np.zeros(self.fft_size, dtype=np.uint8) for _ in range(self.cpi_len)], maxlen=self.cpi_len),
+        "bandwidth": deque(maxlen=self.cpi_len),
+        "center_freq": deque(maxlen=self.cpi_len),
     }
-    self.bw_history = []
-    self.fc_history = []
 
     self.interference.reset()
     self.n_shift = self.np_random.integers(-self.fft_size//4, self.fft_size//4)
     self.interference.state = np.roll(self.interference.state, self.n_shift)
     obs = self.interference.state
+    # obs = np.append(self.interference.state, [0, 0])
+    # obs = np.append(obs, (self.time % self.cpi_len) / self.cpi_len)
     info = {}
     return obs, info
 
@@ -86,6 +90,9 @@ class SpectrumHopper(gym.Env):
     terminated = False
     truncated = self.time >= self.max_steps
     obs = self.interference.state
+    # obs = np.append(self.interference.state, [
+    #                 np.mean(self.history["bandwidth"]), np.mean(self.history["center_freq"])])
+    # obs = np.append(obs, (self.time % self.cpi_len) / self.cpi_len)
     info = {}
 
     if self.render_mode == "human":
@@ -106,12 +113,12 @@ class SpectrumHopper(gym.Env):
     radar_spectrum = np.logical_and(
         self.freq_axis >= start_freq,
         self.freq_axis <= stop_freq)
-    
+
     if self.time % self.cpi_len == 0:
-      self.bw_history = []
-      self.fc_history = []
-    self.bw_history.append(bandwidth)
-    self.fc_history.append(center_freq)
+      self.history["bandwidth"].clear()
+      self.history["center_freq"].clear()
+    self.history["bandwidth"].append(bandwidth)
+    self.history["center_freq"].append(center_freq)
 
     # Compute collision metrics
     n_collisions = np.count_nonzero(np.logical_and(
@@ -126,9 +133,9 @@ class SpectrumHopper(gym.Env):
     if n_collisions > self.min_collisions:
       reward *= 1 - n_collisions / self.max_collisions
     # Penalize for waveform changes
-    reward -= 0.1 * np.var(self.bw_history)
-    reward -= 0.1 * np.var(self.fc_history)
-    
+    # reward -= 0.05 * np.var(self.history["bandwidth"])
+    # reward -= 0.05 * np.var(self.history["center_freq"])
+
     # Update histories
     self.history["radar"].append(radar_spectrum.astype(np.uint8))
     self.history["interference"].append(
@@ -207,7 +214,7 @@ def get_cli_args():
   parser.add_argument(
       "--stop-timesteps",
       type=int,
-      default=2_000_000,
+      default=1_000_000,
       help="Number of timesteps to train.",
   )
   parser.add_argument(
@@ -224,38 +231,38 @@ def get_cli_args():
 
 if __name__ == '__main__':
   args = get_cli_args()
-  train_batch_size = max(1024, 128*args.num_cpus*args.num_envs_per_worker)
+  n_envs = args.num_cpus * args.num_envs_per_worker
+  horizon = 128
+  train_batch_size = max(1024, horizon*n_envs)
 
   tune.register_env(
       "SpectrumHopper", lambda env_config: SpectrumHopper(env_config))
-
+  ModelCatalog.register_custom_model("rnn", LSTMActorCritic)
   config = (
       PPOConfig()
-      # .environment(env="SpectrumHopper", normalize_actions=True)
       .environment(env="SpectrumHopper", normalize_actions=True,
-                   env_config={"max_steps": 2000, "min_collisions": 5, "max_collisions": 25})
+                   env_config={
+                     "max_steps": 1000, 
+                     "min_collisions": 5, 
+                     "max_collisions": 25, 
+                     "min_bandwidth": 0.1})
       .resources(
           num_gpus=int(os.environ.get("RLLIB_NUM_GPUS", "0")),
       )
       .training(
           train_batch_size=train_batch_size,
           model={
-              "fcnet_hiddens": [256, 192, 128],
-
-              # LSTM config
-              "use_lstm": True,
-              "lstm_cell_size": 128,
-              "lstm_use_prev_action": True,
-              "lstm_use_prev_reward": True,
-          },
+                "custom_model": "rnn",
+                "fcnet_hiddens": [256, 256],
+                "lstm_cell_size": 256,
+                # "max_seq_len": 256,
+            },
           lr=3e-4,
           gamma=0.8,
           lambda_=0.9,
           clip_param=0.25,
           sgd_minibatch_size=train_batch_size,
           num_sgd_iter=6,
-          grad_clip=10,
-          vf_loss_coeff=0.25,
       )
       .rollouts(num_rollout_workers=args.num_cpus,
                 num_envs_per_worker=args.num_envs_per_worker,
@@ -268,7 +275,7 @@ if __name__ == '__main__':
   print("Configuration successful. Running training loop.")
   algo = config.build()
   highest_mean_reward = -np.inf
-  while True:
+  while False:
     result = algo.train()
     print(pretty_print(result))
     # Save the best performing model found so far
@@ -281,7 +288,7 @@ if __name__ == '__main__':
 
   # print("Finished training. Running manual test/inference loop.")
   if 'save_path' not in locals():
-    save_path = "/home/shane/ray_results/PPO_SpectrumHopper_2023-05-11_14-03-44u345edtn/checkpoint_001782"
+    save_path = "/home/shane/ray_results/PPO_SpectrumHopper_2023-05-12_14-40-59oloufzk2/checkpoint_000969"
   print("Model path:", save_path)
   del algo
   algo = Algorithm.from_checkpoint(save_path)
@@ -296,13 +303,13 @@ if __name__ == '__main__':
   # Initialize memory
   lstm_cell_size = config["model"]["lstm_cell_size"]
   init_state = state = [
-      np.zeros([lstm_cell_size], np.float32) for _ in range(2)]
+      np.zeros([lstm_cell_size], np.float32) for _ in range(4)]
   prev_action = np.zeros(env.action_space.shape, np.float32)
   prev_reward = 0
   while not done:
     # action = env.action_space.sample()
     action, state, _ = algo.compute_single_action(
-        obs, state, prev_action=prev_action, prev_reward=prev_reward, explore=True)
+        obs, state, prev_action=prev_action, prev_reward=prev_reward, explore=False)
     obs, reward, terminated, truncated, info = env.step(action)
     done = terminated or truncated
     prev_action = action
