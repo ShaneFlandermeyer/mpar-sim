@@ -89,6 +89,7 @@ class SpectrumHopper(gym.Env):
       self.history["interference"].append(self.interference.state)
     obs /= self.pri
     obs = np.concatenate((obs, self.interference.state))
+    # obs = self.interference.state
     
     info = {}
     return obs, info
@@ -100,7 +101,7 @@ class SpectrumHopper(gym.Env):
       # action = widest / self.fft_size
       self.interference.step(self.time)
       self.interference.state = np.roll(self.interference.state, self.n_shift)
-      obs += self.interference.state
+      # obs += self.interference.state
       self.time += 1
       if i == 0:
         reward, radar_spectrum = self._get_reward(action)
@@ -110,6 +111,7 @@ class SpectrumHopper(gym.Env):
       self.history["interference"].append(self.interference.state)
     obs /= self.pri
     obs = np.concatenate((obs, self.interference.state))
+    # obs = self.interference.state
     
     self.pulse_count += 1
     terminated = False
@@ -239,7 +241,7 @@ def get_cli_args():
 if __name__ == '__main__':
   args = get_cli_args()
   n_envs = args.num_cpus * args.num_envs_per_worker
-  horizon = 32
+  horizon = 64
   train_batch_size = max(1024, horizon*n_envs)
 
   tune.register_env(
@@ -275,6 +277,7 @@ if __name__ == '__main__':
                 num_envs_per_worker=args.num_envs_per_worker,
                 rollout_fragment_length="auto",)
       .framework(args.framework, eager_tracing=args.eager_tracing)
+      .reporting(metrics_num_episodes_for_smoothing=50)
   )
 
   # Training loop
