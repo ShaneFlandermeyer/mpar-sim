@@ -20,13 +20,13 @@ from mpar_sim.interference.recorded import RecordedInterference
 from mpar_sim.interference.single_tone import SingleToneInterference
 from gymnasium.wrappers.normalize import NormalizeReward
 
-from mpar_sim.models.networks.rnn import LSTMActorCritic
+from mpar_sim.models.networks.rnn import LSTMActorCritic, CNNLSTMActorCritic
 
 # from mpar_sim.models.networks.rllib_rnn import TorchLSTMModel
 
 
 class SpectrumHopper(gym.Env):
-  metadata = {"render.modes": ["rgb_array", "human"], "render_fps": 60}
+  metadata = {"render.modes": ["rgb_array", "human"], "render_fps": 20}
 
   def __init__(self, config):
     super().__init__()
@@ -136,6 +136,7 @@ class SpectrumHopper(gym.Env):
     radar_spectrum = np.logical_and(
         self.freq_axis >= start_freq,
         self.freq_axis <= stop_freq)
+    n_radar_bins = np.count_nonzero(radar_spectrum)
 
     # Compute collision metrics
     n_collisions = np.count_nonzero(np.logical_and(
@@ -147,8 +148,8 @@ class SpectrumHopper(gym.Env):
     # Reward the agent for bandwidth utilization
     reward = bandwidth/widest_bw
     # Penalize for collisions
-    if n_collisions > self.min_collisions:
-      reward *= 1 - n_collisions / self.max_collisions
+    if n_collisions > 0.01*n_radar_bins:
+      reward *= 1 - n_collisions / (0.05*n_radar_bins)
 
     return reward, radar_spectrum
 
@@ -211,7 +212,7 @@ def get_cli_args():
   parser = argparse.ArgumentParser()
 
   # general args
-  parser.add_argument("--num-cpus", type=int, default=15)
+  parser.add_argument("--num-cpus", type=int, default=8)
   parser.add_argument("--num-envs-per-worker", type=int, default=1)
   parser.add_argument(
       "--framework",
@@ -241,12 +242,12 @@ def get_cli_args():
 if __name__ == '__main__':
   args = get_cli_args()
   n_envs = args.num_cpus * args.num_envs_per_worker
-  horizon = 64
-  train_batch_size = max(1024, horizon*n_envs)
+  horizon = 128
+  train_batch_size = horizon*n_envs
 
   tune.register_env(
       "SpectrumHopper", lambda env_config: SpectrumHopper(env_config))
-  ModelCatalog.register_custom_model("rnn", LSTMActorCritic)
+  # ModelCatalog.register_custom_model("rnn", LSTMActorCritic)
   config = (
       PPOConfig()
       .environment(env="SpectrumHopper", normalize_actions=True,
@@ -261,13 +262,13 @@ if __name__ == '__main__':
       .training(
           train_batch_size=train_batch_size,
           model={
-                "custom_model": "rnn",
+                "custom_model": LSTMActorCritic,
                 "fcnet_hiddens": [256, 256],
                 "lstm_cell_size": 256,
                 # "max_seq_len": 64,
             },
           lr=3e-4,
-          gamma=0.8,
+          gamma=0.,
           lambda_=0.9,
           clip_param=0.25,
           sgd_minibatch_size=train_batch_size,
@@ -277,7 +278,7 @@ if __name__ == '__main__':
                 num_envs_per_worker=args.num_envs_per_worker,
                 rollout_fragment_length="auto",)
       .framework(args.framework, eager_tracing=args.eager_tracing)
-      .reporting(metrics_num_episodes_for_smoothing=50)
+      .reporting(metrics_num_episodes_for_smoothing=75)
   )
 
   # Training loop
