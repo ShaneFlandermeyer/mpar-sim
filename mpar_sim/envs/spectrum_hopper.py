@@ -8,25 +8,18 @@ import gymnasium as gym
 import numpy as np
 import pygame
 import ray
-from ray import air, tune
+from ray import tune
 from ray.rllib.algorithms.algorithm import Algorithm
-from ray.rllib.algorithms.pg import PGConfig
 from ray.rllib.algorithms.ppo import PPOConfig
 from ray.rllib.models import ModelCatalog
 from ray.tune.logger import pretty_print
 
-from mpar_sim.interference.hopping import HoppingInterference
 from mpar_sim.interference.recorded import RecordedInterference
-from mpar_sim.interference.single_tone import SingleToneInterference
-from gymnasium.wrappers.normalize import NormalizeReward
-
-from mpar_sim.models.networks.rnn import LSTMActorCritic, CNNLSTMActorCritic
-
-# from mpar_sim.models.networks.rllib_rnn import TorchLSTMModel
+from mpar_sim.models.networks.rnn import LSTMActorCritic
 
 
 class SpectrumHopper(gym.Env):
-  metadata = {"render.modes": ["rgb_array", "human"], "render_fps": 20}
+  metadata = {"render.modes": ["rgb_array", "human"], "render_fps": 30}
 
   def __init__(self, config):
     super().__init__()
@@ -35,11 +28,12 @@ class SpectrumHopper(gym.Env):
     self.cpi_len = config.get("cpi_len", 64)
     self.fft_size = config.get("fft_size", 1024)
     self.pri = config.get("pri", 10)
+    self.state_gamma = config.get("state_gamma", 0.8)
 
     # Number of collisions that can be tolerated for reward function
     self.min_bandwidth = config.get("min_bandwidth", 0)
-    self.min_collisions = config.get("min_collisions", 0)
-    self.max_collisions = config.get("max_collisions", self.fft_size)
+    self.min_collision_bw = config.get("min_collision_bw", 0)
+    self.max_collision_bw = config.get("max_collision_bw", self.fft_size)
 
     self.freq_axis = np.linspace(0, 1, self.fft_size)
     # self.interference = HoppingInterference(
@@ -52,8 +46,10 @@ class SpectrumHopper(gym.Env):
     # )
     self.interference = RecordedInterference(
         "/home/shane/data/HOCAE_Snaps_bool_cleaned.dat", self.fft_size)
+    
+    self.max_obs = np.sum(self.state_gamma**np.arange(self.pri))
     self.observation_space = gym.spaces.Box(
-        low=0.0, high=1.0, shape=(2*self.fft_size,))
+        low=0.0, high=self.max_obs, shape=(self.fft_size,))
     self.action_space = gym.spaces.Box(
       low=np.array([0.0, self.min_bandwidth]), 
       high=np.array([1-self.min_bandwidth, 1]))
@@ -79,29 +75,27 @@ class SpectrumHopper(gym.Env):
     self.n_shift = self.np_random.integers(-self.fft_size//4, self.fft_size//4)
     self.interference.state = np.roll(self.interference.state, self.n_shift)
     
-    obs = np.zeros_like(self.interference.state).astype(float)
+    obs = np.zeros(self.observation_space.shape)
     for _ in range(self.pri):
       self.interference.step(self.time)
       self.interference.state = np.roll(self.interference.state, self.n_shift)
-      obs += self.interference.state
+      obs = self.interference.state + self.state_gamma*obs
       self.time += 1
       self.history["radar"].append(np.zeros_like(self.interference.state))
       self.history["interference"].append(self.interference.state)
-    obs /= self.pri
-    obs = np.concatenate((obs, self.interference.state))
-    # obs = self.interference.state
+    obs /= self.max_obs
     
     info = {}
     return obs, info
 
   def step(self, action):
-    obs = np.zeros_like(self.interference.state).astype(float)
+    obs = np.zeros(self.observation_space.shape)
     for i in range(self.pri):
       # widest = self._get_widest(self.interference.state)
       # action = widest / self.fft_size
       self.interference.step(self.time)
       self.interference.state = np.roll(self.interference.state, self.n_shift)
-      # obs += self.interference.state
+      obs = self.interference.state + self.state_gamma*obs
       self.time += 1
       if i == 0:
         reward, radar_spectrum = self._get_reward(action)
@@ -109,9 +103,7 @@ class SpectrumHopper(gym.Env):
         radar_spectrum = np.zeros_like(self.interference.state)
       self.history["radar"].append(radar_spectrum)
       self.history["interference"].append(self.interference.state)
-    obs /= self.pri
-    obs = np.concatenate((obs, self.interference.state))
-    # obs = self.interference.state
+    obs /= self.max_obs
     
     self.pulse_count += 1
     terminated = False
@@ -148,8 +140,8 @@ class SpectrumHopper(gym.Env):
     # Reward the agent for bandwidth utilization
     reward = bandwidth/widest_bw
     # Penalize for collisions
-    if n_collisions > 0.01*n_radar_bins:
-      reward *= 1 - n_collisions / (0.05*n_radar_bins)
+    if n_collisions > self.min_collision_bw*n_radar_bins:
+      reward *= 1 - n_collisions / (self.max_collision_bw*n_radar_bins)
 
     return reward, radar_spectrum
 
@@ -212,7 +204,7 @@ def get_cli_args():
   parser = argparse.ArgumentParser()
 
   # general args
-  parser.add_argument("--num-cpus", type=int, default=8)
+  parser.add_argument("--num-cpus", type=int, default=30)
   parser.add_argument("--num-envs-per-worker", type=int, default=1)
   parser.add_argument(
       "--framework",
@@ -224,14 +216,8 @@ def get_cli_args():
   parser.add_argument(
       "--stop-timesteps",
       type=int,
-      default=1_000_000,
+      default=2_000_000,
       help="Number of timesteps to train.",
-  )
-  parser.add_argument(
-      "--stop-reward",
-      type=float,
-      default=4500.0,
-      help="Reward at which we stop training.",
   )
 
   args = parser.parse_args()
@@ -244,39 +230,60 @@ if __name__ == '__main__':
   n_envs = args.num_cpus * args.num_envs_per_worker
   horizon = 128
   train_batch_size = horizon*n_envs
+  lr_schedule = [[0, 1e-3], [args.stop_timesteps, 1e-4]]
 
+  ray.init()
   tune.register_env(
       "SpectrumHopper", lambda env_config: SpectrumHopper(env_config))
-  # ModelCatalog.register_custom_model("rnn", LSTMActorCritic)
+  ModelCatalog.register_custom_model("LSTM", LSTMActorCritic)
   config = (
       PPOConfig()
       .environment(env="SpectrumHopper", normalize_actions=True,
                    env_config={
                      "max_steps": 1000, 
-                     "min_collisions": 5, 
-                     "max_collisions": 20, 
-                     "min_bandwidth": 0.2})
+                     "min_collision_bw": 0/100, 
+                     "max_collision_bw": 5/100, 
+                     "min_bandwidth": 0.1})
       .resources(
           num_gpus=int(os.environ.get("RLLIB_NUM_GPUS", "0")),
       )
       .training(
           train_batch_size=train_batch_size,
           model={
-                "custom_model": LSTMActorCritic,
-                "fcnet_hiddens": [256, 256],
-                "lstm_cell_size": 256,
-                # "max_seq_len": 64,
+                "custom_model": "LSTM",
+                "fcnet_hiddens": [64, 64],
+                "lstm_cell_size": 64,
+                
+                # LSTM wrapper params
+                # "use_lstm": True,
+                # "lstm_cell_size": 64,
+                # "lstm_use_prev_action": True,
+                # "lstm_use_prev_reward": True,
+                # "max_seq_len": 32,
+                
+                # Attention wrapper params
+                # "use_attention": True,
+                # "max_seq_len": 10,
+                # "attention_num_transformer_units": 1,
+                # "attention_dim": 32,
+                # "attention_memory_inference": 10,
+                # "attention_memory_training": 10,
+                # "attention_num_heads": 1,
+                # "attention_head_dim": 32,
+                # "attention_position_wise_mlp_dim": 32,
             },
-          lr=3e-4,
+          # vf_loss_coeff=1e-3,
+          lr_schedule=lr_schedule,
+          # lr=3e-4,
           gamma=0.,
           lambda_=0.9,
           clip_param=0.25,
           sgd_minibatch_size=train_batch_size,
-          num_sgd_iter=6,
+          num_sgd_iter=15,
       )
       .rollouts(num_rollout_workers=args.num_cpus,
-                num_envs_per_worker=args.num_envs_per_worker,
-                rollout_fragment_length="auto",)
+                rollout_fragment_length="auto",
+                )
       .framework(args.framework, eager_tracing=args.eager_tracing)
       .reporting(metrics_num_episodes_for_smoothing=75)
   )
@@ -293,12 +300,12 @@ if __name__ == '__main__':
       highest_mean_reward = result["episode_reward_mean"]
       save_path = algo.save()
 
-    if result["timesteps_total"] >= args.stop_timesteps or result["episode_reward_mean"] >= args.stop_reward:
+    if result["timesteps_total"] >= args.stop_timesteps:
       break
 
   # print("Finished training. Running manual test/inference loop.")
   if 'save_path' not in locals():
-    save_path = "/home/shane/ray_results/PPO_SpectrumHopper_2023-05-14_11-01-06bq4wmafb/checkpoint_000493"
+    save_path = "/home/shane/ray_results/PPO_SpectrumHopper_2023-05-16_11-25-211lwpopas/checkpoint_000516"
   print("Model path:", save_path)
   del algo
   algo = Algorithm.from_checkpoint(save_path)
