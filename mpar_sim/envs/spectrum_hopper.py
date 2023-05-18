@@ -15,6 +15,7 @@ from ray.rllib.models import ModelCatalog
 from ray.tune.logger import pretty_print
 
 from mpar_sim.interference.recorded import RecordedInterference
+from mpar_sim.interference.hopping import HoppingInterference
 from mpar_sim.models.networks.rnn import LSTMActorCritic
 
 
@@ -25,10 +26,12 @@ class SpectrumHopper(gym.Env):
     super().__init__()
     # Environment config
     self.max_steps = config.get("max_steps", 100)
-    self.cpi_len = config.get("cpi_len", 64)
+    self.cpi_len = config.get("cpi_len", 32)
     self.fft_size = config.get("fft_size", 1024)
     self.pri = config.get("pri", 10)
-    self.state_gamma = config.get("state_gamma", 0.8)
+    self.gamma_state = config.get("gamma_state", 0.8)
+    self.beta_bw = config.get("beta_fc", 0.0)
+    self.beta_fc = config.get("beta_fc", 0.0)
 
     # Number of collisions that can be tolerated for reward function
     self.min_bandwidth = config.get("min_bandwidth", 0)
@@ -39,17 +42,17 @@ class SpectrumHopper(gym.Env):
     # self.interference = HoppingInterference(
     #     start_freq=np.min(self.freq_axis),
     #     bandwidth=0.2,
-    #     duration=256*10,
+    #     duration=pri,
     #     hop_size=0.2,
     #     channel_bw=1,
     #     fft_size=self.fft_size
     # )
     self.interference = RecordedInterference(
         "/home/shane/data/HOCAE_Snaps_bool_cleaned.dat", self.fft_size)
-    
-    self.max_obs = np.sum(self.state_gamma**np.arange(self.pri))
+
+    self.max_obs = np.sum(self.gamma_state**np.arange(self.pri))
     self.observation_space = gym.spaces.Box(
-        low=0.0, high=self.max_obs, shape=(self.fft_size,))
+        low=0.0, high=1.0, shape=(self.fft_size,))
     self.action_space = gym.spaces.Box(
       low=np.array([0.0, self.min_bandwidth]), 
       high=np.array([1-self.min_bandwidth, 1]))
@@ -66,25 +69,28 @@ class SpectrumHopper(gym.Env):
   def reset(self, *, seed=None, options=None):
     self.time = 0
     self.pulse_count = 0
+    self.history_len = self.cpi_len*self.pri
     self.history = {
-        "radar": deque([np.zeros(self.fft_size, dtype=np.uint8) for _ in range(self.cpi_len*self.pri)], maxlen=self.cpi_len*self.pri),
-        "interference": deque([np.zeros(self.fft_size, dtype=np.uint8) for _ in range(self.cpi_len*self.pri)], maxlen=self.cpi_len*self.pri),
+        "radar": deque([np.zeros(self.fft_size, dtype=np.uint8) for _ in range(self.history_len)], maxlen=self.history_len),
+        "interference": deque([np.zeros(self.fft_size, dtype=np.uint8) for _ in range(self.history_len)], maxlen=self.history_len),
+        "bandwidth": deque([0 for _ in range(self.cpi_len)], maxlen=self.cpi_len),
+        "center_freq": deque([0 for _ in range(self.cpi_len)], maxlen=self.cpi_len),
     }
 
     self.interference.reset()
     self.n_shift = self.np_random.integers(-self.fft_size//4, self.fft_size//4)
     self.interference.state = np.roll(self.interference.state, self.n_shift)
-    
+
     obs = np.zeros(self.observation_space.shape)
     for _ in range(self.pri):
       self.interference.step(self.time)
       self.interference.state = np.roll(self.interference.state, self.n_shift)
-      obs = self.interference.state + self.state_gamma*obs
+      obs = self.interference.state + self.gamma_state*obs
       self.time += 1
       self.history["radar"].append(np.zeros_like(self.interference.state))
       self.history["interference"].append(self.interference.state)
     obs /= self.max_obs
-    
+
     info = {}
     return obs, info
 
@@ -95,7 +101,7 @@ class SpectrumHopper(gym.Env):
       # action = widest / self.fft_size
       self.interference.step(self.time)
       self.interference.state = np.roll(self.interference.state, self.n_shift)
-      obs = self.interference.state + self.state_gamma*obs
+      obs = self.interference.state + self.gamma_state*obs
       self.time += 1
       if i == 0:
         reward, radar_spectrum = self._get_reward(action)
@@ -104,7 +110,7 @@ class SpectrumHopper(gym.Env):
       self.history["radar"].append(radar_spectrum)
       self.history["interference"].append(self.interference.state)
     obs /= self.max_obs
-    
+
     self.pulse_count += 1
     terminated = False
     truncated = self.pulse_count >= self.max_steps
@@ -130,18 +136,31 @@ class SpectrumHopper(gym.Env):
         self.freq_axis <= stop_freq)
     n_radar_bins = np.count_nonzero(radar_spectrum)
 
-    # Compute collision metrics
+    # Compute spectrum-based rewards
     n_collisions = np.count_nonzero(np.logical_and(
         radar_spectrum, self.interference.state))
+    r_spectrum = bandwidth
+    if n_collisions > self.min_collision_bw*n_radar_bins:
+      r_spectrum *= 1 - n_collisions / (self.max_collision_bw*n_radar_bins)
 
+    # Compute distorition-based rewards
+    self.history["bandwidth"].append(bandwidth)
+    self.history["center_freq"].append(center_freq)
+    r_distortion = self.beta_bw * \
+        np.std(self.history["bandwidth"]) + self.beta_fc * \
+        np.std(self.history["center_freq"])
+
+    reward = r_spectrum - r_distortion
+
+    # Reset per-CPI metrics
+    if len(self.history["bandwidth"]) == self.cpi_len:
+      self.history["bandwidth"].clear()
+      self.history["center_freq"].clear()
+
+    # Evaluation metrics
     widest = self._get_widest(self.interference.state)
     widest_bw = np.clip((widest[1] - widest[0]) / self.fft_size,
                         1/self.fft_size, None)
-    # Reward the agent for bandwidth utilization
-    reward = bandwidth/widest_bw
-    # Penalize for collisions
-    if n_collisions > self.min_collision_bw*n_radar_bins:
-      reward *= 1 - n_collisions / (self.max_collision_bw*n_radar_bins)
 
     return reward, radar_spectrum
 
@@ -204,7 +223,7 @@ def get_cli_args():
   parser = argparse.ArgumentParser()
 
   # general args
-  parser.add_argument("--num-cpus", type=int, default=30)
+  parser.add_argument("--num-cpus", type=int, default=25)
   parser.add_argument("--num-envs-per-worker", type=int, default=1)
   parser.add_argument(
       "--framework",
@@ -240,43 +259,33 @@ if __name__ == '__main__':
       PPOConfig()
       .environment(env="SpectrumHopper", normalize_actions=True,
                    env_config={
-                     "max_steps": 1000, 
-                     "min_collision_bw": 0/100, 
-                     "max_collision_bw": 5/100, 
-                     "min_bandwidth": 0.1})
+                       "max_steps": 2000,
+                       "pri": 20,
+                       "cpi_len": 32,
+                       "min_collision_bw": 0/100,
+                       "max_collision_bw": 5/100,
+                       "min_bandwidth": 0.1,
+                       "gamma_state": 0.8, # Best so far: 0.8
+                       "beta_fc": 0.0,
+                       "beta_bw": 0.0,
+                       })
       .resources(
           num_gpus=int(os.environ.get("RLLIB_NUM_GPUS", "0")),
       )
       .training(
           train_batch_size=train_batch_size,
           model={
-                "custom_model": "LSTM",
-                "fcnet_hiddens": [64, 64],
-                "lstm_cell_size": 64,
-                
-                # LSTM wrapper params
-                # "use_lstm": True,
-                # "lstm_cell_size": 64,
-                # "lstm_use_prev_action": True,
-                # "lstm_use_prev_reward": True,
-                # "max_seq_len": 32,
-                
-                # Attention wrapper params
-                # "use_attention": True,
-                # "max_seq_len": 10,
-                # "attention_num_transformer_units": 1,
-                # "attention_dim": 32,
-                # "attention_memory_inference": 10,
-                # "attention_memory_training": 10,
-                # "attention_num_heads": 1,
-                # "attention_head_dim": 32,
-                # "attention_position_wise_mlp_dim": 32,
-            },
+              "custom_model": "LSTM",
+              "fcnet_hiddens": [64, 64],
+              "lstm_cell_size": 64,
+              "lstm_use_prev_action": True,
+              "lstm_use_prev_reward": True,
+          },
           # vf_loss_coeff=1e-3,
           lr_schedule=lr_schedule,
           # lr=3e-4,
           gamma=0.,
-          lambda_=0.9,
+          lambda_=0.95,
           clip_param=0.25,
           sgd_minibatch_size=train_batch_size,
           num_sgd_iter=15,
@@ -285,7 +294,7 @@ if __name__ == '__main__':
                 rollout_fragment_length="auto",
                 )
       .framework(args.framework, eager_tracing=args.eager_tracing)
-      .reporting(metrics_num_episodes_for_smoothing=75)
+      .reporting(metrics_num_episodes_for_smoothing=100)
   )
 
   # Training loop
@@ -305,7 +314,7 @@ if __name__ == '__main__':
 
   # print("Finished training. Running manual test/inference loop.")
   if 'save_path' not in locals():
-    save_path = "/home/shane/ray_results/PPO_SpectrumHopper_2023-05-16_11-25-211lwpopas/checkpoint_000516"
+    save_path = "/home/shane/ray_results/PPO_SpectrumHopper_2023-05-18_09-49-24bfx3sxx5/checkpoint_000485"
   print("Model path:", save_path)
   del algo
   algo = Algorithm.from_checkpoint(save_path)
