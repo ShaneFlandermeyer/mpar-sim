@@ -36,13 +36,13 @@ class SpectrumHopper(gym.Env):
     # Number of collisions that can be tolerated for reward function
     self.min_bandwidth = config.get("min_bandwidth", 0)
     self.min_collision_bw = config.get("min_collision_bw", 0)
-    self.max_collision_bw = config.get("max_collision_bw", self.fft_size)
+    self.max_collision_bw = config.get("max_collision_bw", 1)
 
     self.freq_axis = np.linspace(0, 1, self.fft_size)
     # self.interference = HoppingInterference(
     #     start_freq=np.min(self.freq_axis),
     #     bandwidth=0.2,
-    #     duration=pri,
+    #     duration=self.pri,
     #     hop_size=0.2,
     #     channel_bw=1,
     #     fft_size=self.fft_size
@@ -84,7 +84,8 @@ class SpectrumHopper(gym.Env):
     obs = np.zeros(self.observation_space.shape)
     for _ in range(self.pri):
       self.interference.step(self.time)
-      self.interference.state = np.roll(self.interference.state, self.n_shift)
+      # TODO: Uncomment this for recorded interference
+      # self.interference.state = np.roll(self.interference.state, self.n_shift)
       obs = self.interference.state + self.gamma_state*obs
       self.time += 1
       self.history["radar"].append(np.zeros_like(self.interference.state))
@@ -97,14 +98,16 @@ class SpectrumHopper(gym.Env):
   def step(self, action):
     obs = np.zeros(self.observation_space.shape)
     for i in range(self.pri):
+      # TODO: Uncomment for SAA agent. There's definitely a way to define this policy in RLLib
       # widest = self._get_widest(self.interference.state)
       # action = widest / self.fft_size
       self.interference.step(self.time)
-      self.interference.state = np.roll(self.interference.state, self.n_shift)
+      # TODO: Uncomment this for recorded interference
+      # self.interference.state = np.roll(self.interference.state, self.n_shift)
       obs = self.interference.state + self.gamma_state*obs
       self.time += 1
       if i == 0:
-        reward, radar_spectrum = self._get_reward(action)
+        reward, radar_spectrum, info = self._get_reward(action)
       else:
         radar_spectrum = np.zeros_like(self.interference.state)
       self.history["radar"].append(radar_spectrum)
@@ -114,7 +117,6 @@ class SpectrumHopper(gym.Env):
     self.pulse_count += 1
     terminated = False
     truncated = self.pulse_count >= self.max_steps
-    info = {}
 
     if self.render_mode == "human":
       self._render_frame()
@@ -162,7 +164,13 @@ class SpectrumHopper(gym.Env):
     widest_bw = np.clip((widest[1] - widest[0]) / self.fft_size,
                         1/self.fft_size, None)
 
-    return reward, radar_spectrum
+    info = {
+        'bandwidth': max(bandwidth, 0),
+        'missed': widest_bw - bandwidth,
+        'collision': n_collisions / n_radar_bins if n_radar_bins > 0 else 0,
+    }
+
+    return reward, radar_spectrum, info
 
   def _get_widest(self, spectrum: np.ndarray):
     # Group consecutive bins by value
@@ -201,7 +209,8 @@ class SpectrumHopper(gym.Env):
     pixels = spectrogram.T*100
     pixels[radar_spectrogram.T == 1] = 255
     pixels[intersection] = 150
-    pixels = cv2.resize(pixels, self.window_size, interpolation=cv2.INTER_AREA)
+    pixels = cv2.resize(pixels.astype(np.float32),
+                        self.window_size, interpolation=cv2.INTER_AREA)
 
     if self.render_mode == "human":
       # Copy canvas drawings to the window
@@ -214,139 +223,3 @@ class SpectrumHopper(gym.Env):
       self.clock.tick(self.metadata["render_fps"])
     else:
       return pixels
-
-    pass
-
-
-def get_cli_args():
-  """Create CLI parser and return parsed arguments"""
-  parser = argparse.ArgumentParser()
-
-  # general args
-  parser.add_argument("--num-cpus", type=int, default=25)
-  parser.add_argument("--num-envs-per-worker", type=int, default=1)
-  parser.add_argument(
-      "--framework",
-      choices=["tf", "tf2", "torch"],
-      default="torch",
-      help="The DL framework specifier.",
-  )
-  parser.add_argument("--eager-tracing", action="store_true")
-  parser.add_argument(
-      "--stop-timesteps",
-      type=int,
-      default=2_000_000,
-      help="Number of timesteps to train.",
-  )
-
-  args = parser.parse_args()
-  print(f"Running with following CLI args: {args}")
-  return args
-
-
-if __name__ == '__main__':
-  args = get_cli_args()
-  n_envs = args.num_cpus * args.num_envs_per_worker
-  horizon = 128
-  train_batch_size = horizon*n_envs
-  lr_schedule = [[0, 8e-4], [args.stop_timesteps, 2e-4]]
-
-  ray.init()
-  tune.register_env(
-      "SpectrumHopper", lambda env_config: SpectrumHopper(env_config))
-  ModelCatalog.register_custom_model("LSTM", LSTMActorCritic)
-  n_trials = 1
-  for itrial in range(1, n_trials+1):
-    print(f"Trial {itrial}/{n_trials}")
-    config = (
-        PPOConfig()
-        .environment(env="SpectrumHopper", normalize_actions=True,
-                     env_config={
-                         "max_steps": 2000,
-                         "pri": 20,
-                         "cpi_len": 32,
-                         "min_collision_bw": 0/100,
-                         "max_collision_bw": 3/100,
-                         "min_bandwidth": 0.1,
-                         "gamma_state": 0.8,
-                         "beta_fc": 0.0,
-                         "beta_bw": 0.0,
-                     })
-        .resources(
-            num_gpus=int(os.environ.get("RLLIB_NUM_GPUS", "0")),
-        )
-        .training(
-            train_batch_size=train_batch_size,
-            model={
-                "custom_model": "LSTM",
-                "fcnet_hiddens": [128, 96],
-                "lstm_cell_size": 64,
-                "lstm_use_prev_action": True,
-                "lstm_use_prev_reward": True,
-            },
-            # vf_loss_coeff=1e-3,
-            lr_schedule=lr_schedule,
-            # lr=3e-4,
-            gamma=0.0,
-            lambda_=0.95,
-            clip_param=0.25,
-            sgd_minibatch_size=train_batch_size,
-            num_sgd_iter=15,
-        )
-        .rollouts(num_rollout_workers=args.num_cpus,
-                  rollout_fragment_length="auto",
-                  )
-        .framework(args.framework, eager_tracing=args.eager_tracing)
-        .debugging(seed=itrial)
-    )
-
-    # Training loop
-    print("Configuration successful. Running training loop.")
-    algo = config.build()
-    highest_mean_reward = -np.inf
-    while True:
-      result = algo.train()
-      print(pretty_print(result))
-      # Save the best performing model found so far
-      if result["episode_reward_mean"] > highest_mean_reward:
-        highest_mean_reward = result["episode_reward_mean"]
-        save_path = algo.save()
-
-      if result["timesteps_total"] >= args.stop_timesteps:
-        break
-      
-    del algo
-
-  # print("Finished training. Running manual test/inference loop.")
-  if 'save_path' not in locals():
-    save_path = "/home/shane/ray_results/PPO_SpectrumHopper_2023-05-18_09-49-24bfx3sxx5/checkpoint_000485"
-  print("Model path:", save_path)
-  algo = Algorithm.from_checkpoint(save_path)
-  # Prepare env
-  env_config = config["env_config"]
-  env_config["render_mode"] = "human"
-  env = SpectrumHopper(env_config)
-  obs, info = env.reset()
-  done = False
-  total_reward = 0
-
-  # Initialize memory
-  lstm_cell_size = config["model"]["lstm_cell_size"]
-  init_state = state = [
-      np.zeros([lstm_cell_size], np.float32) for _ in range(4)]
-  prev_action = np.zeros(env.action_space.shape, np.float32)
-  prev_reward = 0
-  while not done:
-    # action = env.action_space.sample()
-    action, state, _ = algo.compute_single_action(
-        obs, state, prev_action=prev_action, prev_reward=prev_reward, explore=False)
-    obs, reward, terminated, truncated, info = env.step(action)
-    done = terminated or truncated
-    prev_action = action
-    prev_reward = reward
-
-    total_reward += reward
-    env.render()
-  print("Total eval. reward:", total_reward)
-
-  ray.shutdown()
