@@ -15,6 +15,8 @@ class RecordedInterference(Interference):
     self.data = self.data.reshape((-1, fft_size), order=order)
     self.n_snapshots = self.data.shape[0]
     
+    self.reset()
+    
   def step(self, time): 
     self.start_ind = (self.start_ind + 1) % self.n_snapshots
     self.state = self.data[self.start_ind]

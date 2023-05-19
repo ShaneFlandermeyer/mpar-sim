@@ -54,8 +54,8 @@ class SpectrumHopper(gym.Env):
     self.observation_space = gym.spaces.Box(
         low=0.0, high=1.0, shape=(self.fft_size,))
     self.action_space = gym.spaces.Box(
-      low=np.array([0.0, self.min_bandwidth]), 
-      high=np.array([1-self.min_bandwidth, 1]))
+        low=np.array([0.0, self.min_bandwidth]),
+        high=np.array([1-self.min_bandwidth, 1]))
 
     # Render config
     render_mode = config.get("render_mode", "rgb_array")
@@ -249,74 +249,78 @@ if __name__ == '__main__':
   n_envs = args.num_cpus * args.num_envs_per_worker
   horizon = 128
   train_batch_size = horizon*n_envs
-  lr_schedule = [[0, 1e-3], [args.stop_timesteps, 1e-4]]
+  lr_schedule = [[0, 8e-4], [args.stop_timesteps, 2e-4]]
 
   ray.init()
   tune.register_env(
       "SpectrumHopper", lambda env_config: SpectrumHopper(env_config))
   ModelCatalog.register_custom_model("LSTM", LSTMActorCritic)
-  config = (
-      PPOConfig()
-      .environment(env="SpectrumHopper", normalize_actions=True,
-                   env_config={
-                       "max_steps": 2000,
-                       "pri": 20,
-                       "cpi_len": 32,
-                       "min_collision_bw": 0/100,
-                       "max_collision_bw": 5/100,
-                       "min_bandwidth": 0.1,
-                       "gamma_state": 0.8, # Best so far: 0.8
-                       "beta_fc": 0.0,
-                       "beta_bw": 0.0,
-                       })
-      .resources(
-          num_gpus=int(os.environ.get("RLLIB_NUM_GPUS", "0")),
-      )
-      .training(
-          train_batch_size=train_batch_size,
-          model={
-              "custom_model": "LSTM",
-              "fcnet_hiddens": [64, 64],
-              "lstm_cell_size": 64,
-              "lstm_use_prev_action": True,
-              "lstm_use_prev_reward": True,
-          },
-          # vf_loss_coeff=1e-3,
-          lr_schedule=lr_schedule,
-          # lr=3e-4,
-          gamma=0.,
-          lambda_=0.95,
-          clip_param=0.25,
-          sgd_minibatch_size=train_batch_size,
-          num_sgd_iter=15,
-      )
-      .rollouts(num_rollout_workers=args.num_cpus,
-                rollout_fragment_length="auto",
-                )
-      .framework(args.framework, eager_tracing=args.eager_tracing)
-      .reporting(metrics_num_episodes_for_smoothing=100)
-  )
+  n_trials = 1
+  for itrial in range(1, n_trials+1):
+    print(f"Trial {itrial}/{n_trials}")
+    config = (
+        PPOConfig()
+        .environment(env="SpectrumHopper", normalize_actions=True,
+                     env_config={
+                         "max_steps": 2000,
+                         "pri": 20,
+                         "cpi_len": 32,
+                         "min_collision_bw": 0/100,
+                         "max_collision_bw": 3/100,
+                         "min_bandwidth": 0.1,
+                         "gamma_state": 0.8,
+                         "beta_fc": 0.0,
+                         "beta_bw": 0.0,
+                     })
+        .resources(
+            num_gpus=int(os.environ.get("RLLIB_NUM_GPUS", "0")),
+        )
+        .training(
+            train_batch_size=train_batch_size,
+            model={
+                "custom_model": "LSTM",
+                "fcnet_hiddens": [128, 96],
+                "lstm_cell_size": 64,
+                "lstm_use_prev_action": True,
+                "lstm_use_prev_reward": True,
+            },
+            # vf_loss_coeff=1e-3,
+            lr_schedule=lr_schedule,
+            # lr=3e-4,
+            gamma=0.0,
+            lambda_=0.95,
+            clip_param=0.25,
+            sgd_minibatch_size=train_batch_size,
+            num_sgd_iter=15,
+        )
+        .rollouts(num_rollout_workers=args.num_cpus,
+                  rollout_fragment_length="auto",
+                  )
+        .framework(args.framework, eager_tracing=args.eager_tracing)
+        .debugging(seed=itrial)
+    )
 
-  # Training loop
-  print("Configuration successful. Running training loop.")
-  algo = config.build()
-  highest_mean_reward = -np.inf
-  while True:
-    result = algo.train()
-    print(pretty_print(result))
-    # Save the best performing model found so far
-    if result["episode_reward_mean"] > highest_mean_reward:
-      highest_mean_reward = result["episode_reward_mean"]
-      save_path = algo.save()
+    # Training loop
+    print("Configuration successful. Running training loop.")
+    algo = config.build()
+    highest_mean_reward = -np.inf
+    while True:
+      result = algo.train()
+      print(pretty_print(result))
+      # Save the best performing model found so far
+      if result["episode_reward_mean"] > highest_mean_reward:
+        highest_mean_reward = result["episode_reward_mean"]
+        save_path = algo.save()
 
-    if result["timesteps_total"] >= args.stop_timesteps:
-      break
+      if result["timesteps_total"] >= args.stop_timesteps:
+        break
+      
+    del algo
 
   # print("Finished training. Running manual test/inference loop.")
   if 'save_path' not in locals():
     save_path = "/home/shane/ray_results/PPO_SpectrumHopper_2023-05-18_09-49-24bfx3sxx5/checkpoint_000485"
   print("Model path:", save_path)
-  del algo
   algo = Algorithm.from_checkpoint(save_path)
   # Prepare env
   env_config = config["env_config"]
