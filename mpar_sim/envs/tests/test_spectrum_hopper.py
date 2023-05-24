@@ -3,7 +3,7 @@ import os
 from typing import Dict
 import numpy as np
 import ray
-from ray import tune
+from ray import tune, air
 from ray.rllib.algorithms.algorithm import Algorithm
 from ray.rllib.algorithms.ppo import PPOConfig
 from ray.rllib.models import ModelCatalog
@@ -17,6 +17,7 @@ from ray.rllib.algorithms.callbacks import DefaultCallbacks
 from ray.rllib.env import BaseEnv
 from ray.rllib.evaluation import Episode, RolloutWorker
 from ray.rllib.policy import Policy
+from ray.rllib.utils.exploration import OrnsteinUhlenbeckNoise
 
 
 class SpectrumMetricsCallbacks(DefaultCallbacks):
@@ -44,10 +45,6 @@ class SpectrumMetricsCallbacks(DefaultCallbacks):
       env_index: int,
       **kwargs
   ):
-    # Get the following metrics
-    #  - Bandwidth utilization %
-    #  - Collision bandwidth %
-    #  - Missed opportunity %
     info = episode.last_info_for()
     episode.user_data["bandwidth"].append(info["bandwidth"])
     episode.user_data["collision"].append(info["collision"])
@@ -70,11 +67,7 @@ class SpectrumMetricsCallbacks(DefaultCallbacks):
     episode.custom_metrics["bandwidth"] = bandwidth
     episode.custom_metrics["collision"] = collision
     episode.custom_metrics["missed"] = missed
-    
-    # print(f"Episode {episode.episode_id} metrics:")
-    # print(f"  Bandwidth: {bandwidth}")
-    # print(f"  Collision: {collision}")
-    # print(f"  Missed: {missed}")
+
     
 
 def get_cli_args():
@@ -82,7 +75,7 @@ def get_cli_args():
   parser = argparse.ArgumentParser()
 
   # general args
-  parser.add_argument("--num-cpus", type=int, default=1)
+  parser.add_argument("--num-cpus", type=int, default=25)
   parser.add_argument("--num-envs-per-worker", type=int, default=1)
   parser.add_argument(
       "--framework",
@@ -115,7 +108,7 @@ if __name__ == '__main__':
   tune.register_env(
       "SpectrumHopper", lambda env_config: SpectrumHopper(env_config))
   ModelCatalog.register_custom_model("LSTM", LSTMActorCritic)
-  n_trials = 2
+  n_trials = 1
   for itrial in range(1, n_trials+1):
     print(f"Trial {itrial}/{n_trials}")
     config = (
@@ -126,7 +119,7 @@ if __name__ == '__main__':
                          "pri": 20,
                          "cpi_len": 32,
                          "min_collision_bw": 0/100,
-                         "max_collision_bw": 3/100,
+                         "max_collision_bw": 5/100,
                          "min_bandwidth": 0.1,
                          "gamma_state": 0.8,
                          "beta_fc": 0.0,
@@ -159,6 +152,7 @@ if __name__ == '__main__':
         .framework(args.framework, eager_tracing=args.eager_tracing)
         .debugging(seed=itrial)
         .callbacks(SpectrumMetricsCallbacks)
+        .exploration(explore=OrnsteinUhlenbeckNoise)
     )
 
     # Training loop

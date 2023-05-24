@@ -85,7 +85,7 @@ class SpectrumHopper(gym.Env):
     for _ in range(self.pri):
       self.interference.step(self.time)
       # TODO: Uncomment this for recorded interference
-      # self.interference.state = np.roll(self.interference.state, self.n_shift)
+      self.interference.state = np.roll(self.interference.state, self.n_shift)
       obs = self.interference.state + self.gamma_state*obs
       self.time += 1
       self.history["radar"].append(np.zeros_like(self.interference.state))
@@ -103,7 +103,7 @@ class SpectrumHopper(gym.Env):
       # action = widest / self.fft_size
       self.interference.step(self.time)
       # TODO: Uncomment this for recorded interference
-      # self.interference.state = np.roll(self.interference.state, self.n_shift)
+      self.interference.state = np.roll(self.interference.state, self.n_shift)
       obs = self.interference.state + self.gamma_state*obs
       self.time += 1
       if i == 0:
