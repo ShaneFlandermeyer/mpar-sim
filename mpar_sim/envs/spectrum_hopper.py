@@ -30,8 +30,16 @@ class SpectrumHopper(gym.Env):
     self.fft_size = config.get("fft_size", 1024)
     self.pri = config.get("pri", 10)
     self.gamma_state = config.get("gamma_state", 0.8)
-    self.beta_bw = config.get("beta_fc", 0.0)
-    self.beta_fc = config.get("beta_fc", 0.0)
+    
+    
+    
+    # TODO: Setting beta_bw and beta_fc equal to each other for ray tune purposes
+    # self.beta_bw = config.get("beta_fc", 0.0)
+    # self.beta_fc = config.get("beta_fc", 0.0)
+    self.beta_distort = config.get("beta_distort", 0.0)
+    self.beta_bw = self.beta_distort
+    self.beta_fc = self.beta_distort
+    
 
     # Number of collisions that can be tolerated for reward function
     self.min_bandwidth = config.get("min_bandwidth", 0)
@@ -148,6 +156,7 @@ class SpectrumHopper(gym.Env):
     r_spectrum = bandwidth
     if n_collisions > self.min_collision_bw*n_radar_bins:
       r_spectrum *= 1 - n_collisions / (self.max_collision_bw*n_radar_bins)
+    reward = r_spectrum
 
     # Compute distorition-based rewards
     self.history["bandwidth"].append(bandwidth)
@@ -156,13 +165,13 @@ class SpectrumHopper(gym.Env):
     fc_mean = np.mean(self.history["center_freq"])
     bw_std = np.std(self.history["bandwidth"])
     fc_std = np.std(self.history["center_freq"])
-    reward = r_spectrum
+    
 
     # Compute distortion penalty (applied at the end of the CPI)
-    
     if len(self.history["bandwidth"]) > 1:
       r_distortion = self.beta_bw * abs(bandwidth - bw_mean) + self.beta_fc * abs(center_freq - fc_mean)
       reward -= r_distortion
+      
     if len(self.history["bandwidth"]) == self.cpi_len:
       self.history["bandwidth"].clear()
       self.history["center_freq"].clear()

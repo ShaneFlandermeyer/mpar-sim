@@ -18,6 +18,7 @@ from ray.rllib.env import BaseEnv
 from ray.rllib.evaluation import Episode, RolloutWorker
 from ray.rllib.policy import Policy
 from ray.rllib.utils.exploration import OrnsteinUhlenbeckNoise
+import random
 
 
 class SpectrumMetricsCallbacks(DefaultCallbacks):
@@ -69,21 +70,21 @@ class SpectrumMetricsCallbacks(DefaultCallbacks):
     missed = np.mean(episode.user_data["missed"])
     bw_std = np.mean(episode.user_data["bandwidth_std"])
     fc_std = np.mean(episode.user_data["center_freq_std"])
-    
+
     episode.custom_metrics["bandwidth"] = bandwidth
     episode.custom_metrics["collision"] = collision
     episode.custom_metrics["missed"] = missed
     episode.custom_metrics["bandwidth_std"] = bw_std
     episode.custom_metrics["center_freq_std"] = fc_std
 
-    
 
 def get_cli_args():
   """Create CLI parser and return parsed arguments"""
   parser = argparse.ArgumentParser()
 
   # general args
-  parser.add_argument("--num-cpus", type=int, default=14)
+  parser.add_argument("--num-cpus", type=int, default=30)
+  parser.add_argument("--num_workers", type=int, default=25)
   parser.add_argument("--num-envs-per-worker", type=int, default=1)
   parser.add_argument(
       "--framework",
@@ -105,86 +106,80 @@ def get_cli_args():
 
 
 if __name__ == '__main__':
-  # os.environ["CUBLAS_WORKSPACE_CONFIG"]=":4096:2"
+  random.seed(1234)
+  np.random.seed(1234)
   args = get_cli_args()
-  n_envs = args.num_cpus * args.num_envs_per_worker
+  n_envs = args.num_workers * args.num_envs_per_worker
   horizon = 128
   train_batch_size = horizon*n_envs
   lr_schedule = [[0, 8e-4], [args.stop_timesteps, 2e-4]]
 
-  ray.init()
+  ray.init(num_cpus=args.num_cpus)
   tune.register_env(
       "SpectrumHopper", lambda env_config: SpectrumHopper(env_config))
   ModelCatalog.register_custom_model("LSTM", LSTMActorCritic)
-  n_trials = 1
-  for itrial in range(1, n_trials+1):
-    print(f"Trial {itrial}/{n_trials}")
-    config = (
-        PPOConfig()
-        .environment(env="SpectrumHopper", normalize_actions=True,
-                     env_config={
-                         "max_steps": 2000,
-                         "pri": 20,
-                         "cpi_len": 32,
-                         "min_collision_bw": 0/100,
-                         "max_collision_bw": 5/100,
-                         "min_bandwidth": 0.1,
-                         "gamma_state": 0.8,
-                         "beta_fc": 0,
-                         "beta_bw": 0,
-                     })
-        .resources(
-            num_gpus=int(os.environ.get("RLLIB_NUM_GPUS", "0")),
-        )
-        .training(
-            train_batch_size=train_batch_size,
-            model={
-                "custom_model": "LSTM",
-                "fcnet_hiddens": [128, 96],
-                "lstm_cell_size": 64,
-                "lstm_use_prev_action": True,
-                "lstm_use_prev_reward": True,
-            },
-            lr_schedule=lr_schedule,
-            gamma=0.9,
-            lambda_=0.95,
-            clip_param=0.25,
-            sgd_minibatch_size=train_batch_size,
-            num_sgd_iter=15,
-        )
-        .rollouts(num_rollout_workers=args.num_cpus,
-                  num_envs_per_worker=args.num_envs_per_worker,
-                  rollout_fragment_length="auto",
-                  enable_connectors=False,
-                  )
-        .framework(args.framework, eager_tracing=args.eager_tracing)
-        .debugging(seed=itrial)
-        .callbacks(SpectrumMetricsCallbacks)
-        .exploration(explore=OrnsteinUhlenbeckNoise)
-    )
 
-    # Training loop
-    print("Configuration successful. Running training loop.")
-    algo = config.build()
-    highest_mean_reward = -np.inf
-    while True:
-      result = algo.train()
-      # print(pretty_print(result))
-      # Save the best performing model found so far
-      if result["episode_reward_mean"] > highest_mean_reward:
-        highest_mean_reward = result["episode_reward_mean"]
-        save_path = algo.save()
+  # Tune API
+  n_trials = 5
+  config = (
+      PPOConfig()
+      .environment(env="SpectrumHopper", normalize_actions=True,
+                   env_config={
+                       "max_steps": 2000,
+                       "pri": 20,
+                       "cpi_len": 32,
+                       "min_collision_bw": 0/100,
+                       "max_collision_bw": 5/100,
+                       "min_bandwidth": 0.1,
+                       "gamma_state": 0.8,
+                       "beta_distort": tune.grid_search([0.0, 0.5, 1.0]),
+                      #  "beta_fc": tune.grid_search([0.0, 0.5, 1.0]),
+                   })
+      .resources(
+          num_gpus=1/n_trials,
+      )
+      .training(
+          train_batch_size=train_batch_size,
+          model={
+              "custom_model": "LSTM",
+              "fcnet_hiddens": [128, 96],
+              "lstm_cell_size": 64,
+              "lstm_use_prev_action": True,
+              "lstm_use_prev_reward": True,
+          },
+          lr_schedule=lr_schedule,
+          gamma=0.9,
+          lambda_=0.95,
+          clip_param=0.25,
+          sgd_minibatch_size=train_batch_size,
+          num_sgd_iter=15,
+      )
+      .rollouts(num_rollout_workers=args.num_workers,
+                num_envs_per_worker=args.num_envs_per_worker,
+                rollout_fragment_length="auto",
+                enable_connectors=False,  # Needed for custom metrics cb
+                )
+      .framework(args.framework, eager_tracing=args.eager_tracing)
+      .debugging(seed=tune.randint(0, 10000))
+      .callbacks(SpectrumMetricsCallbacks)
+      .exploration(explore=OrnsteinUhlenbeckNoise)
+  )
+  tuner = tune.Tuner(
+      "PPO",
+      param_space=config,
+      run_config=air.RunConfig(stop={"timesteps_total": args.stop_timesteps},
+                               checkpoint_config=air.CheckpointConfig(
+          checkpoint_at_end=True)
+      ),
+      tune_config=tune.TuneConfig(num_samples=n_trials),
 
-      if result["timesteps_total"] >= args.stop_timesteps:
-        break
+  )
+  results = tuner.fit()
+  
+  print("Finished training. Running manual test/inference loop.")
+  best_result = results.get_best_result("episode_reward_mean", "max")
+  algo = Algorithm.from_checkpoint(best_result.checkpoint)
 
-    del algo
-
-  # print("Finished training. Running manual test/inference loop.")
-  if 'save_path' not in locals():
-    save_path = "/home/shane/ray_results/PPO_SpectrumHopper_2023-05-19_09-50-27g821dr_5/checkpoint_000454"
-  print("Model path:", save_path)
-  algo = Algorithm.from_checkpoint(save_path)
   # Prepare env
   env_config = config["env_config"]
   env_config["render_mode"] = "human"
