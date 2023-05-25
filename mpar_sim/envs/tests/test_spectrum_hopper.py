@@ -34,6 +34,8 @@ class SpectrumMetricsCallbacks(DefaultCallbacks):
     episode.user_data["bandwidth"] = []
     episode.user_data["collision"] = []
     episode.user_data["missed"] = []
+    episode.user_data["bandwidth_std"] = []
+    episode.user_data["center_freq_std"] = []
 
   def on_episode_step(
       self,
@@ -49,6 +51,8 @@ class SpectrumMetricsCallbacks(DefaultCallbacks):
     episode.user_data["bandwidth"].append(info["bandwidth"])
     episode.user_data["collision"].append(info["collision"])
     episode.user_data["missed"].append(info["missed"])
+    episode.user_data["bandwidth_std"].append(info["bandwidth_std"])
+    episode.user_data["center_freq_std"].append(info["center_freq_std"])
 
   def on_episode_end(
       self,
@@ -63,10 +67,14 @@ class SpectrumMetricsCallbacks(DefaultCallbacks):
     bandwidth = np.mean(episode.user_data["bandwidth"])
     collision = np.mean(episode.user_data["collision"])
     missed = np.mean(episode.user_data["missed"])
+    bw_std = np.mean(episode.user_data["bandwidth_std"])
+    fc_std = np.mean(episode.user_data["center_freq_std"])
     
     episode.custom_metrics["bandwidth"] = bandwidth
     episode.custom_metrics["collision"] = collision
     episode.custom_metrics["missed"] = missed
+    episode.custom_metrics["bandwidth_std"] = bw_std
+    episode.custom_metrics["center_freq_std"] = fc_std
 
     
 
@@ -75,7 +83,7 @@ def get_cli_args():
   parser = argparse.ArgumentParser()
 
   # general args
-  parser.add_argument("--num-cpus", type=int, default=25)
+  parser.add_argument("--num-cpus", type=int, default=14)
   parser.add_argument("--num-envs-per-worker", type=int, default=1)
   parser.add_argument(
       "--framework",
@@ -122,8 +130,8 @@ if __name__ == '__main__':
                          "max_collision_bw": 5/100,
                          "min_bandwidth": 0.1,
                          "gamma_state": 0.8,
-                         "beta_fc": 0.0,
-                         "beta_bw": 0.0,
+                         "beta_fc": 0,
+                         "beta_bw": 0,
                      })
         .resources(
             num_gpus=int(os.environ.get("RLLIB_NUM_GPUS", "0")),
@@ -138,7 +146,7 @@ if __name__ == '__main__':
                 "lstm_use_prev_reward": True,
             },
             lr_schedule=lr_schedule,
-            gamma=0.0,
+            gamma=0.9,
             lambda_=0.95,
             clip_param=0.25,
             sgd_minibatch_size=train_batch_size,

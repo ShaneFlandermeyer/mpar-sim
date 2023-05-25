@@ -52,7 +52,7 @@ class SpectrumHopper(gym.Env):
 
     self.max_obs = np.sum(self.gamma_state**np.arange(self.pri))
     self.observation_space = gym.spaces.Box(
-        low=0.0, high=1.0, shape=(self.fft_size,))
+        low=0.0, high=1.0, shape=(self.fft_size+1,))
     self.action_space = gym.spaces.Box(
         low=np.array([0.0, self.min_bandwidth]),
         high=np.array([1-self.min_bandwidth, 1]))
@@ -81,7 +81,7 @@ class SpectrumHopper(gym.Env):
     self.n_shift = self.np_random.integers(-self.fft_size//4, self.fft_size//4)
     self.interference.state = np.roll(self.interference.state, self.n_shift)
 
-    obs = np.zeros(self.observation_space.shape)
+    obs = np.zeros(self.fft_size)
     for _ in range(self.pri):
       self.interference.step(self.time)
       # TODO: Uncomment this for recorded interference
@@ -91,12 +91,14 @@ class SpectrumHopper(gym.Env):
       self.history["radar"].append(np.zeros_like(self.interference.state))
       self.history["interference"].append(self.interference.state)
     obs /= self.max_obs
+    obs = np.concatenate(
+        (obs, np.array([(self.pulse_count % self.cpi_len) / self.cpi_len])))
 
     info = {}
     return obs, info
 
   def step(self, action):
-    obs = np.zeros(self.observation_space.shape)
+    obs = np.zeros(self.fft_size)
     for i in range(self.pri):
       # TODO: Uncomment for SAA agent. There's definitely a way to define this policy in RLLib
       # widest = self._get_widest(self.interference.state)
@@ -113,6 +115,8 @@ class SpectrumHopper(gym.Env):
       self.history["radar"].append(radar_spectrum)
       self.history["interference"].append(self.interference.state)
     obs /= self.max_obs
+    obs = np.concatenate(
+        (obs, np.array([(self.pulse_count % self.cpi_len) / self.cpi_len])))
 
     self.pulse_count += 1
     terminated = False
@@ -148,13 +152,17 @@ class SpectrumHopper(gym.Env):
     # Compute distorition-based rewards
     self.history["bandwidth"].append(bandwidth)
     self.history["center_freq"].append(center_freq)
-    r_distortion = self.beta_bw * \
-        np.std(self.history["bandwidth"]) + self.beta_fc * \
-        np.std(self.history["center_freq"])
+    bw_mean = np.mean(self.history["bandwidth"])
+    fc_mean = np.mean(self.history["center_freq"])
+    bw_std = np.std(self.history["bandwidth"])
+    fc_std = np.std(self.history["center_freq"])
+    reward = r_spectrum
 
-    reward = r_spectrum - r_distortion
-
-    # Reset per-CPI metrics
+    # Compute distortion penalty (applied at the end of the CPI)
+    
+    if len(self.history["bandwidth"]) > 1:
+      r_distortion = self.beta_bw * abs(bandwidth - bw_mean) + self.beta_fc * abs(center_freq - fc_mean)
+      reward -= r_distortion
     if len(self.history["bandwidth"]) == self.cpi_len:
       self.history["bandwidth"].clear()
       self.history["center_freq"].clear()
@@ -163,11 +171,13 @@ class SpectrumHopper(gym.Env):
     widest = self._get_widest(self.interference.state)
     widest_bw = np.clip((widest[1] - widest[0]) / self.fft_size,
                         1/self.fft_size, None)
-
+    
     info = {
         'bandwidth': max(bandwidth, 0),
         'missed': widest_bw - bandwidth,
         'collision': n_collisions / n_radar_bins if n_radar_bins > 0 else 0,
+        'bandwidth_std': bw_std,
+        'center_freq_std': fc_std,
     }
 
     return reward, radar_spectrum, info
