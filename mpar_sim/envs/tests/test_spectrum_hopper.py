@@ -76,15 +76,17 @@ class SpectrumMetricsCallbacks(DefaultCallbacks):
     episode.custom_metrics["missed"] = missed
     episode.custom_metrics["bandwidth_std"] = bw_std
     episode.custom_metrics["center_freq_std"] = fc_std
-
+ 
 
 def get_cli_args():
   """Create CLI parser and return parsed arguments"""
   parser = argparse.ArgumentParser()
 
   # general args
+  parser.add_argument("--exp-name", type=str)
+  parser.add_argument("--exp-dir", type=str, default="/home/shane/onedrive/research/my_stuff/trs23/data")
   parser.add_argument("--num-cpus", type=int, default=30)
-  parser.add_argument("--num_workers", type=int, default=25)
+  parser.add_argument("--num-workers", type=int, default=25)
   parser.add_argument("--num-envs-per-worker", type=int, default=1)
   parser.add_argument(
       "--framework",
@@ -121,8 +123,6 @@ if __name__ == '__main__':
 
   # Tune API
   n_trials = 5
-  local_dir = "/home/shane/onedrive/research/my_stuff/trs23/data"
-  exp_name = "collision_bw_reward"
   config = (
       PPOConfig()
       .environment(env="SpectrumHopper", normalize_actions=True,
@@ -131,7 +131,8 @@ if __name__ == '__main__':
                        "pri": 20,
                        "cpi_len": 32,
                        "min_collision_bw": 0/100,
-                       "max_collision_bw": tune.grid_search([1/100, 5/100, 10/100]),
+                       "max_collision_bw": 3/100,
+                    #    "max_collision_bw": tune.grid_search([1/100, 5/100, 10/100]),
                        "min_bandwidth": 0.1,
                        "gamma_state": 0.8,
                        #    "beta_distort": tune.grid_search([0.0, 0.5, 1.0]),
@@ -150,7 +151,7 @@ if __name__ == '__main__':
               "lstm_use_prev_reward": True,
           },
           lr_schedule=lr_schedule,
-          gamma=0.9,
+          gamma=0,
           lambda_=0.95,
           clip_param=0.25,
           sgd_minibatch_size=train_batch_size,
@@ -170,12 +171,12 @@ if __name__ == '__main__':
       "PPO",
       param_space=config,
       run_config=air.RunConfig(
-          name=exp_name,
+          name=args.exp_name,
           stop={"timesteps_total": args.stop_timesteps},
           checkpoint_config=air.CheckpointConfig(
               checkpoint_at_end=True
           ),
-          local_dir=local_dir,
+          local_dir=args.exp_dir,
       ),
       tune_config=tune.TuneConfig(num_samples=n_trials),
 
