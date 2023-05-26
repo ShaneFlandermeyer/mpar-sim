@@ -121,6 +121,8 @@ if __name__ == '__main__':
 
   # Tune API
   n_trials = 5
+  local_dir = "/home/shane/onedrive/research/my_stuff/trs23/data"
+  exp_name = "collision_bw_reward"
   config = (
       PPOConfig()
       .environment(env="SpectrumHopper", normalize_actions=True,
@@ -129,11 +131,11 @@ if __name__ == '__main__':
                        "pri": 20,
                        "cpi_len": 32,
                        "min_collision_bw": 0/100,
-                       "max_collision_bw": 5/100,
+                       "max_collision_bw": tune.grid_search([1/100, 5/100, 10/100]),
                        "min_bandwidth": 0.1,
                        "gamma_state": 0.8,
-                       "beta_distort": tune.grid_search([0.0, 0.5, 1.0]),
-                      #  "beta_fc": tune.grid_search([0.0, 0.5, 1.0]),
+                       #    "beta_distort": tune.grid_search([0.0, 0.5, 1.0]),
+                       #  "beta_fc": tune.grid_search([0.0, 0.5, 1.0]),
                    })
       .resources(
           num_gpus=1/n_trials,
@@ -167,15 +169,19 @@ if __name__ == '__main__':
   tuner = tune.Tuner(
       "PPO",
       param_space=config,
-      run_config=air.RunConfig(stop={"timesteps_total": args.stop_timesteps},
-                               checkpoint_config=air.CheckpointConfig(
-          checkpoint_at_end=True)
+      run_config=air.RunConfig(
+          name=exp_name,
+          stop={"timesteps_total": args.stop_timesteps},
+          checkpoint_config=air.CheckpointConfig(
+              checkpoint_at_end=True
+          ),
+          local_dir=local_dir,
       ),
       tune_config=tune.TuneConfig(num_samples=n_trials),
 
   )
   results = tuner.fit()
-  
+
   print("Finished training. Running manual test/inference loop.")
   best_result = results.get_best_result("episode_reward_mean", "max")
   algo = Algorithm.from_checkpoint(best_result.checkpoint)
