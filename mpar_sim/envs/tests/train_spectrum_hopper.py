@@ -76,7 +76,7 @@ class SpectrumMetricsCallbacks(DefaultCallbacks):
     episode.custom_metrics["missed"] = missed
     episode.custom_metrics["bandwidth_std"] = bw_std
     episode.custom_metrics["center_freq_std"] = fc_std
- 
+
 
 def get_cli_args():
   """Create CLI parser and return parsed arguments"""
@@ -84,9 +84,10 @@ def get_cli_args():
 
   # general args
   parser.add_argument("--exp-name", type=str)
-  parser.add_argument("--exp-dir", type=str, default="/home/shane/onedrive/research/my_stuff/trs23/data")
-  parser.add_argument("--num-cpus", type=int, default=30)
-  parser.add_argument("--num-workers", type=int, default=25)
+  parser.add_argument("--exp-dir", type=str,
+                      default="/home/shane/data/trs_2023")
+  parser.add_argument("--num-cpus", type=int, default=21)
+  parser.add_argument("--num-workers", type=int, default=20)
   parser.add_argument("--num-envs-per-worker", type=int, default=1)
   parser.add_argument(
       "--framework",
@@ -108,8 +109,8 @@ def get_cli_args():
 
 
 if __name__ == '__main__':
-  random.seed(1234)
-  np.random.seed(1234)
+#   random.seed(1234)
+#   np.random.seed(1234)
   args = get_cli_args()
   n_envs = args.num_workers * args.num_envs_per_worker
   horizon = 128
@@ -120,9 +121,6 @@ if __name__ == '__main__':
   tune.register_env(
       "SpectrumHopper", lambda env_config: SpectrumHopper(env_config))
   ModelCatalog.register_custom_model("LSTM", LSTMActorCritic)
-
-  # Tune API
-  n_trials = 5
   config = (
       PPOConfig()
       .environment(env="SpectrumHopper", normalize_actions=True,
@@ -131,15 +129,14 @@ if __name__ == '__main__':
                        "pri": 20,
                        "cpi_len": 32,
                        "min_collision_bw": 0/100,
-                       "max_collision_bw": 3/100,
-                    #    "max_collision_bw": tune.grid_search([1/100, 5/100, 10/100]),
-                       "min_bandwidth": 0.1,
-                       "gamma_state": 0.8,
+                    #    "max_collision_bw": 5/100,
+                       "max_collision_bw": tune.grid_search([1/100, 5/100, 10/100]),
+                       "gamma_state": 0.5,
                        #    "beta_distort": tune.grid_search([0.0, 0.5, 1.0]),
                        #  "beta_fc": tune.grid_search([0.0, 0.5, 1.0]),
                    })
       .resources(
-          num_gpus=1/n_trials,
+          num_gpus=1,
       )
       .training(
           train_batch_size=train_batch_size,
@@ -151,7 +148,7 @@ if __name__ == '__main__':
               "lstm_use_prev_reward": True,
           },
           lr_schedule=lr_schedule,
-          gamma=0,
+          gamma=0.,
           lambda_=0.95,
           clip_param=0.25,
           sgd_minibatch_size=train_batch_size,
@@ -167,6 +164,9 @@ if __name__ == '__main__':
       .callbacks(SpectrumMetricsCallbacks)
       .exploration(explore=OrnsteinUhlenbeckNoise)
   )
+
+  # Tune API
+  n_trials = 5
   tuner = tune.Tuner(
       "PPO",
       param_space=config,
@@ -179,39 +179,38 @@ if __name__ == '__main__':
           local_dir=args.exp_dir,
       ),
       tune_config=tune.TuneConfig(num_samples=n_trials),
-
   )
   results = tuner.fit()
+#   print("Finished training. Running manual test/inference loop.")
+#   best_result = results.get_best_result("episode_reward_mean", "max")
+#   algo = Algorithm.from_checkpoint(best_result.checkpoint)
 
-  print("Finished training. Running manual test/inference loop.")
-  best_result = results.get_best_result("episode_reward_mean", "max")
-  algo = Algorithm.from_checkpoint(best_result.checkpoint)
 
-  # Prepare env
-  env_config = config["env_config"]
-  env_config["render_mode"] = "human"
-  env = SpectrumHopper(env_config)
-  obs, info = env.reset()
-  done = False
-  total_reward = 0
+#   # Prepare env
+#   env_config = config["env_config"]
+#   env_config["render_mode"] = "human"
+#   env = SpectrumHopper(env_config)
+#   obs, info = env.reset()
+#   done = False
+#   total_reward = 0
 
-  # Initialize memory
-  lstm_cell_size = config["model"]["lstm_cell_size"]
-  init_state = state = [
-      np.zeros([lstm_cell_size], np.float32) for _ in range(4)]
-  prev_action = np.zeros(env.action_space.shape, np.float32)
-  prev_reward = 0
-  while not done:
-    # action = env.action_space.sample()
-    action, state, _ = algo.compute_single_action(
-        obs, state, prev_action=prev_action, prev_reward=prev_reward, explore=False)
-    obs, reward, terminated, truncated, info = env.step(action)
-    done = terminated or truncated
-    prev_action = action
-    prev_reward = reward
+#   # Initialize memory
+#   lstm_cell_size = config["model"]["lstm_cell_size"]
+#   init_state = state = [
+#       np.zeros([lstm_cell_size], np.float32) for _ in range(4)]
+#   prev_action = np.zeros(env.action_space.shape, np.float32)
+#   prev_reward = 0
+#   while not done:
+#     # action = env.action_space.sample()
+#     action, state, _ = algo.compute_single_action(
+#         obs, state, prev_action=prev_action, prev_reward=prev_reward, explore=False)
+#     obs, reward, terminated, truncated, info = env.step(action)
+#     done = terminated or truncated
+#     prev_action = action
+#     prev_reward = reward
 
-    total_reward += reward
-    env.render()
-  print("Total eval. reward:", total_reward)
+#     total_reward += reward
+#     env.render()
+#   print("Total eval. reward:", total_reward)
 
   ray.shutdown()

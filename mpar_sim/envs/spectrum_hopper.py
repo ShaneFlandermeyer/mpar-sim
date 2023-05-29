@@ -50,7 +50,7 @@ class SpectrumHopper(gym.Env):
     # self.interference = HoppingInterference(
     #     start_freq=np.min(self.freq_axis),
     #     bandwidth=0.2,
-    #     duration=self.pri,
+    #     duration=90,
     #     hop_size=0.2,
     #     channel_bw=1,
     #     fft_size=self.fft_size
@@ -62,8 +62,8 @@ class SpectrumHopper(gym.Env):
     self.observation_space = gym.spaces.Box(
         low=0.0, high=1.0, shape=(self.fft_size+1,))
     self.action_space = gym.spaces.Box(
-        low=np.array([0.0, self.min_bandwidth]),
-        high=np.array([1-self.min_bandwidth, 1]))
+        low=np.array([0.0, 0.0]),
+        high=np.array([1.0, 1.0]))
 
     # Render config
     render_mode = config.get("render_mode", "rgb_array")
@@ -138,11 +138,20 @@ class SpectrumHopper(gym.Env):
   def render(self):
     if self.render_mode == "rgb_array":
       return self._render_frame()
+    
+  def close(self):
+    if self.window is not None:
+      pygame.quit()
+      self.window = None
+      self.clock = None
 
   def _get_reward(self, action):
     # Compute radar spectrum
     start_freq = action[0]
-    stop_freq = action[1]
+    stop_freq = np.clip(action[1], start_freq, 1)
+    if stop_freq < start_freq:
+      start_freq, stop_freq = stop_freq, start_freq
+    # stop_freq = np.clip(action[1], start_freq+self.min_bandwidth, None)
     center_freq = 0.5*(start_freq + stop_freq)
     bandwidth = stop_freq - start_freq
     radar_spectrum = np.logical_and(
