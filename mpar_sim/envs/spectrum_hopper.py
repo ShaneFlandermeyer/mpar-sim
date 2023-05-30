@@ -61,10 +61,10 @@ class SpectrumHopper(gym.Env):
     self.max_obs = np.sum(self.gamma_state**np.arange(self.pri))
     self.observation_space = gym.spaces.Box(
         low=0.0, high=1.0, shape=(self.fft_size+1,))
-    self.action_space = gym.spaces.Box(low=0.0, high=1.0, shape=(2,))
-    # self.action_space = gym.spaces.Box(
-    #     low=np.array([0.0, self.min_bandwidth]),
-    #     high=np.array([1-self.min_bandwidth, 1.0]))
+    # self.action_space = gym.spaces.Box(low=0.0, high=1.0, shape=(2,))
+    self.action_space = gym.spaces.Box(
+        low=np.array([0.0, self.min_bandwidth]),
+        high=np.array([1-self.min_bandwidth, 1.0]))
 
     # Render config
     render_mode = config.get("render_mode", "rgb_array")
