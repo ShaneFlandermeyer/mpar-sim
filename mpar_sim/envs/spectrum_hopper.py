@@ -61,9 +61,10 @@ class SpectrumHopper(gym.Env):
     self.max_obs = np.sum(self.gamma_state**np.arange(self.pri))
     self.observation_space = gym.spaces.Box(
         low=0.0, high=1.0, shape=(self.fft_size+1,))
-    self.action_space = gym.spaces.Box(
-        low=np.array([0.0, 0.0]),
-        high=np.array([1.0, 1.0]))
+    self.action_space = gym.spaces.Box(low=0.0, high=1.0, shape=(2,))
+    # self.action_space = gym.spaces.Box(
+    #     low=np.array([0.0, self.min_bandwidth]),
+    #     high=np.array([1-self.min_bandwidth, 1.0]))
 
     # Render config
     render_mode = config.get("render_mode", "rgb_array")
@@ -148,10 +149,10 @@ class SpectrumHopper(gym.Env):
   def _get_reward(self, action):
     # Compute radar spectrum
     start_freq = action[0]
-    stop_freq = np.clip(action[1], start_freq, 1)
-    if stop_freq < start_freq:
-      start_freq, stop_freq = stop_freq, start_freq
-    # stop_freq = np.clip(action[1], start_freq+self.min_bandwidth, None)
+    # stop_freq = action[1]
+    stop_freq = np.clip(action[1], start_freq, None)
+    # if stop_freq < start_freq:
+    #   start_freq, stop_freq = stop_freq, start_freq
     center_freq = 0.5*(start_freq + stop_freq)
     bandwidth = stop_freq - start_freq
     radar_spectrum = np.logical_and(
