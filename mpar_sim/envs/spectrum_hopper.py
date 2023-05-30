@@ -141,18 +141,14 @@ class SpectrumHopper(gym.Env):
       return self._render_frame()
     
   def close(self):
-    if self.window is not None:
+    if self.render_mode == "human":
       pygame.quit()
-      self.window = None
-      self.clock = None
+      
 
   def _get_reward(self, action):
     # Compute radar spectrum
     start_freq = action[0]
-    # stop_freq = action[1]
-    stop_freq = np.clip(action[1], start_freq, None)
-    # if stop_freq < start_freq:
-    #   start_freq, stop_freq = stop_freq, start_freq
+    stop_freq = np.clip(action[1], start_freq+self.min_bandwidth, None)
     center_freq = 0.5*(start_freq + stop_freq)
     bandwidth = stop_freq - start_freq
     radar_spectrum = np.logical_and(
