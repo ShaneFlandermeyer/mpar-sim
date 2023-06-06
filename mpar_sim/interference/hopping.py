@@ -19,7 +19,7 @@ class HoppingInterference():
     self.channel_bw = channel_bw
     self.fft_size = fft_size
     self.freq_axis = np.linspace(0, self.channel_bw, self.fft_size)
-    self.reset()
+    self.reset(randomize=False)
 
   def step(self, time):
     if time - self.last_update_time >= self.duration:
@@ -47,17 +47,19 @@ class HoppingInterference():
 
     return self.state
 
-  def reset(self):
+  def reset(self, randomize: bool = True):
     self.last_update_time = 0
     self.direction = 1
     self.start_ind = 0
     self.stop_ind = round(self.bandwidth/self.freq_axis[-1]*self.fft_size)
     self.is_active = True
 
-    # # TODO: Randomize this guy
-    self.bandwidth = np.random.uniform(0, 0.4)
-    self.start_freq = np.random.choice(np.arange(5))*self.bandwidth
-    self.direction = np.random.choice([-1, 1])
+    if randomize:
+      self.bandwidth = np.random.uniform(0, 0.4)
+      self.start_freq = np.random.choice(np.arange(5))*self.bandwidth
+      self.direction = np.random.choice([-1, 1])
+    else:
+      self.direction = 1
 
     self.state = np.logical_and(
         self.freq_axis >= self.start_freq,

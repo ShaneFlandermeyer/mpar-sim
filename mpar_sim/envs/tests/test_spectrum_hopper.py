@@ -19,9 +19,13 @@ from ray.rllib.evaluation import Episode, RolloutWorker
 from ray.rllib.policy import Policy
 from ray.rllib.utils.exploration import OrnsteinUhlenbeckNoise
 import random
+from collections import deque
 
 
 class SpectrumMetricsCallbacks(DefaultCallbacks):
+  def __init__(self):
+      super().__init__()
+      self.saa_r_moving_avg = deque(maxlen=100)
   def on_episode_start(
       self,
       *,
@@ -37,6 +41,14 @@ class SpectrumMetricsCallbacks(DefaultCallbacks):
     episode.user_data["missed"] = []
     episode.user_data["bandwidth_std"] = []
     episode.user_data["center_freq_std"] = []
+    episode.user_data["bw_diff"] = []
+    episode.user_data["fc_diff"] = []
+    episode.user_data["saa_reward"] = []
+    episode.user_data["saa_bandwidth"] = []
+    episode.user_data["saa_missed"] = []
+    episode.user_data["saa_collision"] = []
+    episode.user_data["saa_bw_diff"] = []
+    episode.user_data["saa_fc_diff"] = []
 
   def on_episode_step(
       self,
@@ -54,6 +66,15 @@ class SpectrumMetricsCallbacks(DefaultCallbacks):
     episode.user_data["missed"].append(info["missed"])
     episode.user_data["bandwidth_std"].append(info["bandwidth_std"])
     episode.user_data["center_freq_std"].append(info["center_freq_std"])
+    episode.user_data["bw_diff"].append(info["bw_diff"])
+    episode.user_data["fc_diff"].append(info["fc_diff"])
+    episode.user_data["saa_reward"].append(info["saa_reward"])
+    episode.user_data["saa_bandwidth"].append(info["saa_bandwidth"])
+    episode.user_data["saa_missed"].append(info["saa_missed"])
+    episode.user_data["saa_collision"].append(info["saa_collision"])
+    episode.user_data["saa_bw_diff"].append(info["saa_bw_diff"])
+    episode.user_data["saa_fc_diff"].append(info["saa_fc_diff"])
+    
 
   def on_episode_end(
       self,
@@ -70,13 +91,30 @@ class SpectrumMetricsCallbacks(DefaultCallbacks):
     missed = np.mean(episode.user_data["missed"])
     bw_std = np.mean(episode.user_data["bandwidth_std"])
     fc_std = np.mean(episode.user_data["center_freq_std"])
-
+    bw_diff = np.mean(episode.user_data["bw_diff"])
+    fc_diff = np.mean(episode.user_data["fc_diff"])
+    saa_r = np.sum(episode.user_data["saa_reward"])
+    saa_bw = np.mean(episode.user_data["saa_bandwidth"])
+    saa_missed = np.mean(episode.user_data["saa_missed"])
+    saa_collision = np.mean(episode.user_data["saa_collision"])
+    saa_bw_diff = np.mean(episode.user_data["saa_bw_diff"])
+    saa_fc_diff = np.mean(episode.user_data["saa_fc_diff"])
+    self.saa_r_moving_avg.append(saa_r)
+    
     episode.custom_metrics["bandwidth"] = bandwidth
     episode.custom_metrics["collision"] = collision
     episode.custom_metrics["missed"] = missed
     episode.custom_metrics["bandwidth_std"] = bw_std
     episode.custom_metrics["center_freq_std"] = fc_std
- 
+    episode.custom_metrics["bw_diff"] = bw_diff
+    episode.custom_metrics["fc_diff"] = fc_diff
+    episode.custom_metrics["saa_reward"] = np.mean(self.saa_r_moving_avg)
+    episode.custom_metrics["saa_bandwidth"] = np.mean(saa_bw)
+    episode.custom_metrics["saa_missed"] = np.mean(saa_missed)
+    episode.custom_metrics["saa_collision"] = np.mean(saa_collision)
+    episode.custom_metrics["saa_bw_diff"] = np.mean(saa_bw_diff)
+    episode.custom_metrics["saa_fc_diff"] = np.mean(saa_fc_diff)
+
 
 def get_cli_args():
   """Create CLI parser and return parsed arguments"""
@@ -84,9 +122,10 @@ def get_cli_args():
 
   # general args
   parser.add_argument("--exp-name", type=str)
-  parser.add_argument("--exp-dir", type=str, default="/home/shane/data/trs_2023")
-  parser.add_argument("--num-cpus", type=int, default=26)
-  parser.add_argument("--num-workers", type=int, default=25)
+  parser.add_argument("--exp-dir", type=str,
+                      default="/home/shane/data/trs_2023")
+  parser.add_argument("--num-cpus", type=int, default=31)
+  parser.add_argument("--num-workers", type=int, default=9)
   parser.add_argument("--num-envs-per-worker", type=int, default=1)
   parser.add_argument(
       "--framework",
@@ -98,8 +137,14 @@ def get_cli_args():
   parser.add_argument(
       "--stop-timesteps",
       type=int,
-      default=2_000_000,
+      default=1_000_000,
       help="Number of timesteps to train.",
+  )
+  parser.add_argument(
+      "--stop-iter",
+      type=int,
+      default=600,
+      help="Number of iterations to train.",
   )
 
   args = parser.parse_args()
@@ -108,8 +153,9 @@ def get_cli_args():
 
 
 if __name__ == '__main__':
-  random.seed(1234)
-  np.random.seed(1234)
+  seed = 1234
+  np.random.seed(seed)
+  random.seed(seed)
   args = get_cli_args()
   n_envs = args.num_workers * args.num_envs_per_worker
   horizon = 128
@@ -121,24 +167,21 @@ if __name__ == '__main__':
       "SpectrumHopper", lambda env_config: SpectrumHopper(env_config))
   ModelCatalog.register_custom_model("LSTM", LSTMActorCritic)
 
-  # Tune API
+  # TODO: For 2.64 GHz, do 1, 3, 5% collision bw, try shifting the data to improve generalization
   n_trials = 3
   config = (
       PPOConfig()
-      .environment(env="SpectrumHopper", normalize_actions=True,
+      .environment(env="SpectrumHopper", 
+                   normalize_actions=True,
                    env_config={
                        "max_steps": 2000,
                        "pri": 20,
-                       "cpi_len": 32,
-                       "min_collision_bw": 0/100,
-                       "max_collision_bw": tune.grid_search([1/100, 5/100, 10/100]),
-                       "min_bandwidth": 0.1,
-                       "gamma_state": 0.7,
-                       #    "beta_distort": tune.grid_search([0.0, 0.5, 1.0]),
-                       #  "beta_fc": tune.grid_search([0.0, 0.5, 1.0]),
+                       "cpi_len": 128,
+                       "max_collision_bw": tune.grid_search([1/100, 2.5/100, 5/100]), 
+                       "gamma_state": 0.50,
                    })
       .resources(
-          num_gpus=1/n_trials,
+          num_gpus=1,
       )
       .training(
           train_batch_size=train_batch_size,
@@ -149,8 +192,69 @@ if __name__ == '__main__':
               "lstm_use_prev_action": True,
               "lstm_use_prev_reward": True,
           },
-          lr_schedule=lr_schedule,
-          gamma=0,
+          lr=3e-4,
+          gamma=0., # 0.,
+          lambda_=0.95,
+          clip_param=0.25,
+          sgd_minibatch_size=train_batch_size,
+      )
+      .rollouts(num_rollout_workers=args.num_workers,
+                num_envs_per_worker=args.num_envs_per_worker,
+                rollout_fragment_length="auto",
+                enable_connectors=False,  # Needed for custom metrics cb
+                )
+      .framework(args.framework, eager_tracing=args.eager_tracing)
+      .callbacks(SpectrumMetricsCallbacks)
+  )
+  exp_name = "spectrum_reward_2_64ghz-v3"
+  tuner = tune.Tuner(
+      "PPO",
+      param_space=config,
+      run_config=air.RunConfig(
+          name=exp_name,
+          stop={
+            #   "training_iteration": args.stop_iter,
+              "timesteps_total": args.stop_timesteps,
+              },
+          checkpoint_config=air.CheckpointConfig(
+              checkpoint_at_end=True
+          ),
+          local_dir=args.exp_dir,
+      ),
+      tune_config=tune.TuneConfig(num_samples=n_trials),
+
+  )
+  results = tuner.fit()
+  del tuner
+  
+  n_trials = 3
+  config = (
+      PPOConfig()
+      .environment(env="SpectrumHopper", 
+                   normalize_actions=True,
+                   env_config={
+                       "max_steps": 2000,
+                       "pri": 20,
+                       "cpi_len": 128,
+                       "max_collision_bw": 2.5/100,
+                       "gamma_state": 0.50,
+                       "beta_distort": tune.grid_search([1, 2, 5]),
+                   })
+      .resources(
+          num_gpus=1,
+      )
+      .training(
+          train_batch_size=train_batch_size,
+          model={
+              "custom_model": "LSTM",
+              "fcnet_hiddens": [128, 96],
+              "lstm_cell_size": 64,
+              "lstm_use_prev_action": True,
+              "lstm_use_prev_reward": True,
+          },
+        #   lr_schedule=lr_schedule,
+          lr=3e-4,
+          gamma=0.5, # 0.,
           lambda_=0.95,
           clip_param=0.25,
           sgd_minibatch_size=train_batch_size,
@@ -162,16 +266,18 @@ if __name__ == '__main__':
                 enable_connectors=False,  # Needed for custom metrics cb
                 )
       .framework(args.framework, eager_tracing=args.eager_tracing)
-      .debugging(seed=tune.randint(0, 10000))
       .callbacks(SpectrumMetricsCallbacks)
-      .exploration(explore=OrnsteinUhlenbeckNoise)
   )
+  exp_name = "distortion_reward_2_64ghz-v3"
   tuner = tune.Tuner(
       "PPO",
       param_space=config,
       run_config=air.RunConfig(
-          name=args.exp_name,
-          stop={"timesteps_total": args.stop_timesteps},
+          name=exp_name,
+          stop={
+            #   "training_iteration": args.stop_iter,
+              "timesteps_total": args.stop_timesteps,
+              },
           checkpoint_config=air.CheckpointConfig(
               checkpoint_at_end=True
           ),
@@ -181,36 +287,3 @@ if __name__ == '__main__':
 
   )
   results = tuner.fit()
-
-#   print("Finished training. Running manual test/inference loop.")
-#   best_result = results.get_best_result("episode_reward_mean", "max")
-#   algo = Algorithm.from_checkpoint(best_result.checkpoint)
-
-#   # Prepare env
-#   env_config = config["env_config"]
-#   env_config["render_mode"] = "human"
-#   env = SpectrumHopper(env_config)
-#   obs, info = env.reset()
-#   done = False
-#   total_reward = 0
-
-#   # Initialize memory
-#   lstm_cell_size = config["model"]["lstm_cell_size"]
-#   init_state = state = [
-#       np.zeros([lstm_cell_size], np.float32) for _ in range(4)]
-#   prev_action = np.zeros(env.action_space.shape, np.float32)
-#   prev_reward = 0
-#   while not done:
-#     # action = env.action_space.sample()
-#     action, state, _ = algo.compute_single_action(
-#         obs, state, prev_action=prev_action, prev_reward=prev_reward, explore=False)
-#     obs, reward, terminated, truncated, info = env.step(action)
-#     done = terminated or truncated
-#     prev_action = action
-#     prev_reward = reward
-
-#     total_reward += reward
-#     env.render()
-#   print("Total eval. reward:", total_reward)
-
-#   ray.shutdown()
