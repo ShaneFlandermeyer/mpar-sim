@@ -160,7 +160,7 @@ if __name__ == '__main__':
   n_envs = args.num_workers * args.num_envs_per_worker
   horizon = 128
   train_batch_size = horizon*n_envs
-  lr_schedule = [[0, 8e-4], [args.stop_timesteps, 2e-4]]
+  lr_schedule = [[0, 1e-3], [args.stop_timesteps, 1e-4]]
 
   ray.init(num_cpus=args.num_cpus)
   tune.register_env(
@@ -177,8 +177,10 @@ if __name__ == '__main__':
                        "max_steps": 2000,
                        "pri": 20,
                        "cpi_len": 128,
-                       "max_collision_bw": tune.grid_search([1/100, 2.5/100, 5/100]), 
-                       "gamma_state": 0.50,
+                    #    "max_collision_bw": 2.5/100,
+                       "max_collision_bw": tune.grid_search([1/100, 5/100, 10/100]), 
+                       "gamma_state": 0.5,
+                       "min_bandwidth": 0.1,
                    })
       .resources(
           num_gpus=1,
@@ -192,11 +194,13 @@ if __name__ == '__main__':
               "lstm_use_prev_action": True,
               "lstm_use_prev_reward": True,
           },
-          lr=3e-4,
+        #   lr=1e-3,
+          lr_schedule=lr_schedule,
           gamma=0., # 0.,
           lambda_=0.95,
           clip_param=0.25,
           sgd_minibatch_size=train_batch_size,
+          num_sgd_iter=15,
       )
       .rollouts(num_rollout_workers=args.num_workers,
                 num_envs_per_worker=args.num_envs_per_worker,
@@ -206,7 +210,7 @@ if __name__ == '__main__':
       .framework(args.framework, eager_tracing=args.eager_tracing)
       .callbacks(SpectrumMetricsCallbacks)
   )
-  exp_name = "spectrum_reward_2_64ghz-v3"
+  exp_name = "spectrum_reward_2_64ghz-v7"
   tuner = tune.Tuner(
       "PPO",
       param_space=config,
@@ -236,9 +240,10 @@ if __name__ == '__main__':
                        "max_steps": 2000,
                        "pri": 20,
                        "cpi_len": 128,
-                       "max_collision_bw": 2.5/100,
+                       "max_collision_bw": 5/100,
                        "gamma_state": 0.50,
                        "beta_distort": tune.grid_search([1, 2, 5]),
+                       "min_bandwidth": 0.1,
                    })
       .resources(
           num_gpus=1,
@@ -268,7 +273,7 @@ if __name__ == '__main__':
       .framework(args.framework, eager_tracing=args.eager_tracing)
       .callbacks(SpectrumMetricsCallbacks)
   )
-  exp_name = "distortion_reward_2_64ghz-v3"
+  exp_name = "distortion_reward_2_64ghz-v7"
   tuner = tune.Tuner(
       "PPO",
       param_space=config,

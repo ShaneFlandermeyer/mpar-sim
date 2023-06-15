@@ -44,21 +44,20 @@ class SpectrumHopper(gym.Env):
     self.max_collision_bw = config.get("max_collision_bw", 1)
 
     self.freq_axis = np.linspace(0, 1, self.fft_size)
-    self.interference = HoppingInterference(
-        start_freq=np.min(self.freq_axis),
-        bandwidth=0.2,
-        duration=self.pri,
-        hop_size=0.2,
-        channel_bw=1,
-        fft_size=self.fft_size
-    )
+    # self.interference = HoppingInterference(
+    #     start_freq=np.min(self.freq_axis),
+    #     bandwidth=0.2,
+    #     duration=self.pri,
+    #     hop_size=0.2,
+    #     channel_bw=1,
+    #     fft_size=self.fft_size
+    # )
     self.interference = RecordedInterference(
-        "/home/shane/data/hocae_snaps_2_64ghz_cleaned.dat", self.fft_size)
+        "/home/shane/data/hocae_snaps_2_4_cleaned_10_0.dat", self.fft_size)
 
     self.max_obs = np.sum(self.gamma_state**np.arange(self.pri))
     self.observation_space = gym.spaces.Box(
         low=0.0, high=1.0, shape=(self.fft_size+1,))
-    # self.action_space = gym.spaces.Box(low=0.0, high=1.0, shape=(2,))
     self.action_space = gym.spaces.Box(
         low=np.array([0.0, self.min_bandwidth]),
         high=np.array([1-self.min_bandwidth, 1.0]))
@@ -86,13 +85,13 @@ class SpectrumHopper(gym.Env):
 
     self.interference.reset()
     self.n_shift = self.np_random.integers(-self.fft_size//4, self.fft_size//4)
-    self.interference.state = np.roll(self.interference.state, self.n_shift)
+    # self.interference.state = np.roll(self.interference.state, self.n_shift)
 
     obs = np.zeros(self.fft_size)
     for _ in range(self.pri):
       self.interference.step(self.time)
       # TODO: Uncomment this for recorded interference
-      self.interference.state = np.roll(self.interference.state, self.n_shift)
+      # self.interference.state = np.roll(self.interference.state, self.n_shift)
       obs = self.interference.state + self.gamma_state*obs
       self.time += 1
       self.history["radar"].append(np.zeros_like(self.interference.state))
@@ -112,7 +111,7 @@ class SpectrumHopper(gym.Env):
         saa_action = self._get_widest(self.interference.state) / self.fft_size
       self.interference.step(self.time)
       # TODO: Uncomment this for recorded interference
-      self.interference.state = np.roll(self.interference.state, self.n_shift)
+      # self.interference.state = np.roll(self.interference.state, self.n_shift)
       obs = self.interference.state + self.gamma_state*obs
       self.time += 1
       if i == 0:
@@ -163,10 +162,11 @@ class SpectrumHopper(gym.Env):
     n_collisions = np.count_nonzero(np.logical_and(
         radar_spectrum, self.interference.state))
     r_spectrum = bandwidth
-    if n_collisions > self.min_collision_bw*self.fft_size:
-      r_spectrum *= 1 - n_collisions / (self.max_collision_bw*self.fft_size)
+    if n_collisions > self.min_collision_bw*n_radar_bins:
+      r_spectrum *= 1 - n_collisions / (self.max_collision_bw*n_radar_bins)
     # if n_collisions > self.min_collision_bw*n_radar_bins:
     #   r_spectrum *= 1 - n_collisions / (self.max_collision_bw*n_radar_bins)
+    # reward = np.clip(r_spectrum, 0, None)
     reward = r_spectrum
 
     # TODO: Don't append to history in this function
@@ -210,8 +210,11 @@ class SpectrumHopper(gym.Env):
     saa_n_collisions = np.count_nonzero(np.logical_and(
         saa_radar_spectrum, self.interference.state))
     saa_r_spectrum = saa_bandwidth
-    if saa_n_collisions > self.min_collision_bw**self.fft_size:
-      saa_r_spectrum *= 1 - saa_n_collisions / (self.max_collision_bw*self.fft_size)
+    if saa_n_collisions > self.min_collision_bw*saa_n_radar_bins:
+      saa_r_spectrum *= 1 - saa_n_collisions / (self.max_collision_bw*saa_n_radar_bins)
+    # if saa_n_collisions > self.min_collision_bw*saa_n_radar_bins:
+    #   saa_r_spectrum *= 1 - saa_n_collisions / (self.max_collision_bw*saa_n_radar_bins)
+    # saa_reward = np.clip(saa_r_spectrum, 0, None)
     saa_reward = saa_r_spectrum
 
     self.saa_history["bandwidth"].append(saa_bandwidth)
@@ -222,6 +225,7 @@ class SpectrumHopper(gym.Env):
     saa_r_distortion = self.beta_bw * \
         abs(saa_bandwidth - saa_bw_mean) + self.beta_fc * abs(saa_center_freq - saa_fc_mean)
     saa_reward -= saa_r_distortion
+    info['saa_action'] = saa_action
     info['saa_reward'] = saa_reward
     info['saa_bandwidth'] = saa_bandwidth
     info['saa_missed'] = widest_bw - saa_bandwidth
