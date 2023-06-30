@@ -11,7 +11,7 @@ class TestTarget():
 
 if __name__ == '__main__':
   t = Target(
-    rcs_model=Swerling(case=3, mean_rcs=1)
+    rcs_model=Swerling(case=3, mean=100)
   )
   print(t.rcs)
   # print(t.detection_probability(pfa=1e-8, n_pulse=10, snr_db=10))

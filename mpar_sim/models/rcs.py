@@ -9,18 +9,20 @@ class RCSModel():
   """Base class for RCS models"""
 
 
-class Swerling():
+class Swerling(RCSModel):
   def __init__(self,
                case: int = 0,
-               mean_rcs: float = 1,
+               mean: float = 1,
                seed: int = random.randint(0, 2**32-1)):
     self.case = case
-    self.mean = mean_rcs
+    self.mean = mean
     self.key = jax.random.PRNGKey(seed)
 
   def __call__(self):
     """
     Sample an RCS value from the model by transforming a Uniform(0, 1) random variable.
+    
+    See: https://radarsp.weebly.com/uploads/2/1/4/7/21471216/generating_swerling_random_sequences.pdf
 
     Returns
     -------
@@ -43,7 +45,6 @@ class Swerling():
       raise NotImplementedError
 
   def detection_probability(self, pfa, n_pulse, snr_db):
-    # https://radarsp.weebly.com/uploads/2/1/4/7/21471216/generating_swerling_random_sequences.pdf
     if self.case == 0:
       return pd_swerling0(pfa, n_pulse, snr_db)
     elif self.case == 1:
@@ -64,7 +65,6 @@ def logfactorial(n):
   """
   m = n*(1 + 4*n*(1 + 2*n))
   return n*(jnp.log(n) - 1) + (1/2)*(1/3*jnp.log(1/30 + m) + jnp.log(jnp.pi))
-
 
 def threshold(nfa: float, n_pulse: int):
   """
@@ -133,7 +133,6 @@ def pd_swerling0(pfa: float, n_pulse: float, snr_db: float) -> float:
 
   return pd
 
-
 def pd_swerling1(pfa: float, n_pulse: float, snr_db: float) -> float:
   """
   Compute the probability of detection for a swerling 1 target for non-coherently integrated pulses.
@@ -162,7 +161,6 @@ def pd_swerling1(pfa: float, n_pulse: float, snr_db: float) -> float:
         jnp.exp(-vt / (1 + n_pulse*snr))
 
   return pd
-
 
 def pd_swerling2(pfa: float, n_pulse: float, snr_db: float) -> float:
   """
