@@ -15,7 +15,7 @@ class Target():
     self.transition_model = transition_model
     self.rcs_model = rcs_model
     if isinstance(self.rcs_model, float):
-      self.rcs_model = Swerling(order=0, mean_rcs=self.rcs_model)
+      self.rcs_model = Swerling(case=0, mean_rcs=self.rcs_model)
     
   @property
   def rcs(self, **kwargs) -> jnp.array:

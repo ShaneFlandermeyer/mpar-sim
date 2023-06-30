@@ -158,6 +158,7 @@ class PhasedArrayRadar():
       self.tx_power = n_tx_elements * self.element_tx_power
 
     # Compute the loop gain, which is the portion of the SNR computation that does not depend on the target RCS or range.
+    # TODO: With the Swerling probability of detection computations, we do not need to include the number of pulses in the loop gain computation (Pd's assume single-pulse SNR).
     pulse_compression_gain = look.bandwidth * look.pulsewidth
     noise_power = constants.Boltzmann * self.system_temperature * \
         10**(self.noise_figure/10) * self.sample_rate
