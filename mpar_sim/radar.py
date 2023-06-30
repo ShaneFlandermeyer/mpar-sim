@@ -16,6 +16,8 @@ from mpar_sim.models.measurement.nonlinear import CartesianToRangeAzElRangeRate
 from mpar_sim.types.detection import Clutter, TrueDetection
 from mpar_sim.types.groundtruth import GroundTruthState
 from mpar_sim.types.look import Look
+from mpar_sim.common.util import as_column_vec
+import jax.numpy as jnp
 
 
 class PhasedArrayRadar():
@@ -47,13 +49,7 @@ class PhasedArrayRadar():
                # Scan settings
                beam_shape: Callable = RectangularBeam,
                # Detection settings
-               false_alarm_rate: float = 1e-6,
-               include_false_alarms: bool = False,
-               az_fov: Union[List, np.ndarray] = np.array([-90, 90]),
-               el_fov: Union[List, np.ndarray] = np.array([-90, 90]),
-               min_range: Optional[float] = 0,
-               max_range: Optional[float] = np.inf,
-               max_range_rate: Optional[float] = np.inf,
+               pfa: float = 1e-6,
                alias_measurements: bool = False,
                discretize_measurements: bool = False,
                noise_covar: Optional[np.ndarray] = None,
@@ -77,13 +73,7 @@ class PhasedArrayRadar():
     self.system_temperature = system_temperature
     self.noise_figure = noise_figure
     self.beam_shape = beam_shape
-    self.false_alarm_rate = false_alarm_rate
-    self.include_false_alarms = include_false_alarms
-    self.az_fov = az_fov
-    self.el_fov = el_fov
-    self.min_range = min_range
-    self.max_range = max_range
-    self.max_range_rate = max_range_rate
+    self.pfa = pfa
     self.alias_measurements = alias_measurements
     self.discretize_measurements = discretize_measurements
     self.noise_covar = noise_covar
@@ -171,10 +161,9 @@ class PhasedArrayRadar():
     pulse_compression_gain = look.bandwidth * look.pulsewidth
     noise_power = constants.Boltzmann * self.system_temperature * \
         10**(self.noise_figure/10) * self.sample_rate
-    self.loop_gain = look.n_pulses * pulse_compression_gain * \
-        self.tx_power * 10**(self.element_gain/10) * self.tx_beam.gain * \
-        self.rx_beam.gain * self.wavelength**2 / \
-        ((4*np.pi)**3 * noise_power)
+    self.loop_gain = look.n_pulses * self.tx_power * pulse_compression_gain * \
+        10**(self.element_gain/10) * self.tx_beam.gain * self.rx_beam.gain * \
+        self.wavelength**2 / ((4*np.pi)**3 * noise_power)
 
     self.measurement_model = CartesianToRangeAzElRangeRate(
         range_res=self.range_resolution,
@@ -187,6 +176,9 @@ class PhasedArrayRadar():
         discretize_measurements=self.discretize_measurements,
         noise_covar=self.noise_covar,
     )
+    
+  def measure(self, targets, noise, timestamp):
+      pass
 
   def measure(self,
               ground_truths: List[GroundTruthState],
@@ -230,7 +222,7 @@ class PhasedArrayRadar():
     snr_db = 10*np.log10(self.loop_gain) + 10*np.log10(rcs) - \
         40*np.log10(r) - beam_shape_loss_db - beam_scan_loss_db
     snr_lin = 10**(snr_db/10)
-    pfa = self.false_alarm_rate
+    pfa = self.pfa
     pd = pfa**(1/(1+snr_lin))
 
     # Filter out targets that have low SNR, are outside the radar's FOV, or are outside the main beam, then determine which targets are detected
@@ -294,7 +286,7 @@ class PhasedArrayRadar():
       n_range_bins = int(self.max_unambiguous_range / self.range_resolution)
       n_vel_bins = int(2*self.max_unambiguous_radial_speed /
                        self.velocity_resolution)
-      n_expected_false_alarms = self.false_alarm_rate * n_range_bins * n_vel_bins
+      n_expected_false_alarms = self.pfa * n_range_bins * n_vel_bins
       n_false_alarms = int(np.random.poisson(n_expected_false_alarms))
 
       # Generate random false alarm measurements
@@ -319,7 +311,7 @@ class PhasedArrayRadar():
             self.velocity_resolution + self.velocity_resolution/2
 
       # Add false alarms to the detection report
-      snr_db = 20*np.log10(gammaincinv(1, 1 - self.false_alarm_rate))
+      snr_db = 20*np.log10(gammaincinv(1, 1 - self.pfa))
       for i in range(n_false_alarms):
         state_vector = np.array([[az[i]],
                                  [el[i]],
