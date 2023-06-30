@@ -1,11 +1,12 @@
 import copy
 from typing import Union
-import numpy as np
+# import numpy as np
+import jax.numpy as jnp
 
 
-def block_diag(mat: np.ndarray,
+def block_diag(mat: jnp.array,
                nreps: int = 1,
-               scale: Union[float, np.ndarray] = 1.0) -> np.ndarray:
+               scale: Union[float, jnp.array] = 1.0) -> jnp.array:
   """
   Create a block diagonal matrix from a 2D array, where the input array is repeated nrep times
 
@@ -24,15 +25,15 @@ def block_diag(mat: np.ndarray,
       A block diagonal matrix
   """
   rows, cols = mat.shape
-  result = np.zeros((nreps * rows, nreps * cols), dtype=mat.dtype)
+  result = jnp.zeros((nreps * rows, nreps * cols))
   # Convert scale to a 1D array of length nreps
   if isinstance(scale, float):
-    scale = np.full(nreps, scale)
-  elif isinstance(scale, np.ndarray):
+    scale = jnp.full(nreps, scale)
+  elif isinstance(scale, jnp.array):
     assert scale.size == nreps, "Scale array must have the same length as nreps"
     
   for i in range(nreps):
-    result[i*rows:(i+1)*rows, i*cols:(i+1)*cols] = mat*scale[i]
+    result = result.at[i*rows:(i+1)*rows, i*cols:(i+1)*cols].set(mat*scale[i])
   
   return result
 

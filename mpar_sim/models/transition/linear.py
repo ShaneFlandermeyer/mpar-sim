@@ -1,7 +1,7 @@
-import datetime
-from typing import Union
+import random
+import jax
 
-import numpy as np
+import jax.numpy as jnp
 
 from mpar_sim.common.matrix import block_diag
 from mpar_sim.models.transition.base import TransitionModel
@@ -58,52 +58,48 @@ class ConstantVelocity(LinearTransitionModel):
                 \end{bmatrix} q
     """
 
-  def __init__(self, ndim_pos=3, noise_diff_coeff=1):
+  def __init__(self,
+               ndim_pos: float = 3,
+               noise_diff_coeff: float = 1,
+               position_mapping: jnp.array = jnp.array([0, 2, 4]),
+               velocity_mapping: jnp.array = jnp.array([1, 3, 5]),
+               seed: int = random.randint(0, 2**32-1)):
     self.ndim_pos = ndim_pos
     self.noise_diff_coeff = noise_diff_coeff
 
-    self.ndim_state = self.ndim_pos*2
-    self.ndim = self.ndim_state
+    self.ndim_state = self.ndim = self.ndim_pos*2
+    self.position_mapping = jnp.array(position_mapping)
+    self.velocity_mapping = jnp.array(velocity_mapping)
+    self.key = jax.random.PRNGKey(seed)
 
-  def function(self,
-               state: np.ndarray,
-               time_interval: Union[float, datetime.timedelta] = 0,
-               noise: Union[bool, np.ndarray] = False,
-               ) -> np.ndarray:
+  def __call__(
+      self,
+      state: jnp.array,
+      dt: float = 0,
+      noise: bool = False
+  ) -> jnp.array:
+    next_state = jnp.dot(self.matrix(dt), state)
     if noise:
-      num_samples = state.shape[1] if state.ndim > 1 else 1
-      noise = self.sample_noise(num_samples=num_samples, time_interval=time_interval)
-      noise = noise.reshape(state.shape)
-    else:
-      noise = 0
+      next_state += self.sample_noise(dt).reshape(state.shape)
+    return next_state
 
-    return np.dot(self.matrix(time_interval), state) + noise
-
-  def matrix(self, time_interval: Union[float, datetime.timedelta]):
-    if isinstance(time_interval, datetime.timedelta):
-      dt = time_interval.total_seconds()
-    else:
-      dt = time_interval
-    F = np.array([[1, dt],
+  def matrix(self, dt: float):
+    F = jnp.array([[1, dt],
                   [0, 1]])
     F = block_diag(F, nreps=self.ndim_pos)
     return F
 
-  def covar(self, time_interval: datetime.timedelta):
-    if isinstance(time_interval, datetime.timedelta):
-      dt = time_interval.total_seconds()
-    else:
-      dt = time_interval
+  def covar(self, dt: float):
     # TODO: Extend this to handle different noise_diff_coeff for each dimension
-    covar = np.array([[dt**3/3, dt**2/2],
+    covar = jnp.array([[dt**3/3, dt**2/2],
                       [dt**2/2, dt]]) * self.noise_diff_coeff
     covar = block_diag(covar, nreps=self.ndim_pos)
     return covar
 
   def sample_noise(self,
-          num_samples: int = 1,
-          time_interval: datetime.timedelta = 0) -> np.ndarray:
-    covar = self.covar(time_interval)
-    noise = np.random.multivariate_normal(
-        np.zeros(self.ndim), covar, num_samples)
-    return np.atleast_2d(noise).T
+                   dt: float = 0) -> jnp.array:
+    covar = self.covar(dt)
+    self.key, subkey = jax.random.split(self.key)
+    noise = jax.random.multivariate_normal(
+          key=subkey, mean=jnp.zeros((self.ndim_state)), cov=covar)
+    return noise
