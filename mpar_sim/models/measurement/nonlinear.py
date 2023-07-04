@@ -12,7 +12,7 @@ class NonlinearMeasurementModel(MeasurementModel):
   """Base class for nonlinear measurement models"""
 
 
-class CartesianToRangeAzElRangeRate(NonlinearMeasurementModel):
+class CartesianToRangeAzElVelocity(NonlinearMeasurementModel):
   r"""This is a class implementation of a time-invariant measurement model, \
     where measurements are assumed to be in the form of elevation \
     (:math:`\theta`),  bearing (:math:`\phi`), range (:math:`r`) and
@@ -100,11 +100,11 @@ class CartesianToRangeAzElRangeRate(NonlinearMeasurementModel):
                # Measurement information
                noise_covar: np.ndarray = np.eye(4),
                range_res: float = 1,
-               range_rate_res: float = 1,
+               velocity_res: float = 1,
                discretize_measurements: bool = False,
                # Ambiguity limits
-               max_unambiguous_range: float = np.inf,
-               max_unambiguous_range_rate: float = np.inf,
+               unambiguous_range: float = np.inf,
+               unambiguous_velocity: float = np.inf,
                alias_measurements: bool = False,
                # State mappings
                position_mapping: List[int] = [0, 2, 4],
@@ -119,12 +119,12 @@ class CartesianToRangeAzElRangeRate(NonlinearMeasurementModel):
     # Measurement parameters
     self.noise_covar = noise_covar
     self.range_res = range_res
-    self.range_rate_res = range_rate_res
+    self.velocity_res = velocity_res
     self.discretize_measurements = discretize_measurements
 
     # Ambiguity limits
-    self.max_unambiguous_range = max_unambiguous_range
-    self.max_unambiguous_range_rate = max_unambiguous_range_rate
+    self.unambiguous_range = unambiguous_range
+    self.unambiguous_velocity = unambiguous_velocity
     self.alias_measurements = alias_measurements
 
     # State mappings
@@ -134,7 +134,7 @@ class CartesianToRangeAzElRangeRate(NonlinearMeasurementModel):
     self.ndim_state = 6
     self.ndim_meas = self.ndim = 4
 
-  def function(self, state: np.ndarray, noise: bool = False):
+  def __call__(self, state: np.ndarray, noise: bool = False):
     r"""Model function :math:`h(\vec{x}_t,\vec{v}_t)`
 
         Parameters
@@ -157,19 +157,11 @@ class CartesianToRangeAzElRangeRate(NonlinearMeasurementModel):
     state = state.reshape((self.ndim_state, -1))
     if state.ndim == 1:
       state = state.reshape((-1, 1))
+    n_inputs = state.shape[1]
 
-    if noise:
-      n_states = state.shape[-1]
-      meas_noise = np.zeros((self.ndim_meas, n_states))
-      for i in range(n_states):
-        if self.noise_covar.ndim > 2:
-          covar = self.noise_covar[..., i]
-        else:
-          covar = self.noise_covar
-        meas_noise[:, i] = np.random.multivariate_normal(
-            np.zeros(self.ndim), covar)
-    else:
-      meas_noise = 0
+    # TODO: This probably breaks if more than one state vector is passed in at a time
+    meas_noise = np.random.multivariate_normal(
+        np.zeros(self.ndim), self.noise_covar, size=n_inputs).T if noise else 0
 
     # Account for origin offset in position to enable range and angles to be determined
     xyz_pos = state[self.position_mapping, :] - \
@@ -188,16 +180,16 @@ class CartesianToRangeAzElRangeRate(NonlinearMeasurementModel):
     out = np.array([az, el, rho, rr]) + meas_noise
     if self.alias_measurements:
       # Add aliasing to the range/range rate if it exceeds the unambiguous limits
-      out[2] = wrap_to_interval(out[2], 0, self.max_unambiguous_range)
+      out[2] = wrap_to_interval(out[2], 0, self.unambiguous_range)
       out[3] = wrap_to_interval(
-          out[3], -self.max_unambiguous_range_rate, self.max_unambiguous_range_rate)
+          out[3], -self.unambiguous_velocity, self.unambiguous_velocity)
     if self.discretize_measurements:
       # Bin the range and range rate to the center of the cell
       out[2] = np.floor(out[2] / self.range_res) * \
           self.range_res + self.range_res/2
-      out[3] = np.floor(out[3] / self.range_rate_res) * \
-          self.range_rate_res + self.range_rate_res/2
-    return out
+      out[3] = np.floor(out[3] / self.velocity_res) * \
+          self.velocity_res + self.velocity_res/2
+    return out if n_inputs > 1 else out.ravel()
 
   def inverse_function(self, measurement: np.ndarray) -> np.ndarray:
     # Compute the cartesian position

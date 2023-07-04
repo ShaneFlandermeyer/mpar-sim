@@ -1,8 +1,8 @@
 import jax.numpy as jnp
 import jax
 from jax.scipy.special import erfc, gammainc
-from scipy.special import factorial
 import random
+from functools import partial
 
 
 class RCSModel():
@@ -56,7 +56,7 @@ class Swerling(RCSModel):
     else:
       raise NotImplementedError
 
-
+@jax.jit
 def logfactorial(n):
   """
   Compute the log factorial of n
@@ -66,7 +66,8 @@ def logfactorial(n):
   m = n*(1 + 4*n*(1 + 2*n))
   return n*(jnp.log(n) - 1) + (1/2)*(1/3*jnp.log(1/30 + m) + jnp.log(jnp.pi))
 
-def threshold(nfa: float, n_pulse: int):
+@jax.jit
+def threshold(nfa: float, n_pulse: int, niter: int = 1):
   """
   This function calculates the threshold value from nfa and np
   using the newton-Raphson recursive formula
@@ -77,6 +78,8 @@ def threshold(nfa: float, n_pulse: int):
       Number of false alarms
   npulse : int
       Number of pulses
+  niter : int
+      Number of iterations
   """
   eps = jnp.finfo(float).eps
   pfa = n_pulse * jnp.log(2) / nfa
@@ -84,20 +87,16 @@ def threshold(nfa: float, n_pulse: int):
   vt0 = n_pulse - jnp.sqrt(n_pulse) + 2.3 * sqrt_pfa * \
       (sqrt_pfa + jnp.sqrt(n_pulse) - 1.0)
   vt = vt0
-  while True:
+  for _ in range(niter):
     igf = gammainc(n_pulse, vt0)
     num = 0.5**(n_pulse/nfa) - igf
-    if n_pulse == 1:
-      den = -jnp.exp(-vt0) * vt0**(n_pulse-1) / factorial(n_pulse-1)
-    else:
-      den = -jnp.exp(-vt0 + jnp.log(vt0)*(n_pulse-1) - logfactorial(n_pulse-1))
+    den = -jnp.exp(-vt0 + jnp.log(vt0)*(n_pulse-1) - 
+                   logfactorial(n_pulse-1+eps))
     vt = vt0 - (num / (den + eps))
-    delta = abs(vt - vt0)
     vt0 = vt
-    if jnp.all(delta < 1e-4*vt0):
-      break
   return vt
 
+@partial(jax.jit, static_argnames=['n_pulse'])
 def pd_swerling0(pfa: float, n_pulse: float, snr_db: float) -> float:
   """
   Compute the probability of detection for a swerling 0/5 target for non-coherently integrated pulses.
@@ -133,6 +132,7 @@ def pd_swerling0(pfa: float, n_pulse: float, snr_db: float) -> float:
 
   return pd
 
+@partial(jax.jit, static_argnames=['n_pulse'])
 def pd_swerling1(pfa: float, n_pulse: float, snr_db: float) -> float:
   """
   Compute the probability of detection for a swerling 1 target for non-coherently integrated pulses.
@@ -162,6 +162,7 @@ def pd_swerling1(pfa: float, n_pulse: float, snr_db: float) -> float:
 
   return pd
 
+@partial(jax.jit, static_argnames=['n_pulse'])
 def pd_swerling2(pfa: float, n_pulse: float, snr_db: float) -> float:
   """
   Compute the probability of detection for a swerling 2 target for non-coherently integrated pulses.
@@ -196,6 +197,7 @@ def pd_swerling2(pfa: float, n_pulse: float, snr_db: float) -> float:
 
   return pd
 
+@jax.jit
 def pd_swerling3(pfa: float, n_pulse: float, snr_db: float) -> float:
   """
   Compute the probability of detection for a swerling 3 target for non-coherently integrated pulses.
@@ -223,3 +225,7 @@ def pd_swerling3(pfa: float, n_pulse: float, snr_db: float) -> float:
 def pd_swerling4(pfa: float, n_pulse: float, snr_db: float) -> float:
   # TODO: This equation is computationally complex. Not sure if it's worth implementing
   pass
+
+if __name__ == '__main__':
+  t = threshold(nfa=1, n_pulse=1)
+  print(pd_swerling3(pfa=1e-8, n_pulse=10, snr_db=10))

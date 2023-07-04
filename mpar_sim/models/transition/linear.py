@@ -1,3 +1,4 @@
+import functools
 import random
 import jax
 
@@ -5,6 +6,7 @@ import jax.numpy as jnp
 
 from mpar_sim.common.matrix import block_diag
 from mpar_sim.models.transition.base import TransitionModel
+import jax
 
 
 class LinearTransitionModel(TransitionModel):
@@ -83,12 +85,14 @@ class ConstantVelocity(LinearTransitionModel):
       next_state += self.sample_noise(dt).reshape(state.shape)
     return next_state
 
+  @functools.partial(jax.jit, static_argnums=0)
   def matrix(self, dt: float):
     F = jnp.array([[1, dt],
                   [0, 1]])
     F = block_diag(F, nreps=self.ndim_pos)
     return F
 
+  @functools.partial(jax.jit, static_argnums=0)
   def covar(self, dt: float):
     # TODO: Extend this to handle different noise_diff_coeff for each dimension
     covar = jnp.array([[dt**3/3, dt**2/2],
@@ -96,6 +100,7 @@ class ConstantVelocity(LinearTransitionModel):
     covar = block_diag(covar, nreps=self.ndim_pos)
     return covar
 
+  @functools.partial(jax.jit, static_argnums=0)
   def sample_noise(self,
                    dt: float = 0) -> jnp.array:
     covar = self.covar(dt)

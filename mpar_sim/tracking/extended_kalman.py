@@ -84,7 +84,7 @@ def extended_kalman_update(state: np.ndarray,
   state = state.ravel()
   measurement = measurement.ravel()
   # Compute the residual
-  prior_measurement = measurement_model.function(state)
+  prior_measurement = measurement_model(state, noise=False)
   # TODO: This does not handle aliasing of angles properly
   residual = measurement - prior_measurement.ravel()
 

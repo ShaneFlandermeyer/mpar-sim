@@ -15,4 +15,6 @@ if __name__ == '__main__':
   print(t.position)
   t.move(dt=1, noise=True)
   print(t.position)
-  # print(t.detection_probability(pfa=1e-8, n_pulse=10, snr_db=10))
+  # print(t.detection_probability(pfa=1e-8, n_pulse=10, snr_db=
+  # 
+  # 10))

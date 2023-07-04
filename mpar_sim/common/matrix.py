@@ -1,12 +1,13 @@
 import copy
 from typing import Union
-# import numpy as np
+import jax
 import jax.numpy as jnp
+from functools import partial
 
-
+@partial(jax.jit, static_argnames=['nreps'])
 def block_diag(mat: jnp.array,
                nreps: int = 1,
-               scale: Union[float, jnp.array] = 1.0) -> jnp.array:
+               ) -> jnp.array:
   """
   Create a block diagonal matrix from a 2D array, where the input array is repeated nrep times
 
@@ -16,25 +17,17 @@ def block_diag(mat: jnp.array,
       Array to repeat
   nreps : int, optional
       Number of repetitions of the matrix, by default 1
-  scale: Union[float, np.ndarray]
-      Scale factors for each block in the matrix. If this value is a scalar, the same scale factor is applies to all matrices
 
-  Returns
+Returns
   -------
   np.ndarray
       A block diagonal matrix
   """
   rows, cols = mat.shape
-  result = jnp.zeros((nreps * rows, nreps * cols))
-  # Convert scale to a 1D array of length nreps
-  if isinstance(scale, float):
-    scale = jnp.full(nreps, scale)
-  elif isinstance(scale, jnp.array):
-    assert scale.size == nreps, "Scale array must have the same length as nreps"
-    
+  result = jnp.zeros((nreps * rows, nreps * cols), dtype=mat.dtype)
   for i in range(nreps):
-    result = result.at[i*rows:(i+1)*rows, i*cols:(i+1)*cols].set(mat*scale[i])
-  
+    result = result.at[i*rows:(i+1)*rows, i*cols:(i+1)*cols].set(mat)
+
   return result
 
 
@@ -55,13 +48,13 @@ def jacobian(func, x, **kwargs):
     jac: :class:`numpy.ndarray` of shape `(Nd, Ns)`
         The computed Jacobian
   """
-  ndim, _ = np.shape(x)
+  ndim, _ = jnp.shape(x)
 
   # For numerical reasons the step size needs to large enough. Aim for 1e-8
   # relative to spacing between floating point numbers for each dimension
-  delta = 1e8*np.spacing(x.astype(np.double).ravel())
+  delta = 1e8*jnp.spacing(x.astype(jnp.double).ravel())
   delta[delta < 1e-8] = 1e-8
-  x2 = np.tile(x, ndim+1) + np.eye(ndim, ndim+1)*delta[:, np.newaxis]
+  x2 = jnp.tile(x, ndim+1) + jnp.eye(ndim, ndim+1)*delta[:, jnp.newaxis]
   F = func(x2, **kwargs)
   jac = (F[:, :ndim] - F[:, -1:]) / delta
-  return jac.astype(np.double)
+  return jac.astype(jnp.double)

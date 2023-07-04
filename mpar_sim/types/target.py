@@ -1,4 +1,5 @@
 from typing import Union
+import jax
 import jax.numpy as jnp
 from mpar_sim.models.transition.base import TransitionModel
 from mpar_sim.models.rcs import RCSModel, Swerling
@@ -14,8 +15,8 @@ class Target():
       rcs: Union[RCSModel, float] = None,
       seed: int = random.randint(0, 2**32-1)
   ) -> None:
-    self.position = position
-    self.velocity = velocity
+    self.position = jnp.array(position)
+    self.velocity = jnp.array(velocity)
     self.transition_model = transition_model
     self.rcs_model = rcs
     if isinstance(self.rcs_model, float):
