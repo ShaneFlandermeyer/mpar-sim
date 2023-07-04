@@ -18,24 +18,28 @@ class TestVolumeSearchManager():
   def test_init(self, manager: VolumeSearchManager):
     assert len(manager.az_points) == 56
     assert len(manager.el_points) == 56
-    
+
   def test_generate_looks(self, manager: VolumeSearchManager):
     time = 0
     looks = manager.generate_looks(time)
-    
+
     # Check the results
     assert len(looks) == 1
     assert looks[0].start_time == time
-    assert looks[0].azimuth_steering_angle == -52.03464462683514
-    assert looks[0].elevation_steering_angle == -26.973393595542024
-    
+    assert np.allclose(
+        looks[0].azimuth_steering_angle, -52.03464462683514, atol=1e-4)
+    assert np.allclose(
+        looks[0].elevation_steering_angle, -26.973393595542024, atol=1e-4)
+
     # Do another look to ensure the position increments as expected
     time += 1
     looks = manager.generate_looks(time)
     assert len(looks) == 1
     assert looks[0].start_time == time
-    assert looks[0].azimuth_steering_angle == -41.070390641104545
-    assert looks[0].elevation_steering_angle == -26.973393595542024
+    assert np.allclose(
+        looks[0].azimuth_steering_angle, -41.070390641104545, atol=1e-4)
+    assert np.allclose(
+        looks[0].elevation_steering_angle, -26.973393595542024, atol=1e-4)
 
 
 def test_raster_grid():

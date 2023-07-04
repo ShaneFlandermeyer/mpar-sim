@@ -6,7 +6,6 @@ from typing import Callable, List, Optional, Union
 
 import jax
 import jax.numpy as jnp
-# import numpy as np
 from jax.scipy.spatial.transform import Rotation
 from scipy import constants
 from scipy.special import gammaincinv
@@ -188,7 +187,7 @@ class PhasedArrayRadar():
 
   def measure(self,
               targets: List[Target],
-              noise: bool = True,
+              noise: bool = False,
               timestamp: float = None):
     # TODO: Convert to jax
     # TODO: Get the relative position by rotating into the radar frame
@@ -228,8 +227,8 @@ class PhasedArrayRadar():
             translation_offset=self.position,
             rotation_offset=self.rotation_offset,
             velocity=self.velocity,
-            range_res=self.range_resolution,
-            velocity_res=self.velocity_resolution,
+            range_resolution=self.range_resolution,
+            velocity_resolution=self.velocity_resolution,
             discretize_measurements=self.discretize_measurements,
             unambiguous_range=self.unambiguous_range,
             unambiguous_velocity=self.unambiguous_velocity,
@@ -322,19 +321,19 @@ class PhasedArrayRadar():
     az = jax.random.uniform(subkeys[0],
                             minval=-self.tx_beam.azimuth_beamwidth/2,
                             maxval=self.tx_beam.azimuth_beamwidth/2,
-                            size=n_false_alarms) + self.tx_beam.azimuth_steering_angle
+                            shape=(n_false_alarms,)) + self.tx_beam.azimuth_steering_angle
     el = jax.random.uniform(subkeys[1],
                             minval=-self.tx_beam.elevation_beamwidth/2,
                             maxval=self.tx_beam.elevation_beamwidth/2,
-                            size=n_false_alarms) + self.tx_beam.elevation_steering_angle
+                            shape=(n_false_alarms,)) + self.tx_beam.elevation_steering_angle
     r = jax.random.uniform(subkeys[2],
                            minval=0,
                            maxval=self.unambiguous_range,
-                           size=n_false_alarms)
+                           shape=(n_false_alarms,))
     v = jax.random.uniform(subkeys[3],
                            minval=-self.unambiguous_velocity,
                            maxval=self.unambiguous_velocity,
-                           size=n_false_alarms)
+                           shape=(n_false_alarms,))
 
     # Discretize false alarm measurements
     if self.discretize_measurements:
@@ -358,26 +357,26 @@ class PhasedArrayRadar():
 
 if __name__ == '__main__':
   radar = PhasedArrayRadar(
-      include_false_alarms=True,
-      alias_measurements=False,
-      discretize_measurements=False,
+      include_false_alarms=False,
+      alias_measurements=True,
+      discretize_measurements=True,
   )
   look = Look(
-      azimuth_beamwidth=3,
-      elevation_beamwidth=3,
+      azimuth_beamwidth=55,
+      elevation_beamwidth=55,
       azimuth_steering_angle=0,
       elevation_steering_angle=0,
       center_frequency=1e9,
       bandwidth=100e6,
       pulsewidth=10e-6,
       prf=5e3,
-      n_pulses=10)
+      n_pulses=100e3)
   radar.load_look(look)
-  targets = [Target(position=[100e3, 0, 0],
+  targets = [Target(position=[100, 0, 50],
                     velocity=[100, 0, 0],
                     transition_model=ConstantVelocity(
       ndim_pos=3, noise_diff_coeff=1),
-      rcs=Swerling(case=0, mean=1)) for _ in range(2)]
+      rcs=Swerling(case=0, mean=1)) for _ in range(1)]
   detections = radar.measure(targets)
   print(detections[0].snr)
   detections = radar.measure(targets)
