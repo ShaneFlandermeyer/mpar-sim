@@ -1,13 +1,8 @@
-import copy
-from typing import Union
-import jax
-import jax.numpy as jnp
-from functools import partial
+import numpy as np
 
-@partial(jax.jit, static_argnames=['nreps'])
-def block_diag(mat: jnp.array,
+def block_diag(mat: np.array,
                nreps: int = 1,
-               ) -> jnp.array:
+               ) -> np.array:
   """
   Create a block diagonal matrix from a 2D array, where the input array is repeated nrep times
 
@@ -24,9 +19,9 @@ Returns
       A block diagonal matrix
   """
   rows, cols = mat.shape
-  result = jnp.zeros((nreps * rows, nreps * cols), dtype=mat.dtype)
+  result = np.zeros((nreps * rows, nreps * cols), dtype=mat.dtype)
   for i in range(nreps):
-    result = result.at[i*rows:(i+1)*rows, i*cols:(i+1)*cols].set(mat)
+    result[i*rows:(i+1)*rows, i*cols:(i+1)*cols] = mat
 
   return result
 
@@ -48,13 +43,13 @@ def jacobian(func, x, **kwargs):
     jac: :class:`numpy.ndarray` of shape `(Nd, Ns)`
         The computed Jacobian
   """
-  ndim, _ = jnp.shape(x)
+  ndim, _ = np.shape(x)
 
   # For numerical reasons the step size needs to large enough. Aim for 1e-8
   # relative to spacing between floating point numbers for each dimension
-  delta = 1e8*jnp.spacing(x.astype(jnp.double).ravel())
+  delta = 1e8*np.spacing(x.astype(np.double).ravel())
   delta[delta < 1e-8] = 1e-8
-  x2 = jnp.tile(x, ndim+1) + jnp.eye(ndim, ndim+1)*delta[:, jnp.newaxis]
+  x2 = np.tile(x, ndim+1) + np.eye(ndim, ndim+1)*delta[:, np.newaxis]
   F = func(x2, **kwargs)
   jac = (F[:, :ndim] - F[:, -1:]) / delta
-  return jac.astype(jnp.double)
+  return jac.astype(np.double)

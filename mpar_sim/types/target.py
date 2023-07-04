@@ -1,6 +1,6 @@
 from typing import Union
 import jax
-import jax.numpy as jnp
+import numpy as np
 from mpar_sim.models.transition.base import TransitionModel
 from mpar_sim.models.rcs import RCSModel, Swerling
 import random
@@ -9,14 +9,14 @@ import random
 class Target():
   def __init__(
       self,
-      position: jnp.array = None,
-      velocity: jnp.array = None,
+      position: np.array = None,
+      velocity: np.array = None,
       transition_model: TransitionModel = None,
       rcs: Union[RCSModel, float] = None,
       seed: int = random.randint(0, 2**32-1)
   ) -> None:
-    self.position = jnp.array(position)
-    self.velocity = jnp.array(velocity)
+    self.position = np.array(position)
+    self.velocity = np.array(velocity)
     self.transition_model = transition_model
     self.rcs_model = rcs
     if isinstance(self.rcs_model, float):
@@ -26,9 +26,9 @@ class Target():
     # Collect state vector
     pos_inds = self.transition_model.position_mapping
     vel_inds = self.transition_model.velocity_mapping
-    state = jnp.zeros(self.transition_model.ndim_state)
-    state = state.at[pos_inds].set(self.position.ravel())
-    state = state.at[vel_inds].set(self.velocity.ravel())
+    state = np.zeros(self.transition_model.ndim_state)
+    state[pos_inds] = self.position.ravel()
+    state[vel_inds] = self.velocity.ravel()
     # Pass to transition model and update the target state
     state = self.transition_model(state=state, **kwargs)
     self.position = state[self.transition_model.position_mapping].reshape(
@@ -37,7 +37,7 @@ class Target():
         self.velocity.shape)
 
   @property
-  def rcs(self, **kwargs) -> jnp.array:
+  def rcs(self, **kwargs) -> np.array:
     return self.rcs_model(**kwargs)
 
   def detection_probability(self, pfa, n_pulse, snr_db) -> float:

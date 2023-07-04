@@ -1,15 +1,16 @@
 
+import functools
 import random
 from typing import List, Optional
+
+import jax
 
 from mpar_sim.common import wrap_to_interval
 from mpar_sim.common.coordinate_transform import cart2sph, rotx, roty, rotz, sph2cart
 from mpar_sim.common.matrix import jacobian
 from mpar_sim.models.measurement.base import MeasurementModel
-import jax
-import jax.numpy as jnp
-from jax.scipy.spatial.transform import Rotation
-
+from scipy.spatial.transform import Rotation
+import numpy as np
 
 class NonlinearMeasurementModel(MeasurementModel):
   """Base class for nonlinear measurement models"""
@@ -97,12 +98,12 @@ class CartesianToRangeAzElVelocity(NonlinearMeasurementModel):
 
   def __init__(self,
                # Sensor kinematic information
-               translation_offset: jnp.array = jnp.zeros((3,)),
-               rotation_offset: jnp.array = jnp.zeros((3,)),
-               velocity: jnp.array = jnp.zeros((3,)),
+               translation_offset: np.ndarray = np.zeros((3,)),
+               rotation_offset: np.ndarray = np.zeros((3,)),
+               velocity: np.ndarray = np.zeros((3,)),
                rotation_sequence: str = 'zyx',
                # Measurement information
-               noise_covar: jnp.array = jnp.eye(4),
+               noise_covar: np.ndarray = np.eye(4),
                range_resolution: float = None,
                velocity_resolution: float = None,
                # Ambiguity limits
@@ -140,14 +141,14 @@ class CartesianToRangeAzElVelocity(NonlinearMeasurementModel):
     self.ndim_meas = self.ndim = 4
     
     self.key = jax.random.PRNGKey(seed)
-    
+
   @property
   def rotation(self):
     return Rotation.from_euler(self.rotation_sequence, 
-                        jnp.array(self.rotation_offset).ravel(), 
+                        np.array(self.rotation_offset).ravel(), 
                         degrees=True)
 
-  def __call__(self, state: jnp.array, noise: bool = False):
+  def __call__(self, state: np.array, noise: bool = False):
     r"""Model function :math:`h(\vec{x}_t,\vec{v}_t)`
 
         Parameters
@@ -167,15 +168,13 @@ class CartesianToRangeAzElVelocity(NonlinearMeasurementModel):
             The model function evaluated given the provided time interval.
 
     """
-    state = state.reshape((self.ndim_state, -1))
-    if state.ndim == 1:
-      state = state.reshape((-1, 1))
-    n_inputs = state.shape[1]
-
+    n_inputs = state.shape[1] if state.ndim > 1 else 1
+    state = state.reshape((self.ndim_state, n_inputs))
+    
     # TODO: This probably breaks if more than one state vector is passed in at a time
     self.key, subkey = jax.random.split(self.key)
     meas_noise = jax.random.multivariate_normal(subkey,
-      jnp.zeros(self.ndim), self.noise_covar, shape=(n_inputs,)).T if noise else 0
+      np.zeros(self.ndim), self.noise_covar, shape=(n_inputs,)).T if noise else 0
 
     # Account for origin offset in position to enable range and angles to be determined
     xyz_pos = state[self.position_mapping, :] - \
@@ -187,90 +186,87 @@ class CartesianToRangeAzElVelocity(NonlinearMeasurementModel):
     # Determine the net velocity component in the engagement
     xyz_vel = state[self.velocity_mapping, :] - self.velocity.reshape((-1, 1))
     # Use polar to calculate range rate
-    velocity = jnp.einsum('ij, ij->j', xyz_pos, xyz_vel) / \
-        jnp.linalg.norm(xyz_pos, axis=0)
+    velocity = np.einsum('ij, ij->j', xyz_pos, xyz_vel) / \
+        np.linalg.norm(xyz_pos, axis=0)
 
-    out = jnp.array([az, el, rho, velocity]) + meas_noise
+    out = np.array([az, el, rho, velocity]) + meas_noise
     if self.alias_measurements:
       # Add aliasing to the range/range rate if it exceeds the unambiguous limits
-      out = out.at[2].set(wrap_to_interval(out[2], 0, self.unambiguous_range))
-      out = out.at[3].set(wrap_to_interval(
-          out[3], -self.unambiguous_velocity, self.unambiguous_velocity))
+      out[2] = wrap_to_interval(out[2], 0, self.unambiguous_range)
+      out[3] = wrap_to_interval(
+          out[3], -self.unambiguous_velocity, self.unambiguous_velocity)
     if self.discretize_measurements:
       # Bin the range and range rate to the center of the cell
-      out = out.at[2].set(jnp.floor(out[2] / self.range_res) * \
-          self.range_res + self.range_res/2)
-      out = out.at[3].set(jnp.floor(out[3] / self.velocity_res) * \
-          self.velocity_res + self.velocity_res/2)
+      out[2] = np.floor(out[2] / self.range_res) * \
+          self.range_res + self.range_res/2
+      out[3] = np.floor(out[3] / self.velocity_res) * \
+          self.velocity_res + self.velocity_res/2
     return out if n_inputs > 1 else out.ravel()
 
-  def inverse_function(self, measurement: jnp.array) -> jnp.array:
+  def inverse_function(self, measurement: np.array) -> np.array:
     # Compute the cartesian position
     azimuth, elevation, range, range_rate = measurement.reshape(-1, 1)
     x, y, z = sph2cart(azimuth, elevation, range, degrees=True)
 
     # Back out the velocity from the range rate
-    radar_to_meas = jnp.array([x, y, z]).reshape(-1, 1)
-    radar_to_meas_norm = radar_to_meas / jnp.linalg.norm(radar_to_meas)
+    radar_to_meas = np.array([x, y, z]).reshape(-1, 1)
+    radar_to_meas_norm = radar_to_meas / np.linalg.norm(radar_to_meas)
     velocity = range_rate * radar_to_meas_norm + self.velocity.reshape(-1, 1)
 
     # Form the state vector from the measurement function
-    out_vector = jnp.zeros((self.ndim_state, 1))
-    pos_inds = jnp.array(self.position_mapping)
-    vel_inds = jnp.array(self.velocity_mapping)
-    out_vector = out_vector.at[pos_inds].set(jnp.array([x, y, z]))
-    out_vector = out_vector.at[vel_inds].set(velocity)
+    out_vector = np.zeros((self.ndim_state, 1))
+    pos_inds = np.array(self.position_mapping)
+    vel_inds = np.array(self.velocity_mapping)
+    out_vector[pos_inds] = x, y, z
+    out_vector[vel_inds] = velocity
 
     # Rotate the result from the radar frame back into the "global" frame
-    # TODO: Use the rotation object to fix this
     rotation = self.rotation
-    # inv_rotation_matrix = jnp.linalg.inv(self.rotation_matrix)
-    out_vector = out_vector.at[pos_inds].set(rotation.apply(out_vector[pos_inds].T, inverse=True).T)
-    out_vector = out_vector.at[vel_inds].set(rotation.apply(out_vector[vel_inds].T, inverse=True).T)
-    out_vector = out_vector.at[pos_inds].set(out_vector[pos_inds] + \
-      self.translation_offset.reshape(out_vector[pos_inds].shape))
+    out_vector[pos_inds] = rotation.apply(
+      out_vector[pos_inds].T, inverse=True).T
+    out_vector[vel_inds] = rotation.apply(
+      out_vector[vel_inds].T, inverse=True).T
+    out_vector[pos_inds] += self.translation_offset.reshape((-1, 1))
 
     return out_vector
 
   def covar(self):
     return self.noise_covar
 
-  def jacobian(self, state: Optional[jnp.ndarray]) -> jnp.ndarray:
-    jacobian = jnp.zeros((self.ndim_meas, self.ndim_state))
+  def jacobian(self, state: Optional[np.ndarray]) -> np.ndarray:
+    jacobian = np.zeros((self.ndim_meas, self.ndim_state))
 
     # Compute position portion of jacobian
     # TODO: Check that r_xy and r_xyz > 0.
     rotation = self.rotation
-    pos = state[self.position_mapping, ...].ravel()
+    pos = state[self.position_mapping].ravel()
     relative_pos = pos - self.translation_offset.ravel()
     relative_pos = rotation.apply(relative_pos)
     x, y, z = relative_pos
-    r_xy = jnp.sqrt(x**2 + y**2)
-    r_xyz = jnp.sqrt(x**2 + y**2 + z**2)
-    A = jnp.zeros((3, 3))
-    # TODO: Change rotation matrix to the actual rotation object
-    A = A.at[0,:].set(rotation.apply(jnp.array([-y, x, 0]) / r_xy**2))
-    A = A.at[1,:].set(rotation.apply(jnp.array([-x*z, -y*z, r_xy**2]) / (r_xy * r_xyz**2)))
-    A = A.at[2,:].set(rotation.apply(jnp.array([x, y, z]) / r_xyz))
+    r_xy = np.sqrt(x**2 + y**2)
+    r_xyz = np.sqrt(x**2 + y**2 + z**2)
+    A = np.zeros((3, 3))
+    A[0,:] = rotation.apply(np.array([-y, x, 0]) / r_xy**2)
+    A[1,:] = rotation.apply(np.array([-x*z, -y*z, r_xy**2]) / (r_xy * r_xyz**2))
+    A[2,:] = rotation.apply(np.array([x, y, z]) / r_xyz)
     # Convert to degrees and store the result
-    A = A.at[:2, :].set(jnp.rad2deg(A[:2, :]))
-    jacobian = jacobian.at[:-1, ::2].set(A)
-    # jacobian[:-1, ::2] = A
+    A[:2, :] = np.rad2deg(A[:2, :])
+    jacobian[:-1, ::2] = A
 
     # Compute range rate portion of jacobian
     # TODO: Check that r > 0
-    vel = state[self.velocity_mapping, ...].ravel()
+    vel = state[self.velocity_mapping].ravel()
     relative_vel = vel - self.velocity.ravel()
     rdot_to_x = (relative_vel[0] * r_xyz -
-                 jnp.dot(relative_pos, relative_vel) * x / r_xyz) / r_xyz**2
+                 np.dot(relative_pos, relative_vel) * x / r_xyz) / r_xyz**2
     rdot_to_xdot = x / r_xyz
-    rdot_to_y = (relative_vel[1] * r_xyz - jnp.dot(relative_pos, relative_vel) *
+    rdot_to_y = (relative_vel[1] * r_xyz - np.dot(relative_pos, relative_vel) *
                  y / r_xyz) / r_xyz**2
     rdot_to_ydot = y / r_xyz
-    rdot_to_z = (relative_vel[2] * r_xyz - jnp.dot(relative_pos, relative_vel) *
+    rdot_to_z = (relative_vel[2] * r_xyz - np.dot(relative_pos, relative_vel) *
                  z / r_xyz) / r_xyz**2
     rdot_to_zdot = z / r_xyz
-    jacobian = jacobian.at[-1, :].set(jnp.array([rdot_to_x, rdot_to_xdot,
-                       rdot_to_y, rdot_to_ydot, rdot_to_z, rdot_to_zdot]))
+    jacobian[-1, :] = np.array([rdot_to_x, rdot_to_xdot,
+                       rdot_to_y, rdot_to_ydot, rdot_to_z, rdot_to_zdot])
 
     return jacobian

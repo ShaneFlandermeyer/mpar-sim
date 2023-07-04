@@ -5,8 +5,7 @@ from functools import cached_property
 from typing import Callable, List, Optional, Union
 
 import jax
-import jax.numpy as jnp
-from jax.scipy.spatial.transform import Rotation
+from scipy.spatial.transform import Rotation
 from scipy import constants
 from scipy.special import gammaincinv
 
@@ -23,6 +22,7 @@ from mpar_sim.models.transition.linear import ConstantVelocity
 from mpar_sim.types.detection import Clutter, TrueDetection
 from mpar_sim.types.look import Look
 from mpar_sim.types.target import Target
+import numpy as np
 
 
 class PhasedArrayRadar():
@@ -31,9 +31,9 @@ class PhasedArrayRadar():
   def __init__(self,
                # Motion and orientation parameters
                ndim_state: int = 6,
-               position: jnp.ndarray = jnp.zeros((3,)),
-               velocity: jnp.ndarray = jnp.zeros((3,)),
-               rotation_offset: jnp.ndarray = jnp.zeros((3, 1)),
+               position: np.ndarray = np.zeros((3,)),
+               velocity: np.ndarray = np.zeros((3,)),
+               rotation_offset: np.ndarray = np.zeros((3, 1)),
                position_mapping: List[int] = [0, 2, 4],
                velocity_mapping: List[int] = [1, 3, 5],
                measurement_model: MeasurementModel = None,
@@ -112,7 +112,8 @@ class PhasedArrayRadar():
 
   @property
   def global_to_antenna(self):
-    ypr = jnp.array(self.rotation_offset).at[1].set(-self.rotation_offset[1])
+    ypr = self.rotation_offset
+    ypr[1] = -ypr[1]
     return Rotation.from_euler('zyx', ypr.ravel(), degrees=True).inv()
 
   def load_look(self, look: Look):
@@ -168,58 +169,55 @@ class PhasedArrayRadar():
     if look.tx_power:
       self.tx_power = look.tx_power
     else:
-      beamwidths = jnp.array(
+      beamwidths = np.array(
           [look.azimuth_beamwidth, look.elevation_beamwidth])
       tx_aperture_size = beamwidth2aperture(
           beamwidths, self.wavelength) / self.wavelength
-      n_tx_elements = jnp.prod(jnp.ceil(
+      n_tx_elements = np.prod(np.ceil(
           tx_aperture_size / self.element_spacing).astype(int))
       self.tx_power = n_tx_elements * self.element_tx_power
 
-    # Compute the loop gain, which is the portion of the SNR computation that does not depend on the target RCS or range.
-    # TODO: With the Swerling probability of detection computations, we do not need to include the number of pulses in the loop gain computation (Pd's assume single-pulse SNR).
+    # Compute the loop gain, which is the portion of the single-pulse SNR computation that does not depend on the target RCS or range.
     pulse_compression_gain = look.bandwidth * look.pulsewidth
     noise_power = constants.Boltzmann * self.system_temperature * \
         10**(self.noise_figure/10) * self.sample_rate
     self.loop_gain = self.tx_power * pulse_compression_gain * \
         10**(self.element_gain/10) * self.tx_beam.gain * self.rx_beam.gain * \
-        self.wavelength**2 / ((4*jnp.pi)**3 * noise_power)
+        self.wavelength**2 / ((4*np.pi)**3 * noise_power)
 
   def measure(self,
               targets: List[Target],
               noise: bool = False,
               timestamp: float = None):
-    # TODO: Convert to jax
-    # TODO: Get the relative position by rotating into the radar frame
+    # Compute spherical target positions in the radar coordinate frame
     n_targets = len(targets)
-    positions = jnp.array(
+    positions = np.array(
         [target.position for target in targets]).reshape((n_targets, -1))
     relative_pos = positions - self.position.reshape((1, -1))
     relative_pos = self.global_to_antenna.apply(relative_pos)
     [target_az, target_el, target_r] = cart2sph(*relative_pos.T, degrees=True)
-
     relative_az = target_az - self.tx_beam.azimuth_steering_angle
     relative_el = target_el - self.tx_beam.elevation_steering_angle
 
     # Compute SNR/probability of detection
     # TODO: This may vary on each pulse, depending on the target model
-    rcs = jnp.array([target.rcs for target in targets])
+    rcs = np.array([target.rcs for target in targets])
     beam_shape_loss = self.tx_beam.shape_loss(relative_az, relative_el)
     scan_loss = beam_scan_loss(relative_az, relative_el)
-    single_pulse_snr_db = 10*jnp.log10(self.loop_gain) + 10*jnp.log10(
-        rcs) - 40*jnp.log10(target_r) - beam_shape_loss - scan_loss
+    single_pulse_snr_db = 10*np.log10(self.loop_gain) + 10*np.log10(
+        rcs) - 40*np.log10(target_r) - beam_shape_loss - scan_loss
 
-    pd = jnp.empty((n_targets, ))
+    pd = np.empty((n_targets, ))
     for i, target in enumerate(targets):
-      pd = pd.at[i].set(target.detection_probability(
-          pfa=self.pfa, n_pulse=self.n_pulses, snr_db=single_pulse_snr_db[i]))
+      pd[i] = target.detection_probability(
+          pfa=self.pfa, n_pulse=self.n_pulses, snr_db=single_pulse_snr_db[i])
     self.key, subkey = jax.random.split(self.key)
     is_detected = jax.random.uniform(subkey, shape=(n_targets,)) < pd
-    n_detections = jnp.count_nonzero(is_detected)
+    n_detections = np.count_nonzero(is_detected)
 
     if n_detections > 0:
       positions = positions[is_detected]
-      velocities = jnp.array([target.velocity for target in targets]).reshape(
+      velocities = np.array([target.velocity for target in targets]).reshape(
           (n_targets, -1))[is_detected]
       if self.measurement_model is None:
         # Create the measurement models based on SNR and resolutions
@@ -234,18 +232,18 @@ class PhasedArrayRadar():
             unambiguous_velocity=self.unambiguous_velocity,
             alias_measurements=self.alias_measurements,
         )
-        pos_inds = jnp.array(measurement_model.position_mapping)
-        vel_inds = jnp.array(measurement_model.velocity_mapping)
-        state_vectors = jnp.zeros((self.ndim_state, n_detections))
-        state_vectors = state_vectors.at[pos_inds].set(positions.T)
-        state_vectors = state_vectors.at[vel_inds].set(velocities.T)
-        measurements = jnp.empty((measurement_model.ndim_meas, n_detections))
+        pos_inds = np.array(measurement_model.position_mapping)
+        vel_inds = np.array(measurement_model.velocity_mapping)
+        state_vectors = np.zeros((self.ndim_state, n_detections))
+        state_vectors[pos_inds] = positions.T
+        state_vectors[vel_inds] = velocities.T
+        measurements = np.empty((measurement_model.ndim_meas, n_detections))
 
         # Compute errors in each measurement dimension
         single_pulse_snr = 10**(single_pulse_snr_db/10)
         # Coherent integration SNR
         snr = single_pulse_snr * self.n_pulses
-        snr_db = 10*jnp.log10(snr)
+        snr_db = 10*np.log10(snr)
         # The CRLB uses the RMS bandwidth. Assuming an LFM waveform with a rectangular spectrum, B_rms = B / sqrt(12)
         rms_bandwidth = self.bandwidth / math.sqrt(12)
         rms_range_res = constants.c / (2 * rms_bandwidth)
@@ -269,19 +267,19 @@ class PhasedArrayRadar():
         detections = []
         detection_inds = is_detected.nonzero()[0]
         for i in range(n_detections):
-          measurement_model.noise_covar = jnp.diag(
-              jnp.array([az_variance[i],
+          measurement_model.noise_covar = np.diag(
+              np.array([az_variance[i],
                          el_variance[i],
                          range_variance[i],
                          vel_variance[i]]))
-          measurements = measurements.at[:, i].set(measurement_model(
-              state_vectors[:, i], noise=noise))
+          measurements[:, i] = measurement_model(
+            state_vectors[:, i], noise=noise)
       else:
-        pos_inds = jnp.array(measurement_model.position_mapping)
-        vel_inds = jnp.array(measurement_model.velocity_mapping)
-        state_vectors = jnp.zeros((self.ndim_state, n_detections))
-        state_vectors = state_vectors.at[pos_inds].set(positions.T)
-        state_vectors = state_vectors.at[vel_inds].set(velocities.T)
+        pos_inds = np.array(measurement_model.position_mapping)
+        vel_inds = np.array(measurement_model.velocity_mapping)
+        state_vectors = np.zeros((self.ndim_state, n_detections))
+        state_vectors[pos_inds] = positions.T
+        state_vectors[vel_inds] = velocities.T
         measurements = self.measurement_model(state_vectors, noise=noise)
 
     detections = []
@@ -337,16 +335,16 @@ class PhasedArrayRadar():
 
     # Discretize false alarm measurements
     if self.discretize_measurements:
-      r = jnp.floor(r / self.range_resolution) * \
+      r = np.floor(r / self.range_resolution) * \
           self.range_resolution + self.range_resolution/2
-      v = jnp.floor(v / self.velocity_resolution) * \
+      v = np.floor(v / self.velocity_resolution) * \
           self.velocity_resolution + self.velocity_resolution/2
 
     # Add false alarms to the detection list
-    snr_db = 10*jnp.log10(gammaincinv(1, 1-self.pfa))
+    snr_db = 10*np.log10(gammaincinv(1, 1-self.pfa))
     false_alarms = []
     for i in range(n_false_alarms):
-      measurement = jnp.array([az[i], el[i], r[i], v[i]])
+      measurement = np.array([az[i], el[i], r[i], v[i]])
       detection = Clutter(measurement=measurement,
                           snr=snr_db,
                           timestamp=self.timestamp)

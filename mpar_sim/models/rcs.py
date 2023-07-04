@@ -1,8 +1,9 @@
-import jax.numpy as jnp
+import numpy as np
 import jax
 from jax.scipy.special import erfc, gammainc
 import random
 from functools import partial
+import jax.numpy as jnp
 
 
 class RCSModel():
@@ -34,12 +35,12 @@ class Swerling(RCSModel):
     elif self.case in [1, 2]:
       self.key, subkey = jax.random.split(self.key)
       u = jax.random.uniform(key=subkey)
-      x = -self.mean * jnp.log(u)
+      x = -self.mean * np.log(u)
       return x
     elif self.case in [3, 4]:
       self.key, subkey = jax.random.split(self.key)
       u = jax.random.uniform(key=subkey, shape=(2,))
-      x = -self.mean/2 * jnp.log(u[0]*u[1])
+      x = -self.mean/2 * np.log(u[0]*u[1])
       return x
     else:
       raise NotImplementedError
