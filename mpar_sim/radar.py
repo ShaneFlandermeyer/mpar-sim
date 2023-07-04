@@ -207,10 +207,10 @@ class PhasedArrayRadar():
     single_pulse_snr_db = 10*np.log10(self.loop_gain) + 10*np.log10(
         rcs) - 40*np.log10(target_r) - beam_shape_loss - scan_loss
 
-    pd = np.empty((n_targets, ))
-    for i, target in enumerate(targets):
-      pd[i] = target.detection_probability(
-          pfa=self.pfa, n_pulse=self.n_pulses, snr_db=single_pulse_snr_db[i])
+    pd = np.array([target.detection_probability(
+      pfa=self.pfa, n_pulse=self.n_pulses, snr_db=single_pulse_snr_db[i]
+      ) for i, target in enumerate(targets)]
+    )
     self.key, subkey = jax.random.split(self.key)
     is_detected = jax.random.uniform(subkey, shape=(n_targets,)) < pd
     n_detections = np.count_nonzero(is_detected)

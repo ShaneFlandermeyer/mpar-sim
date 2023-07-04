@@ -1,7 +1,6 @@
 import numpy as np
 import jax
 
-@jax.jit
 def range_crlb(snr: float, resolution: float, bias_fraction: float = 0) -> float:
   """
   Computes the Cramer-Rao lower bound on the range estimation accuracy.
@@ -27,7 +26,6 @@ def range_crlb(snr: float, resolution: float, bias_fraction: float = 0) -> float
 
   return variance
 
-@jax.jit
 def velocity_crlb(snr: float, resolution: float, bias_fraction: float = 0):
   """
   Computes the Cramer-Rao lower bound on the velocty estimation accuracy.
@@ -47,7 +45,6 @@ def velocity_crlb(snr: float, resolution: float, bias_fraction: float = 0):
   variance = resolution**2 * improvement_factor
   return variance
 
-@jax.jit
 def angle_crlb(snr: float, resolution: float, bias_fraction: float = 0):
   """
   Compute the Cramer-Rao lower bound on the angle estimation accuracy
