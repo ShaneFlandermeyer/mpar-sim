@@ -36,15 +36,15 @@ def test_ekf_update():
   track[:, 0] = prior_state
   for i in range(1, len(truth)):
     # Predict step
-    x_predicted, P_predicted = kalman_predict(state=prior_state,
-                                              covar=prior_covar,
+    x_predicted, P_predicted = kalman_predict(x=prior_state,
+                                              P=prior_covar,
                                               transition_model=transition_model,
-                                              time_interval=dt)
+                                              dt=dt)
     # Update step
     posterior_state, posterior_covar = extended_kalman_update(
-        state=x_predicted,
-        covar=P_predicted,
-        measurement=measurements[:, i],
+        x_pred=x_predicted,
+        P_pred=P_predicted,
+        z=measurements[:, i],
         measurement_model=measurement_model
     )
 

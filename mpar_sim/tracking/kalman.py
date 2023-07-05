@@ -6,10 +6,10 @@ from mpar_sim.models.measurement.base import MeasurementModel
 from mpar_sim.models.transition.base import TransitionModel
 
 
-def kalman_predict(state: np.ndarray,
-                   covar: np.ndarray,
+def kalman_predict(x: np.ndarray,
+                   P: np.ndarray,
                    transition_model: TransitionModel,
-                   time_interval: Union[float, datetime.timedelta]) -> Tuple[np.ndarray, np.ndarray]:
+                   dt: float) -> Tuple[np.ndarray, np.ndarray]:
   """
   Kalman predict step.
 
@@ -35,18 +35,18 @@ def kalman_predict(state: np.ndarray,
       - Predicted covariance matrix
   """
 
-  transition_matrix = transition_model.matrix(time_interval)
-  noise_covar = transition_model.covar(time_interval)
+  F = transition_model.matrix(dt)
+  Q = transition_model.covar(dt)
 
-  predicted_state = transition_matrix @ state
-  predicted_covar = transition_matrix @ covar @ transition_matrix.T + noise_covar
+  predicted_state = F @ x
+  predicted_covar = F @ P @ F.T + Q
 
   return predicted_state, predicted_covar
 
 
-def kalman_update(state: np.ndarray,
-                  covar: np.ndarray,
-                  measurement: np.ndarray,
+def kalman_update(x_pred: np.ndarray,
+                  P_pred: np.ndarray,
+                  z: np.ndarray,
                   measurement_model: MeasurementModel) -> Tuple[np.ndarray, np.ndarray]:
   """
   Perform the Kalman update step. See equations here:
@@ -76,21 +76,20 @@ def kalman_update(state: np.ndarray,
       - Predicted covariance
   """
   # Compute the residual
-  prior_measurement = measurement_model.function(state)
-  residual = measurement - prior_measurement
+  z_pred = measurement_model.function(x_pred)
+  y = z - z_pred
 
-  # Compute the Kalman gain
-  measurement_matrix = measurement_model.matrix()
-  measurement_covar = measurement_model.covar()
-  measurement_cross_covar = covar @ measurement_matrix.T
-  innovation_covar = measurement_matrix @ measurement_cross_covar + measurement_covar
-  kalman_gain = measurement_cross_covar @ np.linalg.inv(innovation_covar)
+  # Compute the Kalman gain and system uncertainty
+  H = measurement_model.matrix()
+  R = measurement_model.covar()
+  S = H @ P_pred @ H.T + R
+  K = P_pred @ H.T @ np.linalg.inv(S)
 
   # Compute the updated state and covariance
-  posterior_mean = state + kalman_gain @ residual
-  posterior_covar = covar - kalman_gain @ innovation_covar @ kalman_gain.T
+  x_post = x_pred + K @ y
+  P_post = P_pred - K @ S @ K.T
 
-  return posterior_mean, posterior_covar
+  return x_post, P_post
 
 
 def kalman_predict_update(state: np.ndarray,

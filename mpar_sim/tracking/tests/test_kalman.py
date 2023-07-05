@@ -42,10 +42,10 @@ def test_kalman_predict():
   dt = 0.3
   F = transition_model.matrix(dt)
   Q = transition_model.covar()
-  x_actual, P_actual = kalman_predict(state=x,
-                                      covar=P,
+  x_actual, P_actual = kalman_predict(x=x,
+                                      P=P,
                                       transition_model=transition_model,
-                                      time_interval=dt)
+                                      dt=dt)
   x_expected, P_expected = predict(x=x, P=P, F=F, Q=Q)
   assert np.allclose(x_actual, x_expected)
   assert np.allclose(P_actual, P_expected)
@@ -63,9 +63,9 @@ def test_kalman_update():
   R = measurement_model.covar()
   H = measurement_model.matrix()
   x_actual, P_actual = kalman_update(
-      state=x,
-      covar=P,
-      measurement=z,
+      x_pred=x,
+      P_pred=P,
+      z=z,
       measurement_model=measurement_model,
   )
   x_expected, P_expected = update(x=x, P=P, z=z, R=R, H=H)

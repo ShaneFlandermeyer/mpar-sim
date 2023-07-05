@@ -6,10 +6,10 @@ from mpar_sim.models.measurement.base import MeasurementModel
 from mpar_sim.models.transition.base import TransitionModel
 
 
-def extended_kalman_predict(state: np.ndarray,
-                            covar: np.ndarray,
+def extended_kalman_predict(x: np.ndarray,
+                            P: np.ndarray,
                             transition_model: TransitionModel,
-                            time_interval: Union[float, datetime.timedelta]
+                            dt: float,
                             ) -> Tuple[np.ndarray, np.ndarray]:
   """
   Extended Kalman predict step.  
@@ -36,19 +36,19 @@ def extended_kalman_predict(state: np.ndarray,
        - Predicted state vector
        - Predicted covariance
   """
-  transition_matrix = transition_model.jacobian(time_interval)
-  noise_covar = transition_model.covar(time_interval)
+  F = transition_model.jacobian(dt)
+  Q = transition_model.covar(dt)
 
   # Propagate the state forward in time
-  predicted_state = transition_model.function(state, time_interval)
-  predicted_covar = transition_matrix @ covar @ transition_matrix.T + noise_covar
+  x_pred = transition_model.function(x, dt)
+  P_pred = F @ P @ F.T + Q
 
-  return predicted_state, predicted_covar
+  return x_pred, P_pred
 
 
-def extended_kalman_update(state: np.ndarray,
-                           covar: np.ndarray,
-                           measurement: np.ndarray,
+def extended_kalman_update(x_pred: np.ndarray,
+                           P_pred: np.ndarray,
+                           z: np.ndarray,
                            measurement_model: MeasurementModel,
                            ) -> Tuple[np.ndarray, np.ndarray]:
   """
@@ -81,22 +81,21 @@ def extended_kalman_update(state: np.ndarray,
       - Predicted state vector
       - Predicted covariance
   """
-  state = state.ravel()
-  measurement = measurement.ravel()
+  x_pred = x_pred.ravel()
+  z = z.ravel()
   # Compute the residual
-  prior_measurement = measurement_model(state, noise=False)
+  z_pred = measurement_model(x_pred, noise=False)
   # TODO: This does not handle aliasing of angles properly
-  residual = measurement - prior_measurement.ravel()
+  y = z - z_pred.ravel()
 
   # Compute the Kalman gain
-  measurement_matrix = measurement_model.jacobian(state)
-  noise_covar = measurement_model.covar()
-  measurement_cross_covar = covar @ measurement_matrix.T
-  innovation_covar = measurement_matrix @ measurement_cross_covar + noise_covar
-  kalman_gain = measurement_cross_covar @ np.linalg.inv(innovation_covar)
+  JH = measurement_model.jacobian(x_pred)
+  R = measurement_model.covar()
+  S = JH @ P_pred @ JH.T + R
+  K = P_pred @ JH.T @ np.linalg.inv(S)
 
   # Compute the updated state and covariance
-  posterior_mean = state + kalman_gain @ residual
-  posterior_covar = covar - kalman_gain @ innovation_covar @ kalman_gain.T
+  x_post = x_pred + K @ y
+  P_post = P_pred - K @ S @ K.T
 
-  return posterior_mean, posterior_covar
+  return x_post, P_post
