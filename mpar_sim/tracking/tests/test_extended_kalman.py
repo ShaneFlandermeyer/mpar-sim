@@ -5,13 +5,13 @@ from mpar_sim.tracking.extended_kalman import extended_kalman_update
 from mpar_sim.tracking.kalman import kalman_predict
 from mpar_sim.models.transition.linear import ConstantVelocity
 from mpar_sim.types.groundtruth import GroundTruthPath, GroundTruthState
-from mpar_sim.models.measurement.nonlinear import CartesianToRangeAzElRangeRate
+from mpar_sim.models.measurement.nonlinear import CartesianToRangeAzElVelocity
 import pytest
 
 
 def test_ekf_update():
   transition_model = ConstantVelocity(ndim_pos=3, noise_diff_coeff=0.05)
-  measurement_model = CartesianToRangeAzElRangeRate(
+  measurement_model = CartesianToRangeAzElVelocity(
       noise_covar=np.diag([0.1, 0.1, 0.1, 0.1]),
       discretize_measurements=False,
       alias_measurements=False)
@@ -21,16 +21,13 @@ def test_ekf_update():
   dt = 1.0
   for i in range(50):
     new_state = GroundTruthState(
-        state_vector=transition_model.function(
-            truth[-1].state_vector,
-            noise=False,
-            time_interval=dt)
+      state_vector=transition_model(truth[-1].state_vector, dt=dt, noise=False)
     )
     truth.append(new_state)
   states = np.hstack([state.state_vector.reshape((-1, 1)) for state in truth])
 
   # Simulate measurements
-  measurements = measurement_model.function(states, noise=False)
+  measurements = measurement_model(states, noise=False)
 
   # Test the tracking filter
   prior_state = np.array([50, 1, 0, 1, 0, 1])
@@ -62,8 +59,8 @@ def test_ekf_update():
       (track[position_mapping] - states[position_mapping])**2, axis=1)
   velocity_mse = np.mean(
       (track[velocity_mapping] - states[velocity_mapping])**2, axis=1)
-  assert np.all(position_mse) < 1e-6
-  assert np.all(velocity_mse) < 1e-6
+  assert np.all(position_mse < 1e-6)
+  assert np.all(velocity_mse < 1e-6)
 
 
 if __name__ == '__main__':

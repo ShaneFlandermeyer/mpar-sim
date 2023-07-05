@@ -4,21 +4,21 @@ from typing import Optional
 import numpy as np
 from mpar_sim.models.measurement.base import MeasurementModel
 from mpar_sim.types.groundtruth import GroundTruthPath
+import jax.numpy as jnp
 
 
 class Detection():
   def __init__(self,
-               state_vector: np.ndarray = None,
-               snr: Optional[float] = None,
-               timestamp: Optional[datetime.datetime] = None,
-               measurement_model: Optional[MeasurementModel] = None,
-               metadata: Optional[dict] = {},
-               **kwargs
+               measurement: jnp.ndarray = None,
+               measurement_model: MeasurementModel = None,
+               snr: float = None,
+               timestamp: datetime.datetime = None,
+               metadata: dict = {},
                ):
-    self.state_vector = state_vector
+    self.measurement = measurement
+    self.measurement_model = measurement_model
     self.snr = snr
     self.timestamp = timestamp
-    self.measurement_model = measurement_model
     self.metadata = metadata
 
 

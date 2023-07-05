@@ -1,6 +1,5 @@
 import numpy as np
-from scipy import constants
-
+import jax
 
 def range_crlb(snr: float, resolution: float, bias_fraction: float = 0) -> float:
   """
@@ -27,7 +26,6 @@ def range_crlb(snr: float, resolution: float, bias_fraction: float = 0) -> float
 
   return variance
 
-
 def velocity_crlb(snr: float, resolution: float, bias_fraction: float = 0):
   """
   Computes the Cramer-Rao lower bound on the velocty estimation accuracy.
@@ -46,7 +44,6 @@ def velocity_crlb(snr: float, resolution: float, bias_fraction: float = 0):
   improvement_factor = np.clip(improvement_factor, 0, 1/12)
   variance = resolution**2 * improvement_factor
   return variance
-
 
 def angle_crlb(snr: float, resolution: float, bias_fraction: float = 0):
   """

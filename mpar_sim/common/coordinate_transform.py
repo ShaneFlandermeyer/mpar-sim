@@ -70,7 +70,7 @@ def uv2azel(u: Union[float, np.ndarray],
 def sph2cart(
     azimuth: Union[float, np.ndarray],
     elevation: Union[float, np.ndarray],
-    range: Union[float, np.ndarray],
+    r: Union[float, np.ndarray],
     degrees: bool = False
 ) -> Union[Tuple[float, float, float], Tuple[np.ndarray, np.ndarray, np.ndarray]]:
   """
@@ -93,9 +93,9 @@ def sph2cart(
   if degrees:
     azimuth = np.deg2rad(azimuth)
     elevation = np.deg2rad(elevation)
-  x = range * np.cos(elevation) * np.cos(azimuth)
-  y = range * np.cos(elevation) * np.sin(azimuth)
-  z = range * np.sin(elevation)
+  x = r * np.cos(elevation) * np.cos(azimuth)
+  y = r * np.cos(elevation) * np.sin(azimuth)
+  z = r * np.sin(elevation)
 
   return (x, y, z)
 
