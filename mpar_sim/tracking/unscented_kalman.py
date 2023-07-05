@@ -42,11 +42,8 @@ def merwe_scaled_sigma_points(mean: np.ndarray,
   lambda_ = alpha**2 * (n + kappa) - n
   U = np.linalg.cholesky((n + lambda_) * covar)
 
-  sigmas = np.zeros((n, 2*n+1))
-  sigmas[:, 0] = mean
-  for i in range(n):
-    sigmas[:, i+1] = mean - U[:, i]
-    sigmas[:, n+i+1] = mean + U[:, i]
+  mean = mean[:, np.newaxis] if mean.ndim == 1 else mean
+  sigmas = np.concatenate([mean, mean - U, mean + U], axis=1)
 
   # Compute the weight for each point
   Wc = Wm = np.full(2*n+1, 1 / (2*(n+lambda_)))
@@ -59,7 +56,7 @@ def merwe_scaled_sigma_points(mean: np.ndarray,
 def unscented_transform(sigmas: np.ndarray,
                         Wm: np.ndarray,
                         Wc: np.ndarray,
-                        process_noise: np.ndarray
+                        Q: np.ndarray
                         ) -> Tuple[np.ndarray, np.ndarray]:
   """
   Use the unscented transform to compute the mean and covariance from a set of sigma points
@@ -91,7 +88,7 @@ def unscented_transform(sigmas: np.ndarray,
   for i in range(n_sigma_points):
     y = sigmas[:, i] - mean
     covar += Wc[i] * np.outer(y, y)
-  covar += process_noise
+  covar += Q
 
   return mean, covar
 
@@ -146,13 +143,13 @@ def ukf_update(
     x_pred: np.ndarray,
     P_pred: np.ndarray,
     z: np.ndarray,
+    # Measurement parameters
+    measurement_func: callable,
+    R: np.ndarray,
     # Sigma point parameters
     sigmas_f: np.ndarray,
     Wm: np.ndarray,
     Wc: np.ndarray,
-    # Measurement parameters
-    measurement_func: callable,
-    R: np.ndarray,
 ) -> Tuple[np.ndarray, np.ndarray]:
   """
   Unscented Kalman filter update step
@@ -222,10 +219,10 @@ def ukf_predict_update(x: np.ndarray,
                        R: np.ndarray,
                        ) -> Tuple[np.ndarray, np.ndarray]:
   x_pred, P_pred, sigmas_f, Wm, Wc = ukf_predict(
-      x, P, Q, transition_func, dt)
+      x=x, P=P, Q=Q, transition_func=transition_func, dt=dt)
 
   x_post, P_post = ukf_update(
-      x_pred, P_pred, z, sigmas_f, Wm, Wc, measurement_func, R)
+      x_pred=x_pred, P_pred=P_pred, z=z, measurement_func=measurement_func, R=R, sigmas_f=sigmas_f, Wm=Wm, Wc=Wc)
 
   return x_post, P_post
 
