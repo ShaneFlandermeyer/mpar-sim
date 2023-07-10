@@ -1,7 +1,7 @@
 from mpar_sim.types.target import Target
 import pytest
 from mpar_sim.models.rcs import Swerling
-from mpar_sim.models.transition.linear import ConstantVelocity
+from mpar_sim.models.transition.constant_velocity import ConstantVelocity
 import numpy as np
 
 if __name__ == '__main__':

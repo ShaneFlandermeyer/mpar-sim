@@ -7,13 +7,9 @@ import jax
 
 from mpar_sim.common import wrap_to_interval
 from mpar_sim.common.coordinate_transform import cart2sph, rotx, roty, rotz, sph2cart
-from mpar_sim.common.matrix import jacobian
-from mpar_sim.models.measurement.base import MeasurementModel
+from mpar_sim.models.measurement import NonlinearMeasurementModel
 from scipy.spatial.transform import Rotation
 import numpy as np
-
-class NonlinearMeasurementModel(MeasurementModel):
-  """Base class for nonlinear measurement models"""
 
 
 class CartesianToRangeAzElVelocity(NonlinearMeasurementModel):

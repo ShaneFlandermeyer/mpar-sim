@@ -1,7 +1,7 @@
 import datetime
 import numpy as np
 from typing import Tuple, Union
-from mpar_sim.models.transition.linear import ConstantVelocity
+from mpar_sim.models.transition.constant_velocity import ConstantVelocity
 from mpar_sim.types.groundtruth import GroundTruthPath, GroundTruthState
 import matplotlib.pyplot as plt
 

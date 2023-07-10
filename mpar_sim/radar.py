@@ -18,7 +18,7 @@ from mpar_sim.models.measurement.estimation import (angle_crlb, range_crlb,
                                                     velocity_crlb)
 from mpar_sim.models.measurement.nonlinear import CartesianToRangeAzElVelocity
 from mpar_sim.models.rcs import Swerling
-from mpar_sim.models.transition.linear import ConstantVelocity
+from mpar_sim.models.transition.constant_velocity import ConstantVelocity
 from mpar_sim.types.detection import Clutter, TrueDetection
 from mpar_sim.types.look import Look
 from mpar_sim.types.target import Target

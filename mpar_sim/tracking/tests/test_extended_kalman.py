@@ -3,7 +3,7 @@ from typing import Union
 import numpy as np
 from mpar_sim.tracking.extended_kalman import extended_kalman_update
 from mpar_sim.tracking.kalman import kalman_predict
-from mpar_sim.models.transition.linear import ConstantVelocity
+from mpar_sim.models.transition.constant_velocity import ConstantVelocity
 from mpar_sim.types.groundtruth import GroundTruthPath, GroundTruthState
 from mpar_sim.models.measurement.nonlinear import CartesianToRangeAzElVelocity
 import pytest

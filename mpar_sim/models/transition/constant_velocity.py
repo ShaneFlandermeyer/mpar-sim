@@ -1,15 +1,10 @@
-import functools
 import random
 import jax
 
 
 from scipy.linalg import block_diag
-from mpar_sim.models.transition.base import TransitionModel
+from mpar_sim.models.transition.base import LinearTransitionModel
 import numpy as np
-
-class LinearTransitionModel(TransitionModel):
-  """Base class for linear transition models."""
-
 
 class ConstantVelocity(LinearTransitionModel):
   r"""This is a class implementation of a discrete, time-variant 1D
@@ -61,15 +56,20 @@ class ConstantVelocity(LinearTransitionModel):
   def __init__(self,
                ndim_pos: float = 3,
                noise_diff_coeff: float = 1,
-               position_mapping: np.array = np.array([0, 2, 4]),
-               velocity_mapping: np.array = np.array([1, 3, 5]),
-               seed: int = random.randint(0, 2**32-1)):
+               position_mapping: np.array = None,
+               velocity_mapping: np.array = None,
+               seed: int = None,
+  ):
     self.ndim_pos = ndim_pos
     self.noise_diff_coeff = noise_diff_coeff
 
     self.ndim_state = self.ndim = self.ndim_pos*2
-    self.position_mapping = np.array(position_mapping)
-    self.velocity_mapping = np.array(velocity_mapping)
+    if position_mapping is None:
+      self.position_mapping = np.arange(0, self.ndim_state, 2)
+    if velocity_mapping is None:
+      self.velocity_mapping = np.arange(1, self.ndim_state, 2)
+    if seed is None:
+      seed = random.randint(0, 2**32-1)
     self.key = jax.random.PRNGKey(seed)
 
   def __call__(

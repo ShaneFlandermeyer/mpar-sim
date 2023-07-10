@@ -4,12 +4,11 @@ from typing import Optional
 import numpy as np
 from mpar_sim.models.measurement.base import MeasurementModel
 from mpar_sim.types.groundtruth import GroundTruthPath
-import jax.numpy as jnp
 
 
 class Detection():
   def __init__(self,
-               measurement: jnp.ndarray = None,
+               measurement: np.array = None,
                measurement_model: MeasurementModel = None,
                snr: float = None,
                timestamp: datetime.datetime = None,
