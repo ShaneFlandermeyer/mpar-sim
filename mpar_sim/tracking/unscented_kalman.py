@@ -42,11 +42,8 @@ def merwe_scaled_sigma_points(mean: np.ndarray,
   lambda_ = alpha**2 * (n + kappa) - n
   U = np.linalg.cholesky((n + lambda_) * covar)
 
-  sigmas = np.zeros((n, 2*n+1))
-  sigmas[:, 0] = mean
-  for i in range(n):
-    sigmas[:, i+1] = mean - U[:, i]
-    sigmas[:, n+i+1] = mean + U[:, i]
+  mean = mean[:, np.newaxis] if mean.ndim == 1 else mean
+  sigmas = np.concatenate([mean, mean - U, mean + U], axis=1)
 
   # Compute the weight for each point
   Wc = Wm = np.full(2*n+1, 1 / (2*(n+lambda_)))
@@ -59,7 +56,7 @@ def merwe_scaled_sigma_points(mean: np.ndarray,
 def unscented_transform(sigmas: np.ndarray,
                         Wm: np.ndarray,
                         Wc: np.ndarray,
-                        process_noise: np.ndarray
+                        Q: np.ndarray
                         ) -> Tuple[np.ndarray, np.ndarray]:
   """
   Use the unscented transform to compute the mean and covariance from a set of sigma points
@@ -91,16 +88,16 @@ def unscented_transform(sigmas: np.ndarray,
   for i in range(n_sigma_points):
     y = sigmas[:, i] - mean
     covar += Wc[i] * np.outer(y, y)
-  covar += process_noise
+  covar += Q
 
   return mean, covar
 
 
-def ukf_predict(prior_state: np.ndarray,
-                prior_covar: np.ndarray,
-                process_noise: np.ndarray,
+def ukf_predict(x: np.ndarray,
+                P: np.ndarray,
+                Q: np.ndarray,
                 transition_func: callable,
-                dt: Union[float, datetime.timedelta]
+                dt: float
                 ) -> Tuple[np.ndarray, ...]:
   """
   Unscented Kalman filter prediction step
@@ -129,31 +126,31 @@ def ukf_predict(prior_state: np.ndarray,
         - Covariance weights
   """
   # Compute the sigma points and their weights
-  n = prior_state.size
+  n = x.size
   sigmas, Wm, Wc = merwe_scaled_sigma_points(
-      prior_state, prior_covar, alpha=0.5, beta=2, kappa=3-n)
+      x, P, alpha=0.5, beta=2, kappa=3-n)
 
   # Transform the sigma points using the process function
   sigmas_f = np.zeros_like(sigmas)
   for i in range(len(sigmas)):
     sigmas_f[:, i] = transition_func(sigmas[:, i], dt)
 
-  predicted_state, predicted_covar = unscented_transform(
-      sigmas_f, Wm, Wc, process_noise)
-  return predicted_state, predicted_covar, sigmas_f, Wm, Wc
+  x_pred, P_pred = unscented_transform(sigmas_f, Wm, Wc, Q)
+  return x_pred, P_pred, sigmas_f, Wm, Wc
 
 
-def ukf_update(measurement: np.ndarray,
-               predicted_state: np.ndarray,
-               predicted_covar: np.ndarray,
-               # Sigma point parameters
-               sigmas_f: np.ndarray,
-               Wm: np.ndarray,
-               Wc: np.ndarray,
-               # Measurement parameters
-               measurement_func: callable,
-               measurement_noise: np.ndarray,
-               ) -> Tuple[np.ndarray, np.ndarray]:
+def ukf_update(
+    x_pred: np.ndarray,
+    P_pred: np.ndarray,
+    z: np.ndarray,
+    # Measurement parameters
+    measurement_func: callable,
+    R: np.ndarray,
+    # Sigma point parameters
+    sigmas_f: np.ndarray,
+    Wm: np.ndarray,
+    Wc: np.ndarray,
+) -> Tuple[np.ndarray, np.ndarray]:
   """
   Unscented Kalman filter update step
 
@@ -184,50 +181,50 @@ def ukf_update(measurement: np.ndarray,
         - Updated covariance matrix
   """
   ndim_state, n_sigma_points = sigmas_f.shape
-  ndim_measurement = measurement.size
+  ndim_measurement = z.size
 
   # Transform sigma points into measurement space
   sigmas_h = np.zeros((ndim_measurement, n_sigma_points))
   for i in range(n_sigma_points):
-    sigmas_h[:, i] = measurement_func(sigmas_f[:, i], measurement_noise)
+    sigmas_h[:, i] = measurement_func(sigmas_f[:, i], R)
 
   # Compute the mean and covariance of the measurement prediction using the unscented transform
   predicted_measurement, predicted_measurement_covar = unscented_transform(
-      sigmas_h, Wm, Wc, measurement_noise)
+      sigmas_h, Wm, Wc, R)
 
   # Compute the cross-covariance of the state and measurements
   cross_covar = np.zeros((ndim_state, ndim_measurement))
   for i in range(n_sigma_points):
-    cross_covar += Wc[i] * np.outer(sigmas_f[:, i] - predicted_state,
+    cross_covar += Wc[i] * np.outer(sigmas_f[:, i] - x_pred,
                                     sigmas_h[:, i] - predicted_measurement)
 
   # Update the state vector and covariance
   kalman_gain = cross_covar @ np.linalg.inv(predicted_measurement_covar)
-  updated_state = predicted_state + \
-      kalman_gain @ (measurement - predicted_measurement)
-  updated_covar = predicted_covar - \
+  updated_state = x_pred + \
+      kalman_gain @ (z - predicted_measurement)
+  updated_covar = P_pred - \
       kalman_gain @ predicted_measurement_covar @ kalman_gain.T
   return updated_state, updated_covar
 
 
-def ukf_predict_update(prior_state: np.ndarray,
-                       prior_covar: np.ndarray,
-                       measurement: np.ndarray,
+def ukf_predict_update(x: np.ndarray,
+                       P: np.ndarray,
+                       z: np.ndarray,
                        # Process model
                        transition_func: callable,
-                       process_noise: np.ndarray,
-                       dt: Union[float, datetime.timedelta],
+                       Q: np.ndarray,
+                       dt: float,
                        # Measurement model
                        measurement_func: callable,
-                       measurement_noise: np.ndarray,
+                       R: np.ndarray,
                        ) -> Tuple[np.ndarray, np.ndarray]:
-  predicted_state, predicted_covar, sigmas_f, Wm, Wc = ukf_predict(
-      prior_state, prior_covar, process_noise, transition_func, dt)
+  x_pred, P_pred, sigmas_f, Wm, Wc = ukf_predict(
+      x=x, P=P, Q=Q, transition_func=transition_func, dt=dt)
 
-  posterior_state, posterior_covar = ukf_update(
-      measurement, predicted_state, predicted_covar, sigmas_f, Wm, Wc, measurement_func, measurement_noise)
+  x_post, P_post = ukf_update(
+      x_pred=x_pred, P_pred=P_pred, z=z, measurement_func=measurement_func, R=R, sigmas_f=sigmas_f, Wm=Wm, Wc=Wc)
 
-  return posterior_state, posterior_covar
+  return x_post, P_post
 
 
 if __name__ == '__main__':
@@ -239,10 +236,10 @@ if __name__ == '__main__':
   dt = 1.0
   for i in range(50):
     new_state = GroundTruthState(
-        state_vector=transition_model.function(
-            truth[-1].state_vector,
+        state_vector=transition_model(
+            state=truth[-1].state_vector,
             noise=True,
-            time_interval=dt)
+            dt=dt)
     )
     truth.append(new_state)
   states = np.hstack([state.state_vector for state in truth])
@@ -272,14 +269,14 @@ if __name__ == '__main__':
   for i in range(measurements.shape[1]):
     measurement = measurements[:, i]
     post_state, post_covar = ukf_predict_update(
-        prior_state=prior_state,
-        prior_covar=prior_covar,
-        measurement=measurement,
-        transition_func=transition_model.function,
-        process_noise=transition_model.covar(dt),
+        x=prior_state,
+        P=prior_covar,
+        z=measurement,
+        transition_func=transition_model,
+        Q=transition_model.covar(dt),
         dt=dt,
         measurement_func=measurement_func,
-        measurement_noise=R)
+        R=R)
     track[:, i] = post_state
     prior_state = post_state
     prior_covar = post_covar
