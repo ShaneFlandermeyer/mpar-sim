@@ -4,7 +4,8 @@ import numpy as np
 from mpar_sim.tracking.extended_kalman import extended_kalman_update
 from mpar_sim.tracking.kalman import kalman_predict
 from mpar_sim.models.transition.constant_velocity import ConstantVelocity
-from mpar_sim.types.groundtruth import GroundTruthPath, GroundTruthState
+from mpar_sim.types.trajectory import State
+from mpar_sim.types.trajectory import Trajectory
 from mpar_sim.models.measurement.nonlinear import CartesianToRangeAzElVelocity
 import pytest
 
@@ -17,14 +18,14 @@ def test_ekf_update():
       alias_measurements=False)
 
   # Create the ground truth for testing
-  truth = GroundTruthPath([GroundTruthState(np.array([50, 1, 0, 1, 0, 1]))])
+  # truth = Trajectory([GroundTruthState(np.array([50, 1, 0, 1, 0, 1]))])
+  truth = Trajectory()
+  truth.append(np.array([50, 1, 0, 1, 0, 1]))
   dt = 1.0
   for i in range(50):
-    new_state = GroundTruthState(
-      state_vector=transition_model(truth[-1].state_vector, dt=dt, noise=False)
-    )
-    truth.append(new_state)
-  states = np.hstack([state.state_vector.reshape((-1, 1)) for state in truth])
+    state = transition_model(truth[-1].state, dt=dt, noise=False)
+    truth.append(state)
+  states = np.stack([state.state for state in truth]).T
 
   # Simulate measurements
   measurements = measurement_model(states, noise=False)

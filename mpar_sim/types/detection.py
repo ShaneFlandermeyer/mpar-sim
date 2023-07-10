@@ -3,7 +3,6 @@ from typing import Optional
 
 import numpy as np
 from mpar_sim.models.measurement.base import MeasurementModel
-from mpar_sim.types.groundtruth import GroundTruthPath
 
 
 class Detection():
@@ -19,16 +18,14 @@ class Detection():
     self.snr = snr
     self.timestamp = timestamp
     self.metadata = metadata
-
-
+    
 class TrueDetection(Detection):
   def __init__(self,
-               groundtruth_path: Optional[GroundTruthPath] = None,
-               **kwargs,
-               ):
+               origin = None,
+               **kwargs):
     super().__init__(**kwargs)
-    self.groundtruth_path = groundtruth_path
+    self.origin = origin
 
 
-class Clutter(Detection):
+class FalseDetection(Detection):
   """A detection due to thermal noise or clutter."""

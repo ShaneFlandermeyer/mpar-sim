@@ -19,7 +19,7 @@ from mpar_sim.models.measurement.estimation import (angle_crlb, range_crlb,
 from mpar_sim.models.measurement.nonlinear import CartesianToRangeAzElVelocity
 from mpar_sim.models.rcs import Swerling
 from mpar_sim.models.transition.constant_velocity import ConstantVelocity
-from mpar_sim.types.detection import Clutter, TrueDetection
+from mpar_sim.types.detection import FalseDetection, TrueDetection
 from mpar_sim.types.look import Look
 from mpar_sim.types.target import Target
 import numpy as np
@@ -345,7 +345,7 @@ class PhasedArrayRadar():
     false_alarms = []
     for i in range(n_false_alarms):
       measurement = np.array([az[i], el[i], r[i], v[i]])
-      detection = Clutter(measurement=measurement,
+      detection = FalseDetection(measurement=measurement,
                           snr=snr_db,
                           timestamp=self.timestamp)
       false_alarms.append(detection)

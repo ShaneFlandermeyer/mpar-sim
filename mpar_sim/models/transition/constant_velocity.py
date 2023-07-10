@@ -87,14 +87,14 @@ class ConstantVelocity(LinearTransitionModel):
     F = np.array([[1, dt],
                   [0, 1]])
     F = block_diag(*[F]*self.ndim_pos)
-    return F
+    return F.astype(float)
 
   def covar(self, dt: float):
     # TODO: Extend this to handle different noise_diff_coeff for each dimension
     Q = np.array([[dt**3/3, dt**2/2],
                       [dt**2/2, dt]]) * self.noise_diff_coeff
     Q = block_diag(*[Q]*self.ndim_pos)
-    return Q
+    return Q.astype(float)
 
   def sample_noise(self,
                    dt: float = 0) -> np.array:
@@ -102,4 +102,4 @@ class ConstantVelocity(LinearTransitionModel):
     self.key, subkey = jax.random.split(self.key)
     noise = jax.random.multivariate_normal(
           key=subkey, mean=np.zeros((self.ndim_state)), cov=covar)
-    return noise
+    return np.asarray(noise)

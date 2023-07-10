@@ -2,7 +2,8 @@ import datetime
 import numpy as np
 from typing import Tuple, Union
 from mpar_sim.models.transition.constant_velocity import ConstantVelocity
-from mpar_sim.types.groundtruth import GroundTruthPath, GroundTruthState
+from mpar_sim.types.trajectory import Trajectory
+from mpar_sim.types.state import State
 import matplotlib.pyplot as plt
 
 
@@ -229,20 +230,16 @@ def ukf_predict_update(x: np.ndarray,
 
 if __name__ == '__main__':
   np.random.seed(1999)
-  transition_model = ConstantVelocity(ndim_pos=2, noise_diff_coeff=0.05)
+  transition_model = ConstantVelocity(ndim_pos=2, noise_diff_coeff=0.05, seed=1999)
 
   # Create the ground truth for testing
-  truth = GroundTruthPath([GroundTruthState(np.array([50, 1, 0, 1]))])
+  truth = Trajectory()
+  truth.append(np.array([50, 1, 0, 1]))
   dt = 1.0
   for i in range(50):
-    new_state = GroundTruthState(
-        state_vector=transition_model(
-            state=truth[-1].state_vector,
-            noise=True,
-            dt=dt)
-    )
-    truth.append(new_state)
-  states = np.hstack([state.state_vector for state in truth])
+    state = transition_model(truth[-1].state, noise=True, dt=dt)
+    truth.append(state)
+  states = np.stack([state.state for state in truth]).T
 
   # Simulate measurements
   def measurement_func(state, noise_covar, noise=False):
@@ -260,7 +257,7 @@ if __name__ == '__main__':
 
   measurements = np.zeros((2, len(truth)))
   for i in range(len(truth)):
-    measurements[:, i] = measurement_func(truth[i].state_vector, R, noise=True)
+    measurements[:, i] = measurement_func(truth[i].state, R, noise=True)
 
   # Test the UKF
   prior_state = np.array([50, 1, 0, 1])
@@ -288,13 +285,13 @@ if __name__ == '__main__':
   plt.ylabel('y')
   plt.legend()
 
-  plt.figure()
-  plt.plot(np.rad2deg(measurements[0]))
-  plt.xlabel('Time step')
-  plt.ylabel('Azimuth (degrees)')
+#   plt.figure()
+#   plt.plot(np.rad2deg(measurements[0]))
+#   plt.xlabel('Time step')
+#   plt.ylabel('Azimuth (degrees)')
 
-  plt.figure()
-  plt.plot(measurements[1])
-  plt.xlabel('Time step')
-  plt.ylabel('Range')
+#   plt.figure()
+#   plt.plot(measurements[1])
+#   plt.xlabel('Time step')
+#   plt.ylabel('Range')
   plt.show()
