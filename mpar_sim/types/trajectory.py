@@ -21,7 +21,7 @@ class Trajectory():
            **kwargs):
     for _ in range(nsteps):
       state = transition_model(self.states[-1].state, **kwargs)
-      self.append(state)
+      self.append(state, **kwargs)
 
   def append(self, state: State, **kwargs):
     if isinstance(state, np.ndarray):
