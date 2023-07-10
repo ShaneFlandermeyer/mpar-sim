@@ -3,7 +3,7 @@ import random
 import jax
 
 
-from mpar_sim.common.matrix import block_diag
+from scipy.linalg import block_diag
 from mpar_sim.models.transition.base import TransitionModel
 import numpy as np
 
@@ -86,15 +86,15 @@ class ConstantVelocity(LinearTransitionModel):
   def matrix(self, dt: float):
     F = np.array([[1, dt],
                   [0, 1]])
-    F = block_diag(F, nreps=self.ndim_pos)
+    F = block_diag(*[F]*self.ndim_pos)
     return F
 
   def covar(self, dt: float):
     # TODO: Extend this to handle different noise_diff_coeff for each dimension
-    covar = np.array([[dt**3/3, dt**2/2],
+    Q = np.array([[dt**3/3, dt**2/2],
                       [dt**2/2, dt]]) * self.noise_diff_coeff
-    covar = block_diag(covar, nreps=self.ndim_pos)
-    return covar
+    Q = block_diag(*[Q]*self.ndim_pos)
+    return Q
 
   def sample_noise(self,
                    dt: float = 0) -> np.array:
