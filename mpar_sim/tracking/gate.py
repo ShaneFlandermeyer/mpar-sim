@@ -1,6 +1,6 @@
 import numpy as np
 from typing import List
-from scipy.stats import norm
+from scipy.stats import norm, chi2
 import math
 
 def ellipsoid_gate(
@@ -38,7 +38,7 @@ def ellipsoid_gate(
   dist = np.einsum('nij, nji -> n', y.swapaxes(-1, -2), dist)
   return dist <= threshold
 
-def gate_probability(gate_dim: int, threshold: float) -> float:
+def gate_probability(threshold: float, ndim: int) -> float:
   """
   Compute the probability of a measurement falling within the ellipsoidal gate.
 
@@ -58,23 +58,41 @@ def gate_probability(gate_dim: int, threshold: float) -> float:
   gc = lambda G : norm.cdf(G) - norm.cdf(0)
   G = threshold
   sqrt_G = np.sqrt(G)
-  if gate_dim == 1:
+  if ndim == 1:
     return 2*gc(sqrt_G)
-  elif gate_dim == 2:
+  elif ndim == 2:
     return 1 - np.exp(-G/2)
-  elif gate_dim == 3:
+  elif ndim == 3:
     return 2*gc(sqrt_G) - np.sqrt(2*G/np.pi)*np.exp(-G/2)
-  elif gate_dim == 4:
+  elif ndim == 4:
     return 1 - (1+G/2)*np.exp(-G/2)
-  elif gate_dim == 5:
+  elif ndim == 5:
     return 2*gc(sqrt_G) - (1+G/3)*np.sqrt(2*G/np.pi)*np.exp(-G/2)
-  elif gate_dim == 6:
+  elif ndim == 6:
     return 1 - 0.5*(G**2/4+G+2)*np.exp(-G/2)
+  
+def gate_threshold(pg: float, ndim: int):
+  return chi2.ppf(pg, ndim)
+  
+def gate_volume(innovation_covar: np.array, gate_probability: float, ndim: int):
+  S = innovation_covar
+  pg = gate_probability
+  gamma = gate_threshold(pg, ndim)
+  c = np.pi**(ndim/2) / math.gamma(ndim/2+1)
+  return c*gamma**(ndim/2) * np.sqrt(np.linalg.det(S))
 
 if __name__ == '__main__':
   measurements = [np.array([1, 1]), np.array([2, 2]), np.array([3, 3])]
   predicted_measurement = np.array([1, 1])
   innovation_covar = np.eye(2)
-  threshold = 7
+  threshold = gate_threshold(0.99,  2)
+  pg = gate_probability(threshold, 2)
+  volume = gate_volume(innovation_covar, pg, 2)
   print(ellipsoid_gate(measurements, predicted_measurement, innovation_covar, threshold))
-  print(gate_probability(2, threshold))
+  print(threshold)
+  print(pg)
+  print(volume)
+  
+  # threshold = 7
+  
+  # print(gate_probability(2, 9.3))

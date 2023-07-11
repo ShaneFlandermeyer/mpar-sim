@@ -2,7 +2,7 @@ import datetime
 from typing import Union
 import numpy as np
 from mpar_sim.tracking.extended_kalman import extended_kalman_update
-from mpar_sim.tracking.kalman import kalman_predict
+from mpar_sim.tracking.kalman import KalmanFilter
 from mpar_sim.models.transition.constant_velocity import ConstantVelocity
 from mpar_sim.types.trajectory import State
 from mpar_sim.types.trajectory import Trajectory
@@ -33,21 +33,25 @@ def test_ekf_update():
   # Test the tracking filter
   prior_state = np.array([50, 1, 0, 1, 0, 1])
   prior_covar = np.diag([1.5, 0.5, 1.5, 0.5, 1.5, 0.5])
+  kf = KalmanFilter(
+    x=prior_state,
+    P=prior_covar,
+    transition_model=transition_model,
+    measurement_model=None)
   track = np.zeros((6, len(truth)))
   track[:, 0] = prior_state
   for i in range(1, len(truth)):
     # Predict step
-    x_predicted, P_predicted = kalman_predict(x=prior_state,
-                                              P=prior_covar,
-                                              transition_model=transition_model,
-                                              dt=dt)
+    kf.x, kf.P = prior_state, prior_covar
+    kf.predict(dt=dt)
     # Update step
     posterior_state, posterior_covar = extended_kalman_update(
-        x_pred=x_predicted,
-        P_pred=P_predicted,
+        x_pred=kf.x_pred,
+        P_pred=kf.P_pred,
         z=measurements[:, i],
         measurement_model=measurement_model
     )
+    
 
     # Store the results and update the prior
     track[:, i] = posterior_state
