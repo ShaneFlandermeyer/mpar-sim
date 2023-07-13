@@ -11,13 +11,13 @@ class Detection():
                measurement_model: MeasurementModel = None,
                snr: float = None,
                timestamp: datetime.datetime = None,
-               metadata: dict = {},
+               metadata: dict = None,
                ):
     self.measurement = measurement
     self.measurement_model = measurement_model
     self.snr = snr
     self.timestamp = timestamp
-    self.metadata = metadata
+    self.metadata = metadata if metadata else {}
     
 class TrueDetection(Detection):
   def __init__(self,

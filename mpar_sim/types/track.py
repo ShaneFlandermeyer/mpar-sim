@@ -10,14 +10,11 @@ class Track():
   """
 
   def __init__(self,
-               history: Union[State, List[State]] = [],
+               history: Union[State, List[State]] = None,
                id: Union[str, int] = None,
                target_id: Optional[Union[str, int]] = None
                ) -> None:
-    if not isinstance(history, list):
-      history = [history]
-
-    self.history = history
+    self.history = history if history else []
     if id is None:
       self.id = str(uuid.uuid1())
     else:

@@ -1,18 +1,13 @@
-import datetime
-from typing import List, Union
 import uuid
 import numpy as np
 from mpar_sim.types.state import State
-
+from typing import List
 
 class Trajectory():
   def __init__(self,
-               states = [],
-               transition_model = None,
-               id = None):
-    if not isinstance(states, list):
-      states = [states]
-    self.states = states
+               states: List[np.ndarray] = None,
+               id: List[np.ndarray] = None):
+    self.states = states if states else []
     self.id = id if id else str(uuid.uuid1())
 
   def step(self, 
