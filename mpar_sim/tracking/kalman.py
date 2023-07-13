@@ -30,11 +30,11 @@ class KalmanFilter():
         Q=Q,
     )
 
-  def update(self, z: np.ndarray):
+  def update(self, measurement: np.ndarray):
     x_post, P_post, S, K, z_pred = self._update(
         x_pred=self.x_pred,
         P_pred=self.P_pred,
-        z=z,
+        z=measurement,
         H=self.measurement_model.matrix(),
         R=self.measurement_model.covar(),
     )

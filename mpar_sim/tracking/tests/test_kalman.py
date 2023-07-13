@@ -75,7 +75,7 @@ def test_kalman_update():
   kf.x_pred = x
   kf.P_pred = P
   
-  kf.update(z=z)
+  kf.update(measurement=z)
   x_actual, P_actual = kf.x, kf.P
   x_expected, P_expected = update(x=x, P=P, z=z, R=R, H=H)
   assert np.allclose(x_actual, x_expected)

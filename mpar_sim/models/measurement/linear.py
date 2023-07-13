@@ -13,7 +13,7 @@ class LinearMeasurementModel(LinearMeasurementModel):
                seed: int = None,
                ):
     self.ndim_state = ndim_state
-    self.covar = covar
+    self.noise_covar = covar
     if measured_dims is None:
       measured_dims = list(range(ndim_state))
     elif not isinstance(measured_dims, list):
@@ -36,8 +36,11 @@ class LinearMeasurementModel(LinearMeasurementModel):
     H[np.arange(self.ndim_meas), self.measured_dims] = 1
     return H
   
+  def covar(self):
+    return self.noise_covar
+  
   def sample_noise(self):
     self.key, subkey = jax.random.split(self.key)
     noise = jax.random.multivariate_normal(
-      key=subkey, mean=np.zeros(self.ndim), cov=self.covar)
+      key=subkey, mean=np.zeros(self.ndim), cov=self.noise_covar)
     return noise
