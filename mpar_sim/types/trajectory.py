@@ -9,15 +9,7 @@ class Trajectory():
                id: List[np.ndarray] = None):
     self.states = states if states else []
     self.id = id if id else str(uuid.uuid1())
-
-  def step(self, 
-           transition_model: callable, 
-           nsteps=1, 
-           **kwargs):
-    for _ in range(nsteps):
-      state = transition_model(self.states[-1].state, **kwargs)
-      self.append(state, **kwargs)
-
+    
   def append(self, state: State, **kwargs):
     if isinstance(state, np.ndarray):
       state = State(state, **kwargs)
@@ -28,3 +20,7 @@ class Trajectory():
   
   def __len__(self):
     return len(self.states)
+  
+  @property
+  def state(self):
+    return self.states[-1].state

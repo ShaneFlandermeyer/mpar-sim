@@ -1,16 +1,9 @@
 from typing import List, Tuple
 import numpy as np
-from mpar_sim.models.transition import ConstantVelocity
-from mpar_sim.models.measurement.linear import LinearMeasurementModel
-import matplotlib.pyplot as plt
 from mpar_sim.tracking.kalman import KalmanFilter
-from mpar_sim.types.detection import FalseDetection, TrueDetection
-
-from mpar_sim.types.trajectory import Trajectory
 import numpy as np
 from scipy.stats import multivariate_normal
 from mpar_sim.tracking.gate import gate_volume, gate_threshold, ellipsoid_gate
-from scipy.stats import uniform
 
 
 class PDAFilter():
@@ -26,25 +19,53 @@ class PDAFilter():
     self.clutter_density = clutter_density
     
   def gate(self, measurements: List[np.ndarray]) -> np.ndarray:
+    """
+    Filter measurements that are not in the ellipsoidal gate region centered around the predicted measurement
+
+    Parameters
+    ----------
+    measurements : List[np.ndarray]
+        List of measurements
+
+    Returns
+    -------
+    np.ndarray
+        Filtered list of measurements
+    """
     G = gate_threshold(pg=self.pg,
                        ndim=self.measurement_model.ndim)
     in_gate = ellipsoid_gate(measurements=measurements,
                              predicted_measurement=self.filter.z_pred,
                              innovation_covar=self.filter.S,
                              threshold=G)
-    return [m for m, g in zip(measurements, in_gate) if g]
+    return [m for m, valid in zip(measurements, in_gate) if valid]
 
   def update(self,
              measurements: List[np.ndarray],
              dt: float,
              ) -> Tuple[np.ndarray]:
-    # Get the predicted state/covariance/measurement, along with the innovation covariance and Kalman gain.
+    """
+    Use PDA to incorporate new measurements into the track state estimate
+
+    Parameters
+    ----------
+    measurements : List[np.ndarray]
+        New measurements from the current time step
+    dt : float
+        Time since last update
+
+    Returns
+    -------
+    Tuple[np.ndarray]
+        Posterior state vector and covariance
+    """
+    # Get the predicted state/covariance/measurement, along with the innovation covariance and Kalman gain. 
+    # Since we aren't actually updating the filter posterior here, an empty value can be passed to the update method.
     self.filter.predict(dt)
     self.filter.update(measurement=np.empty(self.measurement_model.ndim))
 
-    # Handle gating
+    # Gate measurements and compute clutter density (for non-parameteric PDA)
     gated_measurements = self.gate(measurements)
-    # Compute clutter density.
     if self.clutter_density:
       clutter_density = self.clutter_density
     else:
@@ -57,9 +78,9 @@ class PDAFilter():
 
     # Compute association probabilities for gated measurements
     if len(gated_measurements) == 0:
-      betas = np.ones(1,)
+      probs = [1]
     else:
-      betas = self._association_probs(
+      probs = self._association_probs(
           z=gated_measurements,
           z_pred=self.filter.z_pred,
           S=self.filter.S,
@@ -75,7 +96,7 @@ class PDAFilter():
         K=self.filter.K,
         z_pred=self.filter.z_pred,
         S=self.filter.S,
-        betas=betas,
+        probs=probs,
     )
     return self.filter.x, self.filter.P
 
@@ -112,9 +133,9 @@ class PDAFilter():
         Length-m+1 array of association probabilities. The first element is the probability of no detection.
     """
     m = len(z)
-    betas = np.empty(m+1)
+    probs = np.empty(m+1)
     # Probability of no detection
-    betas[0] = 1 - pd*pg
+    probs[0] = 1 - pd*pg
     # Probability of each detection from likelihood ratio
     l = multivariate_normal.pdf(
         z,
@@ -122,11 +143,11 @@ class PDAFilter():
         cov=S,
     )
     l_ratio = l * pd / clutter_density
-    betas[1:] = l_ratio
+    probs[1:] = l_ratio
 
     # Normalize to sum to 1
-    betas /= np.sum(betas)
-    return betas
+    probs /= np.sum(probs)
+    return probs
 
   @staticmethod
   def _update_state(
@@ -137,7 +158,7 @@ class PDAFilter():
       z_pred: np.array,
       K: np.array,
       S: np.array,
-      betas: np.ndarray,
+      probs: np.ndarray,
   ) -> Tuple[np.ndarray]:
     """
     Compute the posterior state and covariance for the given track as a Gaussian mixture
@@ -171,15 +192,15 @@ class PDAFilter():
     # State estimation
     # Bar-Shalom2009 - Equations 39-40
     y = np.array(z) - z_pred
-    v = np.einsum('m, mi->i', betas[1:], y)
+    v = np.einsum('m, mi->i', probs[1:], y)
     x_post = x_pred + K @ v
 
     # Bar-Shalom2009 - Equations 42-44
-    betaz = np.einsum('m, mi->mi', betas[1:], y)
+    betaz = np.einsum('m, mi->mi', probs[1:], y)
     S_mix = np.einsum('mi, mj->ij', betaz, y) - np.outer(v, v)
     Pc = P_pred - K @ S @ K.T
     Pt = K @ S_mix @ K.T
-    P_post = betas[0]*P_pred + (1 - betas[0])*Pc + Pt
+    P_post = probs[0]*P_pred + (1 - probs[0])*Pc + Pt
 
     return x_post, P_post
   
