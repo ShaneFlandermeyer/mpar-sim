@@ -35,8 +35,8 @@ class PDAFilter():
     G = gate_threshold(pg=self.pg,
                        ndim=self.measurement_model.ndim)
     in_gate = ellipsoid_gate(measurements=measurements,
-                             predicted_measurement=self.filter.z_pred,
-                             innovation_covar=self.filter.S,
+                             predicted_measurement=self.filter.predicted_measurement,
+                             innovation_covar=self.filter.innovation_covar,
                              threshold=G)
     return [m for m, valid in zip(measurements, in_gate) if valid]
 
@@ -71,7 +71,7 @@ class PDAFilter():
     else:
       m = len(gated_measurements)
       # For m validated measurements, the clutter density is m / V
-      V_gate = gate_volume(innovation_covar=self.filter.S,
+      V_gate = gate_volume(innovation_covar=self.filter.innovation_covar,
                            gate_probability=self.pg,
                            ndim=self.measurement_model.ndim)
       clutter_density = m / V_gate
@@ -82,23 +82,23 @@ class PDAFilter():
     else:
       probs = self._association_probs(
           z=gated_measurements,
-          z_pred=self.filter.z_pred,
-          S=self.filter.S,
+          z_pred=self.filter.predicted_measurement,
+          S=self.filter.innovation_covar,
           pd=self.pd,
           pg=self.pg,
           clutter_density=clutter_density,
       )
 
-    self.filter.x, self.filter.P = self._update_state(
+    self.filter.state, self.filter.covar = self._update_state(
         z=gated_measurements,
-        x_pred=self.filter.x_pred,
-        P_pred=self.filter.P_pred,
-        K=self.filter.K,
-        z_pred=self.filter.z_pred,
-        S=self.filter.S,
+        x_pred=self.filter.predicted_state,
+        P_pred=self.filter.predicted_covar,
+        K=self.filter.kalman_gain,
+        z_pred=self.filter.predicted_measurement,
+        S=self.filter.innovation_covar,
         probs=probs,
     )
-    return self.filter.x, self.filter.P
+    return self.filter.state, self.filter.covar
 
   @staticmethod
   def _association_probs(
@@ -209,11 +209,11 @@ class PDAFilter():
 
   @property
   def x(self):
-    return self.filter.x
+    return self.filter.state
 
   @property
   def P(self):
-    return self.filter.P
+    return self.filter.covar
 
   @property
   def transition_model(self):

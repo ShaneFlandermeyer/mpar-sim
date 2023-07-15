@@ -41,8 +41,8 @@ def test_pda():
   )
   pd = 0.9
   kf = KalmanFilter(
-      x=trajectory[0].state,
-      P=trajectory[0].covar,
+      state=trajectory[0].state,
+      covar=trajectory[0].covar,
       transition_model=transition_model,
       measurement_model=measurement_model,
   )

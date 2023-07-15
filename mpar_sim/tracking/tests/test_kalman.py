@@ -44,12 +44,12 @@ def test_kalman_predict():
   Q = transition_model.covar()
   
   kf = KalmanFilter(
-    x=x,
-    P=P,
+    state=x,
+    covar=P,
     transition_model=TestLinearTransitionModel(),
     measurement_model=None)
   kf.predict(dt=dt)
-  x_actual, P_actual = kf.x_pred, kf.P_pred
+  x_actual, P_actual = kf.predicted_state, kf.predicted_covar
   x_expected, P_expected = predict(x=x, P=P, F=F, Q=Q)
   assert np.allclose(x_actual, x_expected)
   assert np.allclose(P_actual, P_expected)
@@ -67,16 +67,16 @@ def test_kalman_update():
   P = np.array([[680.587, 301.175],
                 [301.175, 502.35]])
   kf = KalmanFilter(
-    x=x,
-    P=P,
+    state=x,
+    covar=P,
     transition_model=TestLinearTransitionModel(),
     measurement_model=TestLinearMeasurementModel(),
   )
-  kf.x_pred = x
-  kf.P_pred = P
+  kf.predicted_state = x
+  kf.predicted_covar = P
   
   kf.update(measurement=z)
-  x_actual, P_actual = kf.x, kf.P
+  x_actual, P_actual = kf.state, kf.covar
   x_expected, P_expected = update(x=x, P=P, z=z, R=R, H=H)
   assert np.allclose(x_actual, x_expected)
   assert np.allclose(P_actual, P_expected)

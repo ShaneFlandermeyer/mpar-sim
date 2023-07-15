@@ -34,20 +34,20 @@ def test_ekf_update():
   prior_state = np.array([50, 1, 0, 1, 0, 1])
   prior_covar = np.diag([1.5, 0.5, 1.5, 0.5, 1.5, 0.5])
   kf = KalmanFilter(
-    x=prior_state,
-    P=prior_covar,
+    state=prior_state,
+    covar=prior_covar,
     transition_model=transition_model,
     measurement_model=None)
   track = np.zeros((6, len(truth)))
   track[:, 0] = prior_state
   for i in range(1, len(truth)):
     # Predict step
-    kf.x, kf.P = prior_state, prior_covar
+    kf.state, kf.covar = prior_state, prior_covar
     kf.predict(dt=dt)
     # Update step
     posterior_state, posterior_covar = extended_kalman_update(
-        x_pred=kf.x_pred,
-        P_pred=kf.P_pred,
+        x_pred=kf.predicted_state,
+        P_pred=kf.predicted_covar,
         z=measurements[:, i],
         measurement_model=measurement_model
     )
