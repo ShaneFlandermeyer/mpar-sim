@@ -53,8 +53,6 @@ class JPDAFilter():
     """
     Use PDA to incorporate new measurements into the track state estimate
 
-    NOTE: For now, going to assume that the user has passed in one KF per track. Not sure how to handle adding more tracks
-
     Parameters
     ----------
     measurements : List[np.ndarray]
@@ -68,9 +66,9 @@ class JPDAFilter():
         Posterior state vector and covariance
     """
     measurement_inds = np.arange(1, len(measurements)+1)
-    gated_measurements = []
-    gated_inds = []
-    single_probs = []
+    valid_measurements = []
+    valid_inds = []
+    probs = np.zeros((len(self.filters), len(measurements)+1))
     for i, filt in enumerate(self.filters):
       # Get the predicted state/covariance/measurement, along with the innovation covariance and Kalman gain.
       # Since we aren't actually updating the filter posterior here, an empty value can be passed to the update method.
@@ -78,16 +76,18 @@ class JPDAFilter():
       filt.update(measurement=np.empty(filt.measurement_model.ndim))
 
       # Gate measurements and compute clutter density (for non-parameteric PDA)
-      # TODO: Need to store a separate list of measurements for each track/gate
       in_gate = self.gate(
           measurements=measurements,
           predicted_measurement=filt.predicted_measurement,
           innovation_covar=filt.innovation_covar)
-      gated_measurements.append([m for m, valid in zip(measurements, in_gate) if valid])
+      valid_measurements.append(
+          [m for m, valid in zip(measurements, in_gate) if valid])
+      # 0 appended here since the null hypothesis is always valid
+      valid_inds.append(np.append(0, measurement_inds[in_gate]))
       if self.clutter_density:
         clutter_density = self.clutter_density
       else:
-        m = len(gated_measurements[i])
+        m = len(valid_measurements[i])
         # For m validated measurements, the clutter density is m / V
         V_gate = gate_volume(innovation_covar=filt.innovation_covar,
                              gate_probability=self.pg,
@@ -95,45 +95,35 @@ class JPDAFilter():
         clutter_density = m / V_gate
 
       # Compute association probabilities for gated measurements
-      if len(gated_measurements[i]) == 0:
-        single_probs.append(np.ones(1))
-      else:
-        single_probs.append(self._association_probs(
-            z=gated_measurements[i],
+      probs[i, valid_inds[i]] = self._association_probs(
+            z=valid_measurements[i],
             z_pred=filt.predicted_measurement,
             S=filt.innovation_covar,
             pd=self.pd,
             pg=self.pg,
             clutter_density=clutter_density,
-        ))
-      gated_inds.append(np.append(0, measurement_inds[in_gate]))
-      
-    # Form single-track probabilities as a ntrack x nmeas+1 array
-    probs = np.zeros((len(self.filters), len(measurements)+1))
-    for i, single_prob in enumerate(single_probs):
-      probs[i, gated_inds[i]] = single_prob
-      
-    # Compute joint probabilities for every valid combination of hypotheses
-    hypotheses = list(itertools.product(*gated_inds))
+        ) if len(valid_measurements[i]) > 0 else 1
+
+    # Compute joint probabilities for every valid combination of associations
+    hypotheses = list(itertools.product(*valid_inds))
     valid_hypotheses = np.array([h for h in hypotheses if self.isvalid(h)])
-    joint_probs = np.prod(probs[np.arange(len(self.filters)), valid_hypotheses], axis=1)
+    joint_probs = np.prod(
+        probs[np.arange(len(self.filters)), valid_hypotheses], axis=1)
     joint_probs /= np.sum(joint_probs)
 
-    # Compute marginal probabilities for each track/measurement pair, then update the filter state and covar
+    # Compute marginal probabilities for each track/measurement pair, then update the filter
     for i, filt in enumerate(self.filters):
       marginal_probs = np.bincount(valid_hypotheses[:, i], weights=joint_probs)
       filt.state, filt.covar = self._update_state(
-            z=gated_measurements[i],
-            x_pred=filt.predicted_state,
-            P_pred=filt.predicted_covar,
-            z_pred=filt.predicted_measurement,
-            K=filt.kalman_gain,
-            S=filt.innovation_covar,
-            probs=marginal_probs[marginal_probs != 0],
-        )
-      
-    return
-      
+          z=valid_measurements[i],
+          x_pred=filt.predicted_state,
+          P_pred=filt.predicted_covar,
+          z_pred=filt.predicted_measurement,
+          K=filt.kalman_gain,
+          S=filt.innovation_covar,
+          probs=marginal_probs[marginal_probs != 0],
+      )
+
   @staticmethod
   def _association_probs(
       z: List[np.array],
@@ -247,12 +237,12 @@ class JPDAFilter():
     Parameters
     ----------
     x : tuple
-        _description_
+        Hypothesis tuple, where each element indicates the detection index for the corresponding track
 
     Returns
     -------
     bool
-        _description_
+        True if the hypothesis is valid, False otherwise
     """
     x = np.array(x)
     x = x[x != 0]

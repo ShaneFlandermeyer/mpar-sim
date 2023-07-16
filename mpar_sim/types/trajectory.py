@@ -23,4 +23,4 @@ class Trajectory():
   
   @property
   def state(self):
-    return self.states[-1].state
+    return self.states[-1].state if self.states else None
