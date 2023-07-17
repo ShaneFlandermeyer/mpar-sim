@@ -192,14 +192,13 @@ class PDAFilter():
     # State estimation
     # Bar-Shalom2009 - Equations 39-40
     y = np.array(z) - z_pred
-    v = np.einsum('m, mi->i', probs[1:], y)
+    v = np.dot(probs[1:], y)
     x_post = x_pred + K @ v
 
     # Bar-Shalom2009 - Equations 42-44
-    betaz = np.einsum('m, mi->mi', probs[1:], y)
-    S_mix = np.einsum('mi, mj->ij', betaz, y) - np.outer(v, v)
+    S_mix = np.einsum('m, mi, mj->ij', probs[1:], y, y)
     Pc = P_pred - K @ S @ K.T
-    Pt = K @ S_mix @ K.T
+    Pt = K @ (S_mix - np.outer(v,v)) @ K.T
     P_post = probs[0]*P_pred + (1 - probs[0])*Pc + Pt
 
     return x_post, P_post

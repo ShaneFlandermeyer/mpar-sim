@@ -99,19 +99,6 @@ def test_jpda():
   true_states = np.array([[state.state for state in path] for path in paths])
   measurements = np.array(
       [detection.measurement for detection in all_detections])
-  true_meas = np.array(
-      [detection.measurement for detection in all_detections if isinstance(detection, TrueDetection)])
-  false_meas = np.array(
-      [detection.measurement for detection in all_detections if isinstance(detection, FalseDetection)])
-
-  plt.figure()
-  plt.plot(true_states[0, :, 0], true_states[0, :, 2], '--', label='Target 1')
-  plt.plot(true_states[1, :, 0], true_states[1, :, 2], '--', label='Target 2')
-  plt.plot(true_meas[:, 0], true_meas[:, 1], 'o', label='Measurement')
-  if false_meas.size > 0:
-    plt.plot(false_meas[:, 0], false_meas[:, 1], 'x', label='False Alarm')
-  plt.grid()
-  plt.legend()
 
   # %% [markdown]
   # ## Track Processing
