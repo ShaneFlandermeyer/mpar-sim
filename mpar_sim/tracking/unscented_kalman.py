@@ -39,13 +39,20 @@ class UnscentedKalmanFilter():
         noise_covar=self.transition_model.covar(dt))
 
   def update(self, measurement: np.ndarray):
+    # Compute sigma points in measurement space
+    n_sigma_points, ndim_state = self.sigmas_f.shape
+    ndim_measurement = measurement.size
+    self.sigmas_h = np.zeros((n_sigma_points, ndim_measurement))
+    for i in range(n_sigma_points):
+      self.sigmas_h[i] = self.measurement_model(self.sigmas_f[i])
+    
     x_post, P_post, S, K, z_pred = self._update(
       x_pred=self.predicted_state,
       P_pred=self.predicted_covar,
       z=measurement,
-      measurement_model=self.measurement_model,
       R=self.measurement_model.covar(),
       sigmas_f=self.sigmas_f,
+      sigmas_h=self.sigmas_h,
       Wm=self.Wm,
       Wc=self.Wc,
     )
@@ -99,10 +106,10 @@ class UnscentedKalmanFilter():
       P_pred: np.ndarray,
       z: np.ndarray,
       # Measurement parameters
-      measurement_model: callable,
       R: np.ndarray,
       # Sigma point parameters
       sigmas_f: np.ndarray,
+      sigmas_h: np.ndarray,
       Wm: np.ndarray,
       Wc: np.ndarray,
   ) -> Tuple[np.ndarray]:
@@ -117,8 +124,8 @@ class UnscentedKalmanFilter():
         State vector after the prediction step
     predicted_covar : np.ndarray
         Covariance after the prediction step
-    sigmas_f : np.ndarray
-        Sigma points after the prediction step
+    sigmas_h : np.ndarray
+        Sigma points in measurement space
     Wm : np.ndarray
         Mean weights from the prediction step
     Wc : np.ndarray
@@ -138,13 +145,7 @@ class UnscentedKalmanFilter():
           - Kalman gain
           - Predicted measurement
     """
-    n_sigma_points, ndim_state = sigmas_f.shape
-    ndim_measurement = z.size
-
-    # Transform sigma points into measurement space
-    sigmas_h = np.zeros((n_sigma_points, ndim_measurement))
-    for i in range(n_sigma_points):
-      sigmas_h[i] = measurement_model(sigmas_f[i])
+    
 
     # Compute the mean and covariance of the measurement prediction using the unscented transform
     z_pred, S = UnscentedKalmanFilter.unscented_transform(
