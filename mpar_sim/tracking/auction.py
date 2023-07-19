@@ -74,6 +74,9 @@ def auction(
   """
 
   n_agent, n_object = cost_mat.shape
+  # Convert masked cost matrix to a reguar numpy array
+  if np.ma.is_masked(cost_mat):
+    cost_mat = cost_mat.filled(np.ma.maximum_fill_value(cost_mat))
   # The following code assumes that there are more objects than agents, and that agents/objects are the rows/columns of the cost matrix. If this is not the case, we transpose the cost matrix, solve the optimization, then put the resulting pairs back in the original order.
   transpose = False if n_object >= n_agent else True
   if transpose:
