@@ -19,12 +19,12 @@ def is_happy(cost_mat: np.ndarray,
              object_inds: np.ndarray,
              eps: float):
   happy = np.zeros(len(agent_inds), dtype=bool)
-  if np.any(object_inds != None):
-    valid_inds = np.where(object_inds != None)[0]
-    agent_inds = agent_inds[valid_inds]
-    object_inds = object_inds[valid_inds].astype(int)
+  is_assigned = object_inds != None
+  if np.any(is_assigned):
+    agent_inds = agent_inds[is_assigned]
+    object_inds = object_inds[is_assigned].astype(int)
     happy[agent_inds] = np.max(cost_mat[agent_inds] - prices, axis=1) - \
-      (cost_mat[agent_inds, object_inds] - prices[object_inds]) < eps
+      (cost_mat[agent_inds, object_inds] - prices[object_inds]) <= eps
       
   return happy
 
@@ -32,7 +32,6 @@ def is_happy(cost_mat: np.ndarray,
 def auction(
     a: np.ndarray,
     eps: float,
-    maxiter: Optional[int] = None,
 ) -> Tuple[List[Tuple], np.ndarray]:
 
   n_object, n_agent = a.shape
@@ -40,40 +39,42 @@ def auction(
 
   # Initialize all observations as unassociated
   agents = np.arange(n_agent)
-  assigned_objects = [None for _ in range(n_agent)]
+  assigned_objects = np.array([None]*n_agent)
   happy = np.zeros(n_agent, dtype=bool)
   prices = np.zeros(n_object)
   iter = 0
+  
   while True:
-    iagent = np.where(~happy)[0][0]
-    
-    # Exchange favored object with the person currently assigned to it
-    iobj = np.argmax(a[iagent] - prices)    
-    if iobj in assigned_objects:
-      # Swap the assigned objects
-      iswap = np.where(assigned_objects == iobj)[0].item()
-      assigned_objects[iswap], assigned_objects[iagent] = \
-          assigned_objects[iagent], assigned_objects[iswap]
-    else:
-      assigned_objects[iagent] = iobj
-
-    # Update the price of the assigned objects
-    mask = np.arange(n_object) != iobj
-    yj = a[iagent, iobj] - prices[iobj] - \
-        np.max(a[iagent][mask] - prices[mask])
-    prices[iobj] += yj + eps
-    iter += 1
-    
+    # Check if all agents are happy
     happy = is_happy(cost_mat=a,
                      prices=prices,
                      agent_inds=agents,
-                     object_inds=np.array(assigned_objects),
+                     object_inds=assigned_objects,
                      eps=eps)
     if np.all(happy):
       break
+    iagent = np.where(~happy)[0][0]
+    
+    
+    
+    # If another agent already has the desired object, swap it. Otherwise, assign it directly
+    iobject = np.argmax(a[iagent] - prices)    
+    if iobject in assigned_objects:
+      iswap = np.where(assigned_objects == iobject)[0].item()
+      assigned_objects[iswap], assigned_objects[iagent] = \
+          assigned_objects[iagent], assigned_objects[iswap]
+    else:
+      assigned_objects[iagent] = iobject
+      
+    # Update the price of the assigned object
+    mask = np.arange(n_object) != iobject
+    yj = a[iagent, iobject] - prices[iobject] - \
+        np.max(a[iagent][mask] - prices[mask])
+    prices[iobject] += yj + eps
+    
+    iter += 1
+    
 
-
-  # Sort the assigned array based on the first column
-  # assigned = assigned[np.argsort(assigned[:, 0])]
-
-  return [(a, o) for a,o in zip(agents, assigned_objects)], prices
+  print(f"Converged after {iter} iterations.")
+  # Return a list of assignment pairs and the computed prices for each object
+  return [(a, o) for a, o in zip(agents, assigned_objects)], prices
