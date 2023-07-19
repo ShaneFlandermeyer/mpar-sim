@@ -4,7 +4,24 @@ Multi-function Phased Array Radar (MPAR) Simulator
 
 ## Overview
 
-The MPAR simulator is a tool for rapidly simulating radar scenarios at the detection level. The tool is intended to help with rapid prototyping of resource management/tracking algorithms, and the user can easily modify all aspects of the scenario. Targets, waveform parameters, and beam parameters can be modified at runtime.
+The MPAR simulator is a python-based simulation tool that I developed as part of my Master's thesis, and am actively maintaining as I continue my Ph.D. research. The repo currently has many tools for radar scenario simulation and tracking. Unfortunately for everyone involved, I don't get paid enough to document this thoroughly. However, most of the major classes have unit tests in the ```test/``` subdirectory that show examples of how to use each class. 
+
+In the future, I would like to add some I/Q level simulation, probably GPU accelerated with Jax.
+
+## Features
+
+- Phased array radar detection simulation
+- Tracking
+  - Kalman filters (KF, EKF, UKF)
+  - PDA/JPDA
+  - Global Nearest Neighbor
+    - Auction algorithm
+- Motion models:
+  - Constant velocity, white noise acceleration
+- Measurement models:
+  - Cartesian to azimuth/elevation/range/velocity
+- RCS Models:
+  - Swerling 0-3
 
 ## Installation
 
@@ -13,57 +30,3 @@ This project can be installed as a python package by running the following in th
 ```bash
 pip install -e .
 ```
-
-## Radar System
-
-The simulation is built around the ```PhasedArrayRadar``` class, which simulates detections for a uniform rectangular array (URA) aperture. A radar can be instantiated as shown below:
-
-```python
-radar = PhasedArrayRadar(
-    ndim_state=6,
-    position_mapping=[0, 2, 4],
-    velocity_mapping=[1, 3, 5],
-    position=np.array([[0], [0], [0]]),
-    rotation_offset=np.array([[0], [0], [0]]),
-    # Array parameters
-    n_elements_x=32,
-    n_elements_y=32,
-    element_spacing=0.5,  # Wavelengths
-    element_tx_power=10,
-    # System parameters
-    center_frequency=3e9,
-    system_temperature=290,
-    noise_figure=4,
-    # Scan settings
-    beam_shape=SincBeam,
-    az_fov=[-45, 45],
-    el_fov=[-45, 45],
-    # Detection settings
-    false_alarm_rate=1e-6,
-    include_false_alarms=False
-)
-```
-
-The ```measure()``` function of the radar can be used to collect measurements for a list of ```GroundTruthState``` objects. These measurements are returned as ```Detection``` objects (```TrueDetection``` if the measurement corresponds to a real target or ```Clutter``` if it's from a false alarm or clutter).
-
-## Features
-
-- Beams:
-  - Rectangular
-  - Gaussian
-  - Sinc
-- Motion models:
-  - Constant velocity white noise acceleration
-- Measurement models:
-  - Cartesian to azimuth/elevation/range/velocity
-- Resource management:
-  - Best-first scheduler
-  - Power-aperture product-based resource manager
-- Surveillance:
-  - Raster scan
-  - Cued search
-- Tracking:
-  - Adaptive track manager
-  - Standard kalman filter
-  - Extended kalman filter
-  - Unscented kalman filter
