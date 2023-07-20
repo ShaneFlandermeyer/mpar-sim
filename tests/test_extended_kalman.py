@@ -25,10 +25,11 @@ def test_ekf_update():
   for i in range(50):
     state = transition_model(truth[-1].state, dt=dt, noise=False)
     truth.append(state)
-  states = np.stack([state.state for state in truth]).T
+  states = np.array([state.state for state in truth])
 
   # Simulate measurements
-  measurements = measurement_model(states, noise=False)
+  measurements = measurement_model(list(states), noise=False)
+  measurements = np.array(measurements)
 
   # Test the tracking filter
   prior_state = np.array([50, 1, 0, 1, 0, 1])
@@ -36,8 +37,8 @@ def test_ekf_update():
   kf = KalmanFilter(
     transition_model=transition_model,
     measurement_model=None)
-  track = np.zeros((6, len(truth)))
-  track[:, 0] = prior_state
+  track = np.zeros((len(truth), 6))
+  track[0] = prior_state
   for i in range(1, len(truth)):
     # Predict step
     # kf.state, kf.covar = prior_state, prior_covar
@@ -46,22 +47,22 @@ def test_ekf_update():
     posterior_state, posterior_covar = extended_kalman_update(
         x_pred=x_pred,
         P_pred=P_pred,
-        z=measurements[:, i],
+        z=measurements[i],
         measurement_model=measurement_model
     )
     
 
     # Store the results and update the prior
-    track[:, i] = posterior_state
+    track[i] = posterior_state
     prior_state = posterior_state
     prior_covar = posterior_covar
 
   position_mapping = [0, 2, 4]
   velocity_mapping = [1, 3, 5]
   position_mse = np.mean(
-      (track[position_mapping] - states[position_mapping])**2, axis=1)
+      (track[:, position_mapping] - states[:, position_mapping])**2, axis=1)
   velocity_mse = np.mean(
-      (track[velocity_mapping] - states[velocity_mapping])**2, axis=1)
+      (track[:, velocity_mapping] - states[:, velocity_mapping])**2, axis=1)
   assert np.all(position_mse < 1e-6)
   assert np.all(velocity_mse < 1e-6)
 

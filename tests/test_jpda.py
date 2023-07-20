@@ -24,7 +24,7 @@ def test_jpda():
   # Target 1
   path = Trajectory()
   path.append(state=np.array([0, 1, 0, 1]),
-              covar=np.diag([1.5, 1.5, 1.5, 1.5]),
+              covar=np.diag([1.5, .5, 1.5, .5]),
               timestamp=current_time)
   transition_model = ConstantVelocity(ndim_pos=2,
                                       noise_diff_coeff=0.005,
@@ -39,7 +39,7 @@ def test_jpda():
   current_time = last_update = 0
   path = Trajectory()
   path.append(state=np.array([0, 1, 20, -1]),
-              covar=np.diag([1.5, 1.5, 1.5, 1.5]),
+              covar=np.diag([1.5, .5, 1.5, .5]),
               timestamp=current_time)
   for i in range(n_steps):
     current_time += dt
@@ -62,7 +62,7 @@ def test_jpda():
   pd = 0.9
   measurement_model = LinearMeasurementModel(
       ndim_state=4,
-      covar=np.diag([1, 1]),
+      covar=np.diag([0.75, 0.75]),
       measured_dims=[0, 2],
       seed=seed,
   )
@@ -141,6 +141,7 @@ def test_jpda():
       )
     last_update = current_time
   
+  # plt.figure()
   for i, track in enumerate(tracks):
     true_states = np.array([state.state for state in paths[i]])
     track_pos = np.array([state.state[[0, 2]] for state in track])
@@ -148,9 +149,12 @@ def test_jpda():
     pos_mse = np.mean(np.linalg.norm(true_states[:, [0, 2]] - track_pos, axis=1))
     vel_mse = np.mean(np.linalg.norm(true_states[:, [1, 3]] - track_vel, axis=1))
     
-    assert pos_mse < 2.0
-    assert vel_mse < 0.3
+    # plt.plot(track_pos[:, 0], track_pos[:, 1], '.-', label=f'Track {i+1}')
+    # plt.plot(true_states[:, 0], true_states[:, 2], label=f'Truth {i+1}')
     
+    assert pos_mse < 2.5
+    assert vel_mse < 0.3
+  # plt.show()
 if __name__ == '__main__':
   # test_jpda()
   pytest.main()

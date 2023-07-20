@@ -216,6 +216,11 @@ class PhasedArrayRadar():
       positions = positions[is_detected]
       velocities = np.array([target.velocity for target in targets]).reshape(
           (n_targets, -1))[is_detected]
+      pos_inds = np.array(self.position_mapping)
+      vel_inds = np.array(self.velocity_mapping)
+      state_vectors = np.zeros((n_detections, self.ndim_state))
+      state_vectors[:, pos_inds] = positions
+      state_vectors[:, vel_inds] = velocities
       if self.measurement_model is None:
         # Create the measurement models based on SNR and resolutions
         measurement_model = CartesianToRangeAzElVelocity(
@@ -224,17 +229,15 @@ class PhasedArrayRadar():
             velocity=self.velocity,
             range_resolution=self.range_resolution,
             velocity_resolution=self.velocity_resolution,
+            # Additional settings
+            position_mapping=self.position_mapping,
+            velocity_mapping=self.velocity_mapping,
             discretize_measurements=self.discretize_measurements,
             unambiguous_range=self.unambiguous_range,
             unambiguous_velocity=self.unambiguous_velocity,
             alias_measurements=self.alias_measurements,
         )
-        pos_inds = np.array(measurement_model.position_mapping)
-        vel_inds = np.array(measurement_model.velocity_mapping)
-        state_vectors = np.zeros((self.ndim_state, n_detections))
-        state_vectors[pos_inds] = positions.T
-        state_vectors[vel_inds] = velocities.T
-        measurements = np.empty((measurement_model.ndim_meas, n_detections))
+        measurements = np.empty((n_detections, measurement_model.ndim))
 
         # Compute errors in each measurement dimension
         single_pulse_snr = 10**(single_pulse_snr_db/10)
@@ -263,28 +266,23 @@ class PhasedArrayRadar():
 
         detections = []
         detection_inds = is_detected.nonzero()[0]
-        for i in range(n_detections):
-          measurement_model.noise_covar = np.diag(
-              np.array([az_variance[i],
-                        el_variance[i],
-                        range_variance[i],
-                        vel_variance[i]]))
-          measurements[:, i] = measurement_model(
-              state_vectors[:, i], noise=noise)
+        measurement_model.noise_covar = [np.diag([*v]) for v in zip(
+            az_variance, el_variance, range_variance, vel_variance)]
+        state_vectors = list(state_vectors)
+        measurements = measurement_model(state_vectors, noise=noise)
       else:
-        pos_inds = np.array(measurement_model.position_mapping)
-        vel_inds = np.array(measurement_model.velocity_mapping)
-        state_vectors = np.zeros((self.ndim_state, n_detections))
-        state_vectors[pos_inds] = positions.T
-        state_vectors[vel_inds] = velocities.T
         measurements = self.measurement_model(state_vectors, noise=noise)
+
+    # TODO: Ensure measurements in the same bin are merged
+    if isinstance(measurements, np.ndarray):
+      measurements = [measurements]
 
     detections = []
     detection_inds = is_detected.nonzero()[0]
     for i in detection_inds:
       detection = TrueDetection(
           timestamp=self.timestamp,
-          measurement=measurements[:, i],
+          measurement=measurements[i],
           measurement_model=measurement_model,
           snr=snr_db[i],
       )
@@ -368,8 +366,8 @@ if __name__ == '__main__':
                     velocity=[100, 0, 0],
                     transition_model=ConstantVelocity(
       ndim_pos=3, noise_diff_coeff=1),
-      rcs=Swerling(case=0, mean=1)) for _ in range(1)]
-  detections = radar.measure(targets)
+      rcs=Swerling(case=0, mean=1)) for _ in range(100)]
+  detections = radar.measure(targets, noise=True)
   print(detections[0].snr)
   detections = radar.measure(targets)
   print(detections[0].snr)
