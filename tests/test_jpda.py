@@ -5,7 +5,7 @@ import pytest
 
 from mpar_sim.models.measurement import LinearMeasurementModel
 from mpar_sim.models.transition import ConstantVelocity
-from mpar_sim.tracking import JPDAFilter, KalmanFilter
+from mpar_sim.tracking import JPDATracker, KalmanFilter
 from mpar_sim.types import FalseDetection, Track, Trajectory, TrueDetection
 
 def test_jpda():
@@ -104,45 +104,43 @@ def test_jpda():
   # ## Track Processing
 
   # %%
+  
   # Initialize filters
-  kfs = [KalmanFilter(
-      state=path[0].state,
-      covar=path[0].covar,
+  kf = KalmanFilter(
       transition_model=transition_model,
-      measurement_model=measurement_model,
-  ) for path in paths]
-  jpda = JPDAFilter(
-      filters=kfs,
+      measurement_model=measurement_model)
+  tracks = []
+  for path in paths:
+    track = Track(
+      history=[path[0]],
+      filter=kf,
+    )
+    tracks.append(track)    
+  jpda = JPDATracker(
+      tracks=tracks,
       pd=pd,
       pg=0.99
   )
-  # Initialize tracks
-  current_time = last_update = 0
-  tracks = []
-  for i in range(len(jpda.filters)):
-    tracks.append(Track())
-    tracks[i].append(
-      state=jpda.filters[i].state,
-      covar=jpda.filters[i].covar,
-      timestamp=current_time,
-    )
     
   # Sequentially process detections
+  current_time = last_update = 0
   for i, current_detections in enumerate(detections):
     current_time = current_detections[0].timestamp
     measurements = [d.measurement for d in current_detections]
     dt = current_time - last_update
-    jpda.update(measurements=measurements, dt=dt)
-    last_update = current_time
+    pred_states, pred_covars = jpda.predict(dt=dt)
+    states, covars = jpda.update(measurements=measurements, 
+                                 predicted_states=pred_states,
+                                 predicted_covars=pred_covars)
     # Update tracks
     for j, track in enumerate(tracks):
       track.append(
-          state=jpda.filters[j].state,
-          covar=jpda.filters[j].covar,
+          state=states[j],
+          covar=covars[j],
           timestamp=current_time,
       )
+    last_update = current_time
   
-  # true_states = np.array([[state.state for state in path] for path in paths])
   for i, track in enumerate(tracks):
     true_states = np.array([state.state for state in paths[i]])
     track_pos = np.array([state.state[[0, 2]] for state in track])
@@ -150,11 +148,9 @@ def test_jpda():
     pos_mse = np.mean(np.linalg.norm(true_states[:, [0, 2]] - track_pos, axis=1))
     vel_mse = np.mean(np.linalg.norm(true_states[:, [1, 3]] - track_vel, axis=1))
     
-    # print(f'Target {i+1} Position MSE: {pos_mse:.2f}')
-    # print(f'Target {i+1} Velocity MSE: {vel_mse:.2f}')
-    
     assert pos_mse < 2.0
     assert vel_mse < 0.3
     
 if __name__ == '__main__':
+  # test_jpda()
   pytest.main()

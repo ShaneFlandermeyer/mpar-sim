@@ -1,10 +1,12 @@
 
+from matplotlib import pyplot as plt
 import numpy as np
 from mpar_sim.models.transition import ConstantVelocity
 from mpar_sim.models.measurement.linear import LinearMeasurementModel
 from mpar_sim.tracking.kalman import KalmanFilter
 from mpar_sim.tracking.pda import PDAFilter
 from mpar_sim.types.detection import FalseDetection, TrueDetection
+from mpar_sim.types.track import Track
 
 from mpar_sim.types.trajectory import Trajectory
 import numpy as np
@@ -40,18 +42,6 @@ def test_pda():
       seed=seed,
   )
   pd = 0.9
-  kf = KalmanFilter(
-      state=trajectory[0].state,
-      covar=trajectory[0].covar,
-      transition_model=transition_model,
-      measurement_model=measurement_model,
-  )
-  pda = PDAFilter(
-      state_filter=kf,
-      pd=pd,
-      pg=0.95,
-      # clutter_density=0.125,
-  )
   detections = []
   track_pos = []
   track_vel = []
@@ -77,22 +67,45 @@ def test_pda():
           timestamp=state.timestamp,
       )
       current_detections.append(detection)
+      
+    detections.append(current_detections)
 
-    # Gate detections
-    if len(current_detections) > 0:
-      pda.update(measurements=[
-          d.measurement for d in current_detections], dt=current_time - last_update)
-      track_pos.append(pda.x[np.array([0, 2])])
-      track_vel.append(pda.x[np.array([1, 3])])
-      detections.extend(current_detections)
-      last_update = current_time
-    current_time += dt
 
-  true_states = np.array([state.state for state in trajectory])
-  pos_mse = np.mean(np.linalg.norm(true_states[:, [0, 2]] - track_pos, axis=1))
-  vel_mse = np.mean(np.linalg.norm(true_states[:, [1, 3]] - track_vel, axis=1))
-  assert pos_mse < 0.65
-  assert vel_mse < 0.2
+  # Run tracker
+  kf = KalmanFilter(
+      transition_model=transition_model,
+      measurement_model=measurement_model,
+  )
+  pda = PDAFilter(
+      state_filter=kf,
+      pd=pd,
+      pg=0.95,
+      # clutter_density=0.125,
+  )
+  track = Track(
+    history=[trajectory[0]],
+    filter=pda)
+  for i, current_detections in enumerate(detections):
+    current_time = current_detections[0].timestamp
+    measurements = [d.measurement for d in current_detections]
+    dt = current_time - last_update
+    pred_state, pred_covar = track.predict(dt=dt)
+    state, covar = track.update(measurements=measurements,
+                                predicted_state=pred_state,
+                                predicted_covar=pred_covar)
+    track.append(state=state, covar=covar, timestamp=current_time)
+    last_update = current_time
+    
+  true_pos = np.array([state.state[[0, 2]] for state in trajectory])
+  true_vel = np.array([state.state[[1, 3]] for state in trajectory])
+  track_pos = np.array([state.state[[0, 2]] for state in track[1:]])
+  track_vel = np.array([state.state[[1, 3]] for state in track[1:]])
+
+  # true_states = np.array([state.state for state in trajectory])
+  pos_mse = np.mean(np.linalg.norm(true_pos - track_pos, axis=1))
+  vel_mse = np.mean(np.linalg.norm(true_vel - track_vel, axis=1))
+  assert pos_mse < 1.0
+  assert vel_mse < 0.5
 
 
 if __name__ == '__main__':

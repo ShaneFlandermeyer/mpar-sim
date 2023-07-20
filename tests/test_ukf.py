@@ -63,22 +63,26 @@ def test_ukf():
   # Test the UKF
   current_time = last_update = 0
   ukf = UnscentedKalmanFilter(
-    state=trajectory[0].state,
-    covar=trajectory[0].covar,
     transition_model=transition_model,
     measurement_model=measurement_model)
-  track = Track()
+  track_state = [trajectory[0].state]
+  track_covar = [trajectory[0].covar]
+  # track = Track()
   for i, m in enumerate(measurements):
-    ukf.predict(dt=current_time - last_update)
-    ukf.update(m)
-    track.append(state=ukf.state,
-                 covar=ukf.covar, 
-                 timestamp=current_time)
+    pred_state, pred_covar = ukf.predict(
+      state=track_state[-1],
+      covar=track_covar[-1],
+      dt=current_time - last_update)
+    state, covar = ukf.update(measurement=m,
+                              predicted_state=pred_state,
+                              predicted_covar=pred_covar)[:2]
+    track_state.append(state)
+    track_covar.append(covar)
     last_update = current_time
     current_time += dt
   
   true_states = np.stack([state.state for state in trajectory]).T
-  track_states = np.stack([state.state for state in track]).T
+  track_states = np.stack([state for state in track_state])[1:].T
   track_pos = track_states[[0, 2]]
   track_vel = track_states[[1, 3]]
   pos_mse = np.mean(np.linalg.norm(true_states[[0, 2]] - track_pos, axis=1))

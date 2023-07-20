@@ -9,43 +9,47 @@ from mpar_sim.models.transition import TransitionModel
 
 class UnscentedKalmanFilter():
   def __init__(self,
-               state: np.ndarray,
-               covar: np.ndarray,
                transition_model: TransitionModel,
                measurement_model: MeasurementModel,
                state_residual_fn: callable = np.subtract,
                measurement_residual_fn: callable = np.subtract,
                ):
-    self.state = state
-    self.covar = covar
     self.transition_model = transition_model
     self.measurement_model = measurement_model
     self.state_residual_fn = state_residual_fn
     self.measurement_residual_fn = measurement_residual_fn
 
-  def predict(self, dt: float):
+  def predict(self, 
+              dt: float,
+              state: np.ndarray,
+              covar: np.ndarray,
+              ) -> Tuple[np.ndarray]:
     # Compute sigma points and weights
     self.sigmas, self.Wm, self.Wc = merwe_scaled_sigma_points(
-        x=self.state,
-        P=self.covar,
+        x=state,
+        P=covar,
         alpha=0.5,
         beta=2,
-        kappa=3-self.state.size,
+        kappa=3-state.size,
     )
     # Transform points to the prediction space
     self.sigmas_f = np.zeros_like(self.sigmas)
     for i in range(len(self.sigmas)):
       self.sigmas_f[i] = self.transition_model(self.sigmas[i], dt)
 
-    self.predicted_state, self.predicted_covar = self.unscented_transform(
+    predicted_state, predicted_covar = self.unscented_transform(
         sigmas=self.sigmas_f,
         Wm=self.Wm,
         Wc=self.Wc,
         noise_covar=self.transition_model.covar(dt),
         residual_fn=self.state_residual_fn,
     )
+    return predicted_state, predicted_covar
 
-  def update(self, measurement: np.ndarray):
+  def update(self, 
+             measurement: np.ndarray,
+             predicted_state: np.ndarray,
+             predicted_covar: np.ndarray,):
     # Transform sigma points to measurement space
     n_sigma_points, ndim_state = self.sigmas_f.shape
     ndim_measurement = measurement.size
@@ -54,9 +58,9 @@ class UnscentedKalmanFilter():
       self.sigmas_h[i] = self.measurement_model(self.sigmas_f[i])
 
     # State update
-    x_post, P_post, S, K, z_pred = self._update(
-        x_pred=self.predicted_state,
-        P_pred=self.predicted_covar,
+    return self._update(
+        x_pred=predicted_state,
+        P_pred=predicted_covar,
         z=measurement,
         R=self.measurement_model.covar(),
         sigmas_f=self.sigmas_f,
@@ -66,11 +70,6 @@ class UnscentedKalmanFilter():
         state_residual_fn=self.state_residual_fn,
         measurement_residual_fn=self.measurement_residual_fn,
     )
-    self.innovation_covar = S
-    self.kalman_gain = K
-    self.predicted_measurement = z_pred
-    self.state = x_post
-    self.covar = P_post
 
   @staticmethod
   def unscented_transform(sigmas: np.ndarray,

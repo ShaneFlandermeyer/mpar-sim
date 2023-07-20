@@ -8,45 +8,38 @@ from mpar_sim.models.transition.base import TransitionModel
 
 class KalmanFilter():
   def __init__(self,
-               state: np.ndarray,
-               covar: np.ndarray,
                transition_model: TransitionModel = None,
                measurement_model: MeasurementModel = None,
                ):
-    self.state = state
-    self.covar = covar
     self.transition_model = transition_model
     self.measurement_model = measurement_model
 
-  def predict(self, dt: float) -> Tuple[np.ndarray]:
-
-    F = self.transition_model.matrix(dt)
-    Q = self.transition_model.covar(dt)
-
-    self.predicted_state, self.predicted_covar = self._predict(
-        x=self.state,
-        P=self.covar,
-        F=F,
-        Q=Q,
+  def predict(self,
+              state: np.ndarray,
+              covar: np.ndarray,
+              dt: float,
+              ) -> Tuple[np.ndarray]:
+    return self.kf_predict(
+        x=state,
+        P=covar,
+        F=self.transition_model.matrix(dt),
+        Q=self.transition_model.covar(dt),
     )
-    return self.predicted_state, self.predicted_covar
 
-  def update(self, measurement: np.ndarray):
-    x_post, P_post, S, K, z_pred = self._update(
-        x_pred=self.predicted_state,
-        P_pred=self.predicted_covar,
+  def update(self,
+             measurement: np.ndarray,
+             predicted_state: np.ndarray,
+             predicted_covar: np.ndarray) -> Tuple[np.ndarray]:
+    return self.kf_update(
+        x_pred=predicted_state,
+        P_pred=predicted_covar,
         z=measurement,
         H=self.measurement_model.matrix(),
         R=self.measurement_model.covar(),
     )
-    self.innovation_covar = S
-    self.kalman_gain = K
-    self.predicted_measurement = z_pred
-    self.state = x_post
-    self.covar = P_post
 
   @staticmethod
-  def _predict(
+  def kf_predict(
       x: np.ndarray,
       P: np.ndarray,
       F: np.ndarray,
@@ -77,11 +70,11 @@ class KalmanFilter():
     return x_pred, P_pred
 
   @staticmethod
-  def _update(x_pred: np.ndarray,
-              P_pred: np.ndarray,
-              z: np.ndarray,
-              H: np.ndarray,
-              R: np.ndarray) -> Tuple[np.ndarray]:
+  def kf_update(x_pred: np.ndarray,
+                P_pred: np.ndarray,
+                z: np.ndarray,
+                H: np.ndarray,
+                R: np.ndarray) -> Tuple[np.ndarray]:
     """
     Kalman filter update step
 
