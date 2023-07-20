@@ -1,16 +1,13 @@
-import random
 from typing import List
 
-import jax
-from mpar_sim.models.measurement import LinearMeasurementModel
 import numpy as np
 
-class LinearMeasurementModel(LinearMeasurementModel):
+class LinearMeasurementModel():
   def __init__(self,
                ndim_state: int,
                covar: np.array,
                measured_dims: List[int] = None,
-               seed: int = None,
+               seed: int = np.random.randint(0, 2**32-1),
                ):
     self.ndim_state = ndim_state
     self.noise_covar = covar
@@ -20,10 +17,7 @@ class LinearMeasurementModel(LinearMeasurementModel):
       measured_dims = [measured_dims]
     self.measured_dims = measured_dims
     self.ndim = self.ndim_meas = len(measured_dims)
-    
-    if seed is None:
-      seed = random.randint(0, 2**32-1)
-    self.key = jax.random.PRNGKey(seed)
+    self.np_random = np.random.RandomState(seed)
     
   def __call__(self, state: np.array, noise: bool = True):
     H = self.matrix()
@@ -40,7 +34,6 @@ class LinearMeasurementModel(LinearMeasurementModel):
     return self.noise_covar
   
   def sample_noise(self):
-    self.key, subkey = jax.random.split(self.key)
-    noise = jax.random.multivariate_normal(
-      key=subkey, mean=np.zeros(self.ndim), cov=self.noise_covar)
+    noise = self.np_random.multivariate_normal(
+      mean=np.zeros(self.ndim), cov=self.noise_covar)
     return noise

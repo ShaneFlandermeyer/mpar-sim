@@ -1,10 +1,7 @@
-import random
-import jax
-
-
 from scipy.linalg import block_diag
 from mpar_sim.models.transition.base import LinearTransitionModel
 import numpy as np
+
 
 class ConstantVelocity(LinearTransitionModel):
   r"""This is a class implementation of a discrete, time-variant 1D
@@ -58,8 +55,8 @@ class ConstantVelocity(LinearTransitionModel):
                noise_diff_coeff: float = 1,
                position_mapping: np.array = None,
                velocity_mapping: np.array = None,
-               seed: int = None,
-  ):
+               seed: int = np.random.randint(0, 2**32-1),
+               ):
     self.ndim_pos = ndim_pos
     self.noise_diff_coeff = noise_diff_coeff
 
@@ -68,9 +65,7 @@ class ConstantVelocity(LinearTransitionModel):
       self.position_mapping = np.arange(0, self.ndim_state, 2)
     if velocity_mapping is None:
       self.velocity_mapping = np.arange(1, self.ndim_state, 2)
-    if seed is None:
-      seed = random.randint(0, 2**32-1)
-    self.key = jax.random.PRNGKey(seed)
+    self.np_random = np.random.RandomState(seed)
 
   def __call__(
       self,
@@ -92,14 +87,13 @@ class ConstantVelocity(LinearTransitionModel):
   def covar(self, dt: float):
     # TODO: Extend this to handle different noise_diff_coeff for each dimension
     Q = np.array([[dt**3/3, dt**2/2],
-                      [dt**2/2, dt]]) * self.noise_diff_coeff
+                  [dt**2/2, dt]]) * self.noise_diff_coeff
     Q = block_diag(*[Q]*self.ndim_pos)
     return Q.astype(float)
 
   def sample_noise(self,
                    dt: float = 0) -> np.array:
     covar = self.covar(dt)
-    self.key, subkey = jax.random.split(self.key)
-    noise = jax.random.multivariate_normal(
-          key=subkey, mean=np.zeros((self.ndim_state)), cov=covar)
+    noise = self.np_random.multivariate_normal(
+        mean=np.zeros((self.ndim_state)), cov=covar)
     return np.asarray(noise)

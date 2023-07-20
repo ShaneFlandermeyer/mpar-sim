@@ -1,9 +1,6 @@
 
-import functools
-import random
 from typing import List, Optional
 
-import jax
 
 from mpar_sim.common import wrap_to_interval
 from mpar_sim.common.coordinate_transform import cart2sph, rotx, roty, rotz, sph2cart
@@ -111,7 +108,7 @@ class CartesianToRangeAzElVelocity(NonlinearMeasurementModel):
                # Optional settings
                discretize_measurements: bool = False,
                alias_measurements: bool = False,
-               seed: int = random.randint(0, 2**32-1)
+               seed: int = np.random.randint(0, 2**32-1)
                ):
     # Sensor kinematic information
     self.translation_offset = translation_offset
@@ -136,7 +133,7 @@ class CartesianToRangeAzElVelocity(NonlinearMeasurementModel):
     self.ndim_state = 6
     self.ndim_meas = self.ndim = 4
     
-    self.key = jax.random.PRNGKey(seed)
+    self.np_random = np.random.RandomState(seed)
 
   @property
   def rotation(self):
@@ -168,9 +165,8 @@ class CartesianToRangeAzElVelocity(NonlinearMeasurementModel):
     state = state.reshape((self.ndim_state, n_inputs))
     
     # TODO: This probably breaks if more than one state vector is passed in at a time
-    self.key, subkey = jax.random.split(self.key)
-    meas_noise = jax.random.multivariate_normal(subkey,
-      np.zeros(self.ndim), self.noise_covar, shape=(n_inputs,)).T if noise else 0
+    noise = self.np_random.multivariate_normal(
+      mean=np.zeros(self.ndim), cov=self.noise_covar, size=n_inputs).T if noise else 0
 
     # Account for origin offset in position to enable range and angles to be determined
     xyz_pos = state[self.position_mapping, :] - \
@@ -185,7 +181,7 @@ class CartesianToRangeAzElVelocity(NonlinearMeasurementModel):
     velocity = np.einsum('ij, ij->j', xyz_pos, xyz_vel) / \
         np.linalg.norm(xyz_pos, axis=0)
 
-    out = np.array([az, el, rho, velocity]) + meas_noise
+    out = np.array([az, el, rho, velocity]) + noise
     if self.alias_measurements:
       # Add aliasing to the range/range rate if it exceeds the unambiguous limits
       out[2] = wrap_to_interval(out[2], 0, self.unambiguous_range)
