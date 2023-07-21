@@ -4,23 +4,22 @@ from mpar_sim.tracking.kalman import KalmanFilter
 import numpy as np
 from scipy.stats import multivariate_normal
 from mpar_sim.tracking.gate import gate_volume, gate_threshold, ellipsoid_gate
-from mpar_sim.types import Track
 
 
 class PDAFilter():
   def __init__(self,
-               state_filter: KalmanFilter,
+               filter: KalmanFilter,
                pd: float = 0.90,
                pg: float = 0.99,
                clutter_density: float = None,
                ):
-    self.state_filter = state_filter
+    self.filter = filter
     self.pd = pd
     self.pg = pg
     self.clutter_density = clutter_density
 
   def predict(self, dt: float, **kwargs):
-    return self.state_filter.predict(dt=dt, **kwargs)
+    return self.filter.predict(dt=dt, **kwargs)
 
   def update(self,
              measurements: List[np.ndarray],
@@ -46,7 +45,7 @@ class PDAFilter():
     # Get the predicted state/covariance/measurement, along with the innovation covariance and Kalman gain.
     # Since we aren't actually updating the filter posterior here, an empty value can be passed to the update method.
     _, _, innovation_covar, kalman_gain, predicted_measurement = \
-      self.state_filter.update(
+      self.filter.update(
         measurement=np.empty(self.measurement_model.ndim),
         predicted_state=predicted_state,
         predicted_covar=predicted_covar,
@@ -220,16 +219,16 @@ class PDAFilter():
 
   @property
   def state(self):
-    return self.state_filter.state
+    return self.filter.state
 
   @property
   def covar(self):
-    return self.state_filter.covar
+    return self.filter.covar
 
   @property
   def transition_model(self):
-    return self.state_filter.transition_model
+    return self.filter.transition_model
 
   @property
   def measurement_model(self):
-    return self.state_filter.measurement_model
+    return self.filter.measurement_model

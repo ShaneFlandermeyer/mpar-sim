@@ -4,12 +4,11 @@ from typing import List, Optional, Union
 
 from mpar_sim.common import wrap_to_interval
 from mpar_sim.common.coordinate_transform import cart2sph, rotx, roty, rotz, sph2cart
-from mpar_sim.models.measurement import NonlinearMeasurementModel
 from scipy.spatial.transform import Rotation
 import numpy as np
 
 
-class CartesianToRangeAzElVelocity(NonlinearMeasurementModel):
+class CartesianToRangeAzElVelocity():
   r"""This is a class implementation of a time-invariant measurement model, \
     where measurements are assumed to be in the form of elevation \
     (:math:`\theta`),  bearing (:math:`\phi`), range (:math:`r`) and

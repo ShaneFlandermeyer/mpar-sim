@@ -77,7 +77,7 @@ def test_pda():
       measurement_model=measurement_model,
   )
   pda = PDAFilter(
-      state_filter=kf,
+      filter=kf,
       pd=pd,
       pg=0.95,
       # clutter_density=0.125,

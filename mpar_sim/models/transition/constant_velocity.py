@@ -1,9 +1,8 @@
 from scipy.linalg import block_diag
-from mpar_sim.models.transition.base import LinearTransitionModel
 import numpy as np
 
 
-class ConstantVelocity(LinearTransitionModel):
+class ConstantVelocity():
   r"""This is a class implementation of a discrete, time-variant 1D
     Linear-Gaussian Constant Velocity Transition Model.
 
