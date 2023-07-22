@@ -365,7 +365,7 @@ if __name__ == '__main__':
   targets = [Target(position=[100, 0, 50],
                     velocity=[100, 0, 0],
                     transition_model=ConstantVelocity(
-      ndim_pos=3, noise_diff_coeff=1),
+      ndim_pos=3, q=1),
       rcs=Swerling(case=0, mean=1)) for _ in range(100)]
   detections = radar.measure(targets, noise=True)
   print(detections[0].snr)

@@ -11,7 +11,7 @@ import pytest
 
 
 def test_ekf_update():
-  transition_model = ConstantVelocity(ndim_pos=3, noise_diff_coeff=0.05)
+  transition_model = ConstantVelocity(ndim_pos=3, q=0.05)
   measurement_model = CartesianToRangeAzElVelocity(
       noise_covar=np.diag([0.1, 0.1, 0.1, 0.1]),
       discretize_measurements=False,

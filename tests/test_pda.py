@@ -27,7 +27,7 @@ def test_pda():
                     covar=np.diag([1.5, 0.5, 1.5, 0.5]),
                     timestamp=current_time)
   transition_model = ConstantVelocity(ndim_pos=2,
-                                      noise_diff_coeff=0.005,
+                                      q=0.005,
                                       seed=seed)
   for i in range(n_steps):
     state = transition_model(trajectory.state, dt=dt, noise=True)

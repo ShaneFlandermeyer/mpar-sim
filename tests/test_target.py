@@ -8,7 +8,7 @@ if __name__ == '__main__':
   t = Target(
     position=np.array([0, 0, 0]),
     velocity=np.array([1, 1, 1]),
-    transition_model=ConstantVelocity(ndim_pos=3, noise_diff_coeff=1),
+    transition_model=ConstantVelocity(ndim_pos=3, q=1),
     rcs=Swerling(case=1, mean=100),
   )
   t.move(dt=1, noise=False)

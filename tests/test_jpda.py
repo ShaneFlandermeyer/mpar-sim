@@ -17,6 +17,7 @@ def test_jpda():
   current_time = last_update = 0
   dt = 1
   seed = 0
+  np.random.seed(seed)
   # np.random.seed(seed)
 
   paths = []
@@ -27,7 +28,7 @@ def test_jpda():
               covar=np.diag([1.5, .5, 1.5, .5]),
               timestamp=current_time)
   transition_model = ConstantVelocity(ndim_pos=2,
-                                      noise_diff_coeff=0.005,
+                                      q=0.005,
                                       seed=seed)
   for i in range(n_steps):
     current_time += dt

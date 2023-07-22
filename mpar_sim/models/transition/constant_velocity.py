@@ -1,3 +1,5 @@
+import functools
+from typing import Union
 from scipy.linalg import block_diag
 import numpy as np
 
@@ -51,13 +53,14 @@ class ConstantVelocity():
 
   def __init__(self,
                ndim_pos: float = 3,
-               noise_diff_coeff: float = 1,
+               q: Union[float, np.ndarray] = 1,
                position_mapping: np.array = None,
                velocity_mapping: np.array = None,
                seed: int = np.random.randint(0, 2**32-1),
                ):
     self.ndim_pos = ndim_pos
-    self.noise_diff_coeff = noise_diff_coeff
+    self.ndim = self.ndim_pos*2
+    self.q = q * np.ones(self.ndim_pos)
 
     self.ndim_state = self.ndim = self.ndim_pos*2
     if position_mapping is None:
@@ -71,23 +74,24 @@ class ConstantVelocity():
       state: np.array,
       dt: float = 0,
       noise: bool = False
-  ) -> np.array:
+  ) -> np.ndarray:
     next_state = np.dot(self.matrix(dt), state)
     if noise:
       next_state += self.sample_noise(dt).reshape(state.shape)
     return next_state
 
+  @functools.lru_cache()
   def matrix(self, dt: float):
     F = np.array([[1, dt],
                   [0, 1]])
     F = block_diag(*[F]*self.ndim_pos)
     return F.astype(float)
 
+  @functools.lru_cache()
   def covar(self, dt: float):
-    # TODO: Extend this to handle different noise_diff_coeff for each dimension
     Q = np.array([[dt**3/3, dt**2/2],
-                  [dt**2/2, dt]]) * self.noise_diff_coeff
-    Q = block_diag(*[Q]*self.ndim_pos)
+                  [dt**2/2, dt]])
+    Q = block_diag(*[Q*q for q in self.q])
     return Q.astype(float)
 
   def sample_noise(self,
