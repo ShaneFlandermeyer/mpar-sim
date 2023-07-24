@@ -6,13 +6,13 @@ from mpar_sim.tracking.kalman import KalmanFilter
 from mpar_sim.models.transition.constant_velocity import ConstantVelocity
 from mpar_sim.types.trajectory import State
 from mpar_sim.types.trajectory import Trajectory
-from mpar_sim.models.measurement.nonlinear import CartesianToRangeAzElVelocity
+from mpar_sim.models.measurement.nonlinear import CartesianToRangeVelocityAzEl
 import pytest
 
 
 def test_ekf_update():
   transition_model = ConstantVelocity(ndim_pos=3, q=0.05)
-  measurement_model = CartesianToRangeAzElVelocity(
+  measurement_model = CartesianToRangeVelocityAzEl(
       noise_covar=np.diag([0.1, 0.1, 0.1, 0.1]),
       discretize_measurements=False,
       alias_measurements=False)

@@ -8,7 +8,7 @@ from scipy.spatial.transform import Rotation
 import numpy as np
 
 
-class CartesianToRangeAzElVelocity():
+class CartesianToRangeVelocityAzEl():
   r"""This is a class implementation of a time-invariant measurement model, \
     where measurements are assumed to be in the form of elevation \
     (:math:`\theta`),  bearing (:math:`\phi`), range (:math:`r`) and
@@ -191,17 +191,17 @@ class CartesianToRangeAzElVelocity():
     velocity = np.einsum('ni, ni->n', rel_pos, rel_vel) / \
         np.linalg.norm(rel_pos, axis=1)
 
-    out = np.array([az, el, r, velocity]).T + measurement_noise
+    out = np.array([r, velocity, az, el]).T + measurement_noise
     if self.alias_measurements:
       # Add aliasing to the range/range rate if it exceeds the unambiguous limits
-      out[:, 2] = wrap_to_interval(out[:, 2], 0, self.unambiguous_range)
-      out[:, 3] = wrap_to_interval(
-          out[:, 3], -self.unambiguous_velocity, self.unambiguous_velocity)
+      out[:, 0] = wrap_to_interval(out[:, 0], 0, self.unambiguous_range)
+      out[:, 1] = wrap_to_interval(
+          out[:, 1], -self.unambiguous_velocity, self.unambiguous_velocity)
     if self.discretize_measurements:
       # Bin the range and range rate to the center of the cell
-      out[:, 2] = np.floor(out[:, 2] / self.range_res) * \
+      out[:, 0] = np.floor(out[:, 0] / self.range_res) * \
           self.range_res + self.range_res/2
-      out[:, 3] = np.floor(out[:, 3] / self.velocity_res) * \
+      out[:, 1] = np.floor(out[:, 1] / self.velocity_res) * \
           self.velocity_res + self.velocity_res/2
     return list(out) if n_inputs > 1 else out.ravel()
 

@@ -14,7 +14,7 @@ from mpar_sim.common.coordinate_transform import cart2sph
 from mpar_sim.models.measurement.base import MeasurementModel
 from mpar_sim.models.measurement.estimation import (angle_crlb, range_crlb,
                                                     velocity_crlb)
-from mpar_sim.models.measurement.nonlinear import CartesianToRangeAzElVelocity
+from mpar_sim.models.measurement.nonlinear import CartesianToRangeVelocityAzEl
 from mpar_sim.models.rcs import Swerling
 from mpar_sim.models.transition.constant_velocity import ConstantVelocity
 from mpar_sim.types.detection import FalseDetection, TrueDetection
@@ -223,7 +223,7 @@ class PhasedArrayRadar():
       state_vectors[:, vel_inds] = velocities
       if self.measurement_model is None:
         # Create the measurement models based on SNR and resolutions
-        measurement_model = CartesianToRangeAzElVelocity(
+        measurement_model = CartesianToRangeVelocityAzEl(
             translation_offset=self.position,
             rotation_offset=self.rotation_offset,
             velocity=self.velocity,
@@ -247,14 +247,6 @@ class PhasedArrayRadar():
         # The CRLB uses the RMS bandwidth. Assuming an LFM waveform with a rectangular spectrum, B_rms = B / sqrt(12)
         rms_bandwidth = self.bandwidth / math.sqrt(12)
         rms_range_res = constants.c / (2 * rms_bandwidth)
-        az_variance = angle_crlb(
-            snr=snr[is_detected],
-            resolution=self.rx_beam.azimuth_beamwidth,
-            bias_fraction=0.01)
-        el_variance = angle_crlb(
-            snr=snr[is_detected],
-            resolution=self.rx_beam.elevation_beamwidth,
-            bias_fraction=0.01)
         range_variance = range_crlb(
             snr=single_pulse_snr[is_detected],
             resolution=rms_range_res,
@@ -263,11 +255,19 @@ class PhasedArrayRadar():
             snr=snr[is_detected],
             resolution=self.velocity_resolution,
             bias_fraction=0.05)
-
+        az_variance = angle_crlb(
+            snr=snr[is_detected],
+            resolution=self.rx_beam.azimuth_beamwidth,
+            bias_fraction=0.01)
+        el_variance = angle_crlb(
+            snr=snr[is_detected],
+            resolution=self.rx_beam.elevation_beamwidth,
+            bias_fraction=0.01)
+        
         detections = []
         detection_inds = is_detected.nonzero()[0]
         measurement_model.noise_covar = [np.diag([*v]) for v in zip(
-            az_variance, el_variance, range_variance, vel_variance)]
+            range_variance, vel_variance, az_variance, el_variance)]
         state_vectors = list(state_vectors)
         measurements = measurement_model(state_vectors, noise=noise)
       else:
@@ -308,14 +308,6 @@ class PhasedArrayRadar():
       return []
 
     # Generate random false alarm measurements
-    az = self.np_random.uniform(
-        minval=-self.tx_beam.azimuth_beamwidth/2,
-        maxval=self.tx_beam.azimuth_beamwidth/2,
-        shape=(n_false_alarms,)) + self.tx_beam.azimuth_steering_angle
-    el = self.np_random.uniform(
-        minval=-self.tx_beam.elevation_beamwidth/2,
-        maxval=self.tx_beam.elevation_beamwidth/2,
-        shape=(n_false_alarms,)) + self.tx_beam.elevation_steering_angle
     r = self.np_random.uniform(
         minval=0,
         maxval=self.unambiguous_range,
@@ -324,6 +316,15 @@ class PhasedArrayRadar():
         minval=-self.unambiguous_velocity,
         maxval=self.unambiguous_velocity,
         shape=(n_false_alarms,))
+    az = self.np_random.uniform(
+        minval=-self.tx_beam.azimuth_beamwidth/2,
+        maxval=self.tx_beam.azimuth_beamwidth/2,
+        shape=(n_false_alarms,)) + self.tx_beam.azimuth_steering_angle
+    el = self.np_random.uniform(
+        minval=-self.tx_beam.elevation_beamwidth/2,
+        maxval=self.tx_beam.elevation_beamwidth/2,
+        shape=(n_false_alarms,)) + self.tx_beam.elevation_steering_angle
+    
 
     # Discretize false alarm measurements
     if self.discretize_measurements:
@@ -336,7 +337,7 @@ class PhasedArrayRadar():
     snr_db = 10*np.log10(gammaincinv(1, 1-self.pfa))
     false_alarms = []
     for i in range(n_false_alarms):
-      measurement = np.array([az[i], el[i], r[i], v[i]])
+      measurement = np.array([e[i], v[i], az[i], el[i]])
       detection = FalseDetection(measurement=measurement,
                                  snr=snr_db,
                                  timestamp=self.timestamp)

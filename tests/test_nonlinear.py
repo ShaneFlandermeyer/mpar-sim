@@ -1,4 +1,4 @@
-from mpar_sim.models.measurement.nonlinear import CartesianToRangeAzElVelocity
+from mpar_sim.models.measurement.nonlinear import CartesianToRangeVelocityAzEl
 import pytest
 import numpy as np
 
@@ -6,7 +6,7 @@ from mpar_sim.types.detection import Detection
 
 
 class TestCartesianToAzElBearingRange:
-  model = CartesianToRangeAzElVelocity()
+  model = CartesianToRangeVelocityAzEl()
   model.discretize_measurements = False
   model.alias_measurements = False
 
@@ -16,9 +16,9 @@ class TestCartesianToAzElBearingRange:
     r = np.sqrt(state[0]**2 + state[2]**2 + state[4]**2)
     el = np.rad2deg(np.arcsin(state[4]/r))
     az = np.rad2deg(np.arctan2(state[2], state[0]))
-    rr = np.dot(state[self.model.position_mapping],
+    v = np.dot(state[self.model.position_mapping],
                 state[self.model.velocity_mapping]) / r
-    expected = np.array([az, el, r, rr])
+    expected = np.array([r, v, az, el])
 
     actual = self.model(state, noise=False)
 
@@ -40,7 +40,7 @@ class TestCartesianToAzElBearingRange:
     Expected results from the example here:
     https://www.mathworks.com/help/radar/ref/initcvekf.html
     """
-    mm = CartesianToRangeAzElVelocity(
+    mm = CartesianToRangeVelocityAzEl(
         translation_offset=np.array([25, -40, 0]),
         velocity=np.array([0, 5, 0])
     )

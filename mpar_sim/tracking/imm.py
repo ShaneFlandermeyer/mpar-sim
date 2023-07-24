@@ -32,7 +32,7 @@ class IMMEstimator():
     x_mix, P_mix = self._mixed_init_conds(
         x=states, P=covars, mu_mix=self.mix_probs)
     predicted_states, predicted_covars = [], []
-    # Step 3.0: Get predictions from each filter
+    # Step 3.1: Get predictions from each filter
     for j, filter in enumerate(self.filters):
       x_pred, P_pred = filter.predict(state=x_mix[j],
                                       covar=P_mix[j],
@@ -54,7 +54,7 @@ class IMMEstimator():
     x = np.empty((r, ndim_state))
     P = np.empty((r, ndim_state, ndim_state))
     for j in range(r):
-      # Step 3.0: Incorporate the measurement into each filter
+      # Step 3.2: Incorporate the measurement into each filter
       xj, Pj, S, _, z_pred = self.filters[j].update(
           measurement=measurement,
           predicted_state=predicted_states[j],
@@ -62,7 +62,7 @@ class IMMEstimator():
       )
       x[j] = xj
       P[j] = Pj
-      # Step 3.5 Compute likelihoods for each mode
+      # Step 3.3 Compute likelihoods for each mode
       l = multivariate_normal.pdf(
           x=measurement,
           mean=z_pred,
