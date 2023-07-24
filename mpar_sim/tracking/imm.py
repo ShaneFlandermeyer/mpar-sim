@@ -16,11 +16,11 @@ class IMMEstimator():
   """
   def __init__(self,
                filters: List[KalmanFilter],
-               init_probs: np.ndarray,
+               mode_probs: np.ndarray,
                transition_probs: np.ndarray,
                ):
     self.filters = filters
-    self.mode_probs = init_probs
+    self.mode_probs = mode_probs
     self.transition_probs = transition_probs
 
   def predict(self,
@@ -51,17 +51,17 @@ class IMMEstimator():
     
     # Compute the likelihood 
     likelihoods = np.empty(r)
-    x_posts = np.empty((r, ndim_state))
-    P_posts = np.empty((r, ndim_state, ndim_state))
+    x = np.empty((r, ndim_state))
+    P = np.empty((r, ndim_state, ndim_state))
     for j in range(r):
       # Step 3.0: Incorporate the measurement into each filter
-      x, P, S, _, z_pred = self.filters[j].update(
+      xj, Pj, S, _, z_pred = self.filters[j].update(
           measurement=measurement,
           predicted_state=predicted_states[j],
           predicted_covar=predicted_covars[j],
       )
-      x_posts[j] = x
-      P_posts[j] = P
+      x[j] = xj
+      P[j] = Pj
       # Step 3.5 Compute likelihoods for each mode
       l = multivariate_normal.pdf(
           x=measurement,
@@ -77,11 +77,11 @@ class IMMEstimator():
     self.mode_probs = mu / np.sum(mu)
 
     # Step 5: Combine model-conditioned state estimates and covariances
-    x_mix = np.einsum('j, ji->i', self.mode_probs, x_posts)
-    y = x_posts - x_mix
+    x_mix = np.einsum('j, ji->i', self.mode_probs, x)
+    y = x - x_mix
     P_mix = np.einsum('j, jik->ik', self.mode_probs, 
-                      P_posts + np.einsum('ji, jk->jik', y, y))
-    return x_posts, P_posts, x_mix, P_mix
+                      P + np.einsum('ji, jk->jik', y, y))
+    return x, P, x_mix, P_mix
 
   # Inidividual algorithm steps as functions from Bar-Shalom2001 section 11.6.6
   @property

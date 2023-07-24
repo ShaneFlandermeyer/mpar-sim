@@ -46,7 +46,7 @@ def test_imm():
   my_kf2 = KalmanFilter(transition_model=DummyTransition(kf2),
                         measurement_model=DummyMeasurement(kf2))
   my_imm = IMMEstimator(filters=[my_kf1, my_kf2],
-                        init_probs=[0.5, 0.5],
+                        mode_probs=[0.5, 0.5],
                         transition_probs=np.array([[0.97, 0.03], [0.03, 0.97]]))
 
   filters = [kf1, kf2]
