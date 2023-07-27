@@ -1,17 +1,10 @@
 import functools
-import random
-import jax
-
-
-from mpar_sim.common.matrix import block_diag
-from mpar_sim.models.transition.base import TransitionModel
+from typing import Union
+from scipy.linalg import block_diag
 import numpy as np
 
-class LinearTransitionModel(TransitionModel):
-  """Base class for linear transition models."""
 
-
-class ConstantVelocity(LinearTransitionModel):
+class ConstantVelocity():
   r"""This is a class implementation of a discrete, time-variant 1D
     Linear-Gaussian Constant Velocity Transition Model.
 
@@ -60,46 +53,50 @@ class ConstantVelocity(LinearTransitionModel):
 
   def __init__(self,
                ndim_pos: float = 3,
-               noise_diff_coeff: float = 1,
-               position_mapping: np.array = np.array([0, 2, 4]),
-               velocity_mapping: np.array = np.array([1, 3, 5]),
-               seed: int = random.randint(0, 2**32-1)):
+               q: Union[float, np.ndarray] = 1,
+               position_mapping: np.array = None,
+               velocity_mapping: np.array = None,
+               seed: int = np.random.randint(0, 2**32-1),
+               ):
     self.ndim_pos = ndim_pos
-    self.noise_diff_coeff = noise_diff_coeff
+    self.ndim = self.ndim_pos*2
+    self.q = q * np.ones(self.ndim_pos)
 
     self.ndim_state = self.ndim = self.ndim_pos*2
-    self.position_mapping = np.array(position_mapping)
-    self.velocity_mapping = np.array(velocity_mapping)
-    self.key = jax.random.PRNGKey(seed)
+    if position_mapping is None:
+      self.position_mapping = np.arange(0, self.ndim_state, 2)
+    if velocity_mapping is None:
+      self.velocity_mapping = np.arange(1, self.ndim_state, 2)
+    self.np_random = np.random.RandomState(seed)
 
   def __call__(
       self,
       state: np.array,
       dt: float = 0,
       noise: bool = False
-  ) -> np.array:
+  ) -> np.ndarray:
     next_state = np.dot(self.matrix(dt), state)
     if noise:
       next_state += self.sample_noise(dt).reshape(state.shape)
     return next_state
 
+  @functools.lru_cache()
   def matrix(self, dt: float):
     F = np.array([[1, dt],
                   [0, 1]])
-    F = block_diag(F, nreps=self.ndim_pos)
-    return F
+    F = block_diag(*[F]*self.ndim_pos)
+    return F.astype(float)
 
+  @functools.lru_cache()
   def covar(self, dt: float):
-    # TODO: Extend this to handle different noise_diff_coeff for each dimension
-    covar = np.array([[dt**3/3, dt**2/2],
-                      [dt**2/2, dt]]) * self.noise_diff_coeff
-    covar = block_diag(covar, nreps=self.ndim_pos)
-    return covar
+    Q = np.array([[dt**3/3, dt**2/2],
+                  [dt**2/2, dt]])
+    Q = block_diag(*[Q*q for q in self.q])
+    return Q.astype(float)
 
   def sample_noise(self,
                    dt: float = 0) -> np.array:
     covar = self.covar(dt)
-    self.key, subkey = jax.random.split(self.key)
-    noise = jax.random.multivariate_normal(
-          key=subkey, mean=np.zeros((self.ndim_state)), cov=covar)
-    return noise
+    noise = self.np_random.multivariate_normal(
+        mean=np.zeros((self.ndim_state)), cov=covar)
+    return np.asarray(noise)

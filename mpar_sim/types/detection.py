@@ -3,33 +3,29 @@ from typing import Optional
 
 import numpy as np
 from mpar_sim.models.measurement.base import MeasurementModel
-from mpar_sim.types.groundtruth import GroundTruthPath
-import jax.numpy as jnp
 
 
 class Detection():
   def __init__(self,
-               measurement: jnp.ndarray = None,
+               measurement: np.array = None,
                measurement_model: MeasurementModel = None,
                snr: float = None,
                timestamp: datetime.datetime = None,
-               metadata: dict = {},
+               metadata: dict = None,
                ):
     self.measurement = measurement
     self.measurement_model = measurement_model
     self.snr = snr
     self.timestamp = timestamp
-    self.metadata = metadata
-
-
+    self.metadata = metadata if metadata else {}
+    
 class TrueDetection(Detection):
   def __init__(self,
-               groundtruth_path: Optional[GroundTruthPath] = None,
-               **kwargs,
-               ):
+               origin = None,
+               **kwargs):
     super().__init__(**kwargs)
-    self.groundtruth_path = groundtruth_path
+    self.origin = origin
 
 
-class Clutter(Detection):
+class FalseDetection(Detection):
   """A detection due to thermal noise or clutter."""

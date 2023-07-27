@@ -1,10 +1,8 @@
 import math
-import random
 from datetime import datetime
 from functools import cached_property
 from typing import Callable, List, Optional, Union
 
-import jax
 from scipy.spatial.transform import Rotation
 from scipy import constants
 from scipy.special import gammaincinv
@@ -16,10 +14,10 @@ from mpar_sim.common.coordinate_transform import cart2sph
 from mpar_sim.models.measurement.base import MeasurementModel
 from mpar_sim.models.measurement.estimation import (angle_crlb, range_crlb,
                                                     velocity_crlb)
-from mpar_sim.models.measurement.nonlinear import CartesianToRangeAzElVelocity
+from mpar_sim.models.measurement.nonlinear import CartesianToRangeVelocityAzEl
 from mpar_sim.models.rcs import Swerling
-from mpar_sim.models.transition.linear import ConstantVelocity
-from mpar_sim.types.detection import Clutter, TrueDetection
+from mpar_sim.models.transition.constant_velocity import ConstantVelocity
+from mpar_sim.types.detection import FalseDetection, TrueDetection
 from mpar_sim.types.look import Look
 from mpar_sim.types.target import Target
 import numpy as np
@@ -56,7 +54,7 @@ class PhasedArrayRadar():
                include_false_alarms: bool = False,
                alias_measurements: bool = False,
                discretize_measurements: bool = False,
-               seed=random.randint(0, 2**32-1),
+               seed=np.random.randint(0, 2**32-1),
                ) -> None:
     self.ndim_state = ndim_state
     self.position = position
@@ -82,7 +80,7 @@ class PhasedArrayRadar():
     self.alias_measurements = alias_measurements
     self.discretize_measurements = discretize_measurements
 
-    self.key = jax.random.PRNGKey(seed)
+    self.np_random = np.random.RandomState(seed)
 
   @property
   def range_resolution(self):
@@ -208,36 +206,38 @@ class PhasedArrayRadar():
         rcs) - 40*np.log10(target_r) - beam_shape_loss - scan_loss
 
     pd = np.array([target.detection_probability(
-      pfa=self.pfa, n_pulse=self.n_pulses, snr_db=single_pulse_snr_db[i]
-      ) for i, target in enumerate(targets)]
+        pfa=self.pfa, n_pulse=self.n_pulses, snr_db=single_pulse_snr_db[i]
+    ) for i, target in enumerate(targets)]
     )
-    self.key, subkey = jax.random.split(self.key)
-    is_detected = jax.random.uniform(subkey, shape=(n_targets,)) < pd
+    is_detected = self.np_random.uniform(size=n_targets) < pd
     n_detections = np.count_nonzero(is_detected)
 
     if n_detections > 0:
       positions = positions[is_detected]
       velocities = np.array([target.velocity for target in targets]).reshape(
           (n_targets, -1))[is_detected]
+      pos_inds = np.array(self.position_mapping)
+      vel_inds = np.array(self.velocity_mapping)
+      state_vectors = np.zeros((n_detections, self.ndim_state))
+      state_vectors[:, pos_inds] = positions
+      state_vectors[:, vel_inds] = velocities
       if self.measurement_model is None:
         # Create the measurement models based on SNR and resolutions
-        measurement_model = CartesianToRangeAzElVelocity(
+        measurement_model = CartesianToRangeVelocityAzEl(
             translation_offset=self.position,
             rotation_offset=self.rotation_offset,
             velocity=self.velocity,
             range_resolution=self.range_resolution,
             velocity_resolution=self.velocity_resolution,
+            # Additional settings
+            position_mapping=self.position_mapping,
+            velocity_mapping=self.velocity_mapping,
             discretize_measurements=self.discretize_measurements,
             unambiguous_range=self.unambiguous_range,
             unambiguous_velocity=self.unambiguous_velocity,
             alias_measurements=self.alias_measurements,
         )
-        pos_inds = np.array(measurement_model.position_mapping)
-        vel_inds = np.array(measurement_model.velocity_mapping)
-        state_vectors = np.zeros((self.ndim_state, n_detections))
-        state_vectors[pos_inds] = positions.T
-        state_vectors[vel_inds] = velocities.T
-        measurements = np.empty((measurement_model.ndim_meas, n_detections))
+        measurements = np.empty((n_detections, measurement_model.ndim))
 
         # Compute errors in each measurement dimension
         single_pulse_snr = 10**(single_pulse_snr_db/10)
@@ -247,14 +247,6 @@ class PhasedArrayRadar():
         # The CRLB uses the RMS bandwidth. Assuming an LFM waveform with a rectangular spectrum, B_rms = B / sqrt(12)
         rms_bandwidth = self.bandwidth / math.sqrt(12)
         rms_range_res = constants.c / (2 * rms_bandwidth)
-        az_variance = angle_crlb(
-            snr=snr[is_detected],
-            resolution=self.rx_beam.azimuth_beamwidth,
-            bias_fraction=0.01)
-        el_variance = angle_crlb(
-            snr=snr[is_detected],
-            resolution=self.rx_beam.elevation_beamwidth,
-            bias_fraction=0.01)
         range_variance = range_crlb(
             snr=single_pulse_snr[is_detected],
             resolution=rms_range_res,
@@ -263,31 +255,34 @@ class PhasedArrayRadar():
             snr=snr[is_detected],
             resolution=self.velocity_resolution,
             bias_fraction=0.05)
-
+        az_variance = angle_crlb(
+            snr=snr[is_detected],
+            resolution=self.rx_beam.azimuth_beamwidth,
+            bias_fraction=0.01)
+        el_variance = angle_crlb(
+            snr=snr[is_detected],
+            resolution=self.rx_beam.elevation_beamwidth,
+            bias_fraction=0.01)
+        
         detections = []
         detection_inds = is_detected.nonzero()[0]
-        for i in range(n_detections):
-          measurement_model.noise_covar = np.diag(
-              np.array([az_variance[i],
-                         el_variance[i],
-                         range_variance[i],
-                         vel_variance[i]]))
-          measurements[:, i] = measurement_model(
-            state_vectors[:, i], noise=noise)
+        measurement_model.noise_covar = [np.diag([*v]) for v in zip(
+            range_variance, vel_variance, az_variance, el_variance)]
+        state_vectors = list(state_vectors)
+        measurements = measurement_model(state_vectors, noise=noise)
       else:
-        pos_inds = np.array(measurement_model.position_mapping)
-        vel_inds = np.array(measurement_model.velocity_mapping)
-        state_vectors = np.zeros((self.ndim_state, n_detections))
-        state_vectors[pos_inds] = positions.T
-        state_vectors[vel_inds] = velocities.T
         measurements = self.measurement_model(state_vectors, noise=noise)
+
+    # TODO: Ensure measurements in the same bin are merged
+    if isinstance(measurements, np.ndarray):
+      measurements = [measurements]
 
     detections = []
     detection_inds = is_detected.nonzero()[0]
     for i in detection_inds:
       detection = TrueDetection(
           timestamp=self.timestamp,
-          measurement=measurements[:, i],
+          measurement=measurements[i],
           measurement_model=measurement_model,
           snr=snr_db[i],
       )
@@ -304,34 +299,32 @@ class PhasedArrayRadar():
     Generate uniformly distributed false alarms in the radar beam
     """
     # Compute the number of false alarms from a Poisson random process
-    self.key, subkey = jax.random.split(self.key)
     n_range_bins = int(self.unambiguous_range / self.range_resolution)
     n_vel_bins = int(2*self.unambiguous_velocity /
                      self.velocity_resolution)
     n_expected_false_alarms = self.pfa * n_range_bins * n_vel_bins
-    n_false_alarms = int(
-        jax.random.poisson(subkey, lam=n_expected_false_alarms))
+    n_false_alarms = int(self.np_random.poisson(lam=n_expected_false_alarms))
     if n_false_alarms == 0:
       return []
 
     # Generate random false alarm measurements
-    self.key, *subkeys = jax.random.split(self.key, 5)
-    az = jax.random.uniform(subkeys[0],
-                            minval=-self.tx_beam.azimuth_beamwidth/2,
-                            maxval=self.tx_beam.azimuth_beamwidth/2,
-                            shape=(n_false_alarms,)) + self.tx_beam.azimuth_steering_angle
-    el = jax.random.uniform(subkeys[1],
-                            minval=-self.tx_beam.elevation_beamwidth/2,
-                            maxval=self.tx_beam.elevation_beamwidth/2,
-                            shape=(n_false_alarms,)) + self.tx_beam.elevation_steering_angle
-    r = jax.random.uniform(subkeys[2],
-                           minval=0,
-                           maxval=self.unambiguous_range,
-                           shape=(n_false_alarms,))
-    v = jax.random.uniform(subkeys[3],
-                           minval=-self.unambiguous_velocity,
-                           maxval=self.unambiguous_velocity,
-                           shape=(n_false_alarms,))
+    r = self.np_random.uniform(
+        minval=0,
+        maxval=self.unambiguous_range,
+        shape=(n_false_alarms,))
+    v = self.np_random.uniform(
+        minval=-self.unambiguous_velocity,
+        maxval=self.unambiguous_velocity,
+        shape=(n_false_alarms,))
+    az = self.np_random.uniform(
+        minval=-self.tx_beam.azimuth_beamwidth/2,
+        maxval=self.tx_beam.azimuth_beamwidth/2,
+        shape=(n_false_alarms,)) + self.tx_beam.azimuth_steering_angle
+    el = self.np_random.uniform(
+        minval=-self.tx_beam.elevation_beamwidth/2,
+        maxval=self.tx_beam.elevation_beamwidth/2,
+        shape=(n_false_alarms,)) + self.tx_beam.elevation_steering_angle
+    
 
     # Discretize false alarm measurements
     if self.discretize_measurements:
@@ -344,10 +337,10 @@ class PhasedArrayRadar():
     snr_db = 10*np.log10(gammaincinv(1, 1-self.pfa))
     false_alarms = []
     for i in range(n_false_alarms):
-      measurement = np.array([az[i], el[i], r[i], v[i]])
-      detection = Clutter(measurement=measurement,
-                          snr=snr_db,
-                          timestamp=self.timestamp)
+      measurement = np.array([e[i], v[i], az[i], el[i]])
+      detection = FalseDetection(measurement=measurement,
+                                 snr=snr_db,
+                                 timestamp=self.timestamp)
       false_alarms.append(detection)
 
     return false_alarms
@@ -373,9 +366,9 @@ if __name__ == '__main__':
   targets = [Target(position=[100, 0, 50],
                     velocity=[100, 0, 0],
                     transition_model=ConstantVelocity(
-      ndim_pos=3, noise_diff_coeff=1),
-      rcs=Swerling(case=0, mean=1)) for _ in range(1)]
-  detections = radar.measure(targets)
+      ndim_pos=3, q=1),
+      rcs=Swerling(case=0, mean=1)) for _ in range(100)]
+  detections = radar.measure(targets, noise=True)
   print(detections[0].snr)
   detections = radar.measure(targets)
   print(detections[0].snr)

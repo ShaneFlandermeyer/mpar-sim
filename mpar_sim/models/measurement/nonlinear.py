@@ -1,22 +1,14 @@
 
-import functools
-import random
-from typing import List, Optional
+from typing import List, Optional, Union
 
-import jax
 
 from mpar_sim.common import wrap_to_interval
 from mpar_sim.common.coordinate_transform import cart2sph, rotx, roty, rotz, sph2cart
-from mpar_sim.common.matrix import jacobian
-from mpar_sim.models.measurement.base import MeasurementModel
 from scipy.spatial.transform import Rotation
 import numpy as np
 
-class NonlinearMeasurementModel(MeasurementModel):
-  """Base class for nonlinear measurement models"""
 
-
-class CartesianToRangeAzElVelocity(NonlinearMeasurementModel):
+class CartesianToRangeVelocityAzEl():
   r"""This is a class implementation of a time-invariant measurement model, \
     where measurements are assumed to be in the form of elevation \
     (:math:`\theta`),  bearing (:math:`\phi`), range (:math:`r`) and
@@ -115,7 +107,7 @@ class CartesianToRangeAzElVelocity(NonlinearMeasurementModel):
                # Optional settings
                discretize_measurements: bool = False,
                alias_measurements: bool = False,
-               seed: int = random.randint(0, 2**32-1)
+               seed: int = np.random.randint(0, 2**32-1)
                ):
     # Sensor kinematic information
     self.translation_offset = translation_offset
@@ -139,16 +131,18 @@ class CartesianToRangeAzElVelocity(NonlinearMeasurementModel):
     # Constants
     self.ndim_state = 6
     self.ndim_meas = self.ndim = 4
-    
-    self.key = jax.random.PRNGKey(seed)
+
+    self.np_random = np.random.RandomState(seed)
 
   @property
   def rotation(self):
-    return Rotation.from_euler(self.rotation_sequence, 
-                        np.array(self.rotation_offset).ravel(), 
-                        degrees=True)
+    return Rotation.from_euler(self.rotation_sequence,
+                               np.array(self.rotation_offset).ravel(),
+                               degrees=True)
 
-  def __call__(self, state: np.array, noise: bool = False):
+  def __call__(self,
+               state: Union[np.ndarray, List[np.ndarray]],
+               noise: bool = False):
     r"""Model function :math:`h(\vec{x}_t,\vec{v}_t)`
 
         Parameters
@@ -168,40 +162,48 @@ class CartesianToRangeAzElVelocity(NonlinearMeasurementModel):
             The model function evaluated given the provided time interval.
 
     """
-    n_inputs = state.shape[1] if state.ndim > 1 else 1
-    state = state.reshape((self.ndim_state, n_inputs))
-    
-    # TODO: This probably breaks if more than one state vector is passed in at a time
-    self.key, subkey = jax.random.split(self.key)
-    meas_noise = jax.random.multivariate_normal(subkey,
-      np.zeros(self.ndim), self.noise_covar, shape=(n_inputs,)).T if noise else 0
+    n_inputs = len(state) if isinstance(state, list) else 1
+    state = np.array(state).reshape((n_inputs, self.ndim_state))
 
-    # Account for origin offset in position to enable range and angles to be determined
-    xyz_pos = state[self.position_mapping, :] - \
-        self.translation_offset.reshape((-1, 1))
-    # Rotate coordinates based upon the sensor orientation
-    xyz_rot = self.rotation.apply(xyz_pos.T).T
+    if noise:
+      # Standard case: One covariance matrix for all measurements
+      if isinstance(self.noise_covar, np.ndarray):
+        measurement_noise[:, i] = self.np_random.multivariate_normal(
+            mean=np.zeros(self.ndim), cov=self.noise_covar, size=n_inputs).T
+      # Special case: One covariance matrix per measurement
+      elif isinstance(self.noise_covar, list):
+        assert len(self.noise_covar) == n_inputs, \
+            "If multiple covariance matrices are provided, the number of matrices must equal the number of input vectors"
+        measurement_noise = np.zeros((n_inputs, self.ndim))
+        for i in range(n_inputs):
+          measurement_noise[i] = self.np_random.multivariate_normal(
+              mean=np.zeros(self.ndim), cov=self.noise_covar[i])
+    else:
+      measurement_noise = 0
+
+    # Transform the state into the sensor frame
+    rel_pos = state[:, self.position_mapping] - self.translation_offset
+    rel_pos = self.rotation.apply(rel_pos)
     # Convert to Spherical
-    az, el, rho = cart2sph(*xyz_rot, degrees=True)
-    # Determine the net velocity component in the engagement
-    xyz_vel = state[self.velocity_mapping, :] - self.velocity.reshape((-1, 1))
-    # Use polar to calculate range rate
-    velocity = np.einsum('ij, ij->j', xyz_pos, xyz_vel) / \
-        np.linalg.norm(xyz_pos, axis=0)
+    az, el, r = cart2sph(*rel_pos.T, degrees=True)
+    # Compute radial velocity
+    rel_vel = state[:, self.velocity_mapping] - self.velocity
+    velocity = np.einsum('ni, ni->n', rel_pos, rel_vel) / \
+        np.linalg.norm(rel_pos, axis=1)
 
-    out = np.array([az, el, rho, velocity]) + meas_noise
+    out = np.array([r, velocity, az, el]).T + measurement_noise
     if self.alias_measurements:
       # Add aliasing to the range/range rate if it exceeds the unambiguous limits
-      out[2] = wrap_to_interval(out[2], 0, self.unambiguous_range)
-      out[3] = wrap_to_interval(
-          out[3], -self.unambiguous_velocity, self.unambiguous_velocity)
+      out[:, 0] = wrap_to_interval(out[:, 0], 0, self.unambiguous_range)
+      out[:, 1] = wrap_to_interval(
+          out[:, 1], -self.unambiguous_velocity, self.unambiguous_velocity)
     if self.discretize_measurements:
       # Bin the range and range rate to the center of the cell
-      out[2] = np.floor(out[2] / self.range_res) * \
+      out[:, 0] = np.floor(out[:, 0] / self.range_res) * \
           self.range_res + self.range_res/2
-      out[3] = np.floor(out[3] / self.velocity_res) * \
+      out[:, 1] = np.floor(out[:, 1] / self.velocity_res) * \
           self.velocity_res + self.velocity_res/2
-    return out if n_inputs > 1 else out.ravel()
+    return list(out) if n_inputs > 1 else out.ravel()
 
   def inverse_function(self, measurement: np.array) -> np.array:
     # Compute the cartesian position
@@ -223,9 +225,9 @@ class CartesianToRangeAzElVelocity(NonlinearMeasurementModel):
     # Rotate the result from the radar frame back into the "global" frame
     rotation = self.rotation
     out_vector[pos_inds] = rotation.apply(
-      out_vector[pos_inds].T, inverse=True).T
+        out_vector[pos_inds].T, inverse=True).T
     out_vector[vel_inds] = rotation.apply(
-      out_vector[vel_inds].T, inverse=True).T
+        out_vector[vel_inds].T, inverse=True).T
     out_vector[pos_inds] += self.translation_offset.reshape((-1, 1))
 
     return out_vector
@@ -246,9 +248,10 @@ class CartesianToRangeAzElVelocity(NonlinearMeasurementModel):
     r_xy = np.sqrt(x**2 + y**2)
     r_xyz = np.sqrt(x**2 + y**2 + z**2)
     A = np.zeros((3, 3))
-    A[0,:] = rotation.apply(np.array([-y, x, 0]) / r_xy**2)
-    A[1,:] = rotation.apply(np.array([-x*z, -y*z, r_xy**2]) / (r_xy * r_xyz**2))
-    A[2,:] = rotation.apply(np.array([x, y, z]) / r_xyz)
+    A[0, :] = rotation.apply(np.array([-y, x, 0]) / r_xy**2)
+    A[1, :] = rotation.apply(
+        np.array([-x*z, -y*z, r_xy**2]) / (r_xy * r_xyz**2))
+    A[2, :] = rotation.apply(np.array([x, y, z]) / r_xyz)
     # Convert to degrees and store the result
     A[:2, :] = np.rad2deg(A[:2, :])
     jacobian[:-1, ::2] = A
@@ -267,6 +270,6 @@ class CartesianToRangeAzElVelocity(NonlinearMeasurementModel):
                  z / r_xyz) / r_xyz**2
     rdot_to_zdot = z / r_xyz
     jacobian[-1, :] = np.array([rdot_to_x, rdot_to_xdot,
-                       rdot_to_y, rdot_to_ydot, rdot_to_z, rdot_to_zdot])
+                                rdot_to_y, rdot_to_ydot, rdot_to_z, rdot_to_zdot])
 
     return jacobian

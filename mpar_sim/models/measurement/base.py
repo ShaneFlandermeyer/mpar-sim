@@ -1,2 +1,2 @@
 class MeasurementModel():
-  pass
+  """Base class for measurement models"""

@@ -281,14 +281,15 @@ def sph2cart_covar(sph_covar: np.ndarray,
                    az: float,
                    el: float,
                    r: float,
-                   degrees: bool = True) -> np.ndarray:
+                   degrees: bool = True,
+                   cross_velocity_error: float = 10,
+                   ) -> np.ndarray:
   # Handle conversion to degrees
   if degrees:
     az = np.deg2rad(az)
     el = np.deg2rad(el)
 
   # Needed to initiate the covariance matrix from a detection from a sensor that measures spherical coordinates
-
   az_error = np.deg2rad(np.sqrt(sph_covar[0, 0]))
   el_error = np.deg2rad(np.sqrt(sph_covar[1, 1]))
   range_error = np.sqrt(sph_covar[2, 2])
@@ -296,18 +297,17 @@ def sph2cart_covar(sph_covar: np.ndarray,
   # Compute position covariance
   # Compute the covariance in the "sensor to target" coordinate frame.
   # Here, the x-axis is along the line from the sensor to the target, the y-axis is in the plane of the sensor and target, and the z-axis is perpendicular to the plane of the sensor and target.
-  pos_covar_s2t = np.diag([range_error, r*np.cos(el)*az_error, r*el_error])**2
+  local_xyz_covar = np.diag([range_error, r*np.cos(el)*az_error, r*el_error])**2
   # Now convert to the radar coordinate frame
-  rotmat = rpy2rotmat(roll=0, pitch=-el, yaw=az, degrees=False)
-  pos_covar = rotmat @ pos_covar_s2t @ rotmat.T
+  local_to_global = rpy2rotmat(roll=0, pitch=-el, yaw=az, degrees=False)
+  global_xyz_covar = local_to_global @ local_xyz_covar @ local_to_global.T
 
   # If range rate is measured, compute velocity covariance
   if sph_covar.shape == (4, 4):
-    range_rate_error = np.sqrt(sph_covar[3, 3])
-    cross_velocity_error = 10  # Arbitrary large value
+    velocity_error = np.sqrt(sph_covar[3, 3])
 
-    vel_covar_s2t = np.diag(
-        [range_rate_error, cross_velocity_error, cross_velocity_error])**2
-    vel_covar = rotmat @ vel_covar_s2t @ rotmat.T
+    local_vel_covar = np.diag(
+        [velocity_error, cross_velocity_error, cross_velocity_error])**2
+    global_vel_covar = local_to_global @ local_vel_covar @ local_to_global.T
 
-  return pos_covar, vel_covar
+  return global_xyz_covar, global_vel_covar

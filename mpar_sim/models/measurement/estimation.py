@@ -1,5 +1,4 @@
 import numpy as np
-import jax
 
 def range_crlb(snr: float, resolution: float, bias_fraction: float = 0) -> float:
   """
