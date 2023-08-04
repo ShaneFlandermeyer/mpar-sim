@@ -28,16 +28,16 @@ class LinearMeasurementModel():
     else:
       n_inputs = 1
 
-    state = np.array(state).reshape(-1, n_inputs)
+    state = np.array(state).T
     H = self.matrix()
     deterministic = H @ state
     out = deterministic.T
     if noise:
       noise = np.array([self.sample_noise()
-                     for _ in range(n_inputs)])
-      out += noise
+                     for _ in range(n_inputs)]).T
+      out += noise.reshape(out.shape)
 
-    return list(out) if n_inputs > 1 else out[0] 
+    return list(out) if n_inputs > 1 else out
 
   def matrix(self):
     # NOTE: For now, using binary matrix with ones at measured inds
