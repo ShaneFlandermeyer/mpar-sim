@@ -14,13 +14,15 @@ import matplotlib.pyplot as plt
 from mpar_sim.models.measurement import LinearMeasurementModel
 from mpar_sim.types.track import Track
 from scipy.stats import multivariate_normal
+from mpar_sim.tracking.jpda import JPDATracker
 
-class SPADA():
+class SPADA_Williams():
   """
   Single-sensor, single-step SPA-based PDA.
-  
+
   TODO: Extend to the multi-step case (see Williams2010, section 3.3)
   """
+
   def __init__(self, nt, mt, pg=1):
     self.mu_ba = np.ones((mt, nt))
     self.pg = pg
@@ -34,15 +36,69 @@ class SPADA():
     self.mu_ba = 1 / (sum_mu_ab[:, None] - mu_ab)
     p = np.concatenate((np.ones((1, n)), self.mu_ba * psi))
     return p / np.sum(p, axis=0)
-    
+
   def psi_p(self, pd, lz, lambda_fa):
     return pd * lz / (lambda_fa + 1e-10)
-    
+
   @staticmethod
   def psi_c(at, i, bt, j):
     return at == j and bt == i
+
+
+class SPADA():
+  """
+  Single-sensor, single-step SPA-based PDA.
+  """
   
+  def __init__(self, beta: np.ndarray):
+    """
+    Parameters
+    ----------
+    beta : np.ndarray
+        nt x mt matrix of unnormalized PDA association probabilities. Each row corresponds to a target, and the first column represents false alarms.
+    """
+    self.beta = beta
+    self.nt = beta.shape[0]
+    self.mt = beta.shape[1] - 1
+    self.msg_m2t = np.ones((self.nt, self.mt))
+
+  def step(self) -> None:
+    """
+    Single step of the SPADA algorithm, using equations (30) and (31) from Meyer2018.
+    """
+    b0 = self.beta[:, 0]
+    betas = self.beta[:, 1:]
+    self.msg_t2m = betas / \
+      (b0 + np.sum(betas * self.msg_m2t, axis=1) - betas * self.msg_m2t)
+    self.msg_m2t = 1 / (1 + np.sum(self.msg_t2m, axis=0) - self.msg_t2m)
+    
+  @property
+  def pa(self) -> np.ndarray:
+    """
+    Returns
+    -------
+    np.ndarray
+      Target-oriented DA probabilities (Meyer2018, page 233)  
+    """
+    msg_m2t = np.concatenate((np.ones((self.nt, 1)), self.msg_m2t), axis=1)
+    p = self.beta * msg_m2t / (np.sum(self.beta*msg_m2t, axis=1))[:, None]
+    return p
   
+  @property
+  def pb(self) -> np.ndarray:
+    """
+    Returns
+    -------
+    np.ndarray
+      Target-oriented DA probabilities (Meyer2018, page 233)  
+    """
+    msg_t2m = np.concatenate((np.ones((self.mt, 1)), self.msg_t2m), axis=1)
+    p = msg_t2m / np.sum(msg_t2m, axis=1)[:, None]
+    return p
+  
+  @staticmethod
+  def g(pd: float, lz: np.ndarray, lambda_fa: float) -> np.ndarray:
+    return np.concatenate(([1 - pd], pd * lz / (lambda_fa + 1e-10)))
 
 if __name__ == '__main__':
   class SimpleTarget(Target):
@@ -55,7 +111,7 @@ if __name__ == '__main__':
   # Set up target scenario
   spacing = 5
   nt = 6
-  pd = 0.6
+  pd = 0.9
   targets = []
   xs, ys = np.meshgrid(np.arange(3)*spacing, np.arange(2)*spacing)
   xs, ys = xs.flatten(), ys.flatten()
@@ -66,12 +122,10 @@ if __name__ == '__main__':
   mm = LinearMeasurementModel(ndim_state=2, covar=np.eye(2))
   zs = mm([t.position for t in targets], noise=True)
   mt = len(zs)
-  
-  
-  spa = SPADA(nt, mt)
-  
-  # Compute marginal association probabilities 
-  ## Compute likelihoods for each state/measurement pair
+
+  spa_w = SPADA_Williams(nt, mt)
+
+  # Compute likelihoods for each state/measurement pair
   lzs = []
   S = np.eye(2)
   for z_pred in zs:
@@ -80,12 +134,21 @@ if __name__ == '__main__':
         mean=z_pred,
         cov=S,
     ))
-    
-  psi = np.empty((nt, mt))
+
+  # TODO: The algorithm only works if I scale the betas by the false alarm density. Since this is a constant, it shouldn't matter
+  g = np.empty((nt, mt+1))
+  lambda_fa = 0.1 / (spacing*nt)**2
   for i in range(nt):
-    lambda_fa = 0
-    psi[i] = spa.psi_p(pd, lzs[i], lambda_fa)
+    g[i] = SPADA.g(pd, lzs[i], lambda_fa)
+  spa_m = SPADA(beta=g)
     
   for _ in range(2):
-    p = spa.step(psi=psi)
-    print(p)
+    p = spa_w.step(psi=g[:, 1:])
+    spa_m.step()
+    pa = spa_m.pa
+    pb = spa_m.pb
+    # assert np.allclose(p, pa.T)
+  print(p)
+  print(pa)
+ 
+  
