@@ -50,16 +50,19 @@ class SPADA():
   Single-sensor, single-step SPA-based PDA.
   """
   
-  def __init__(self, beta: np.ndarray):
+  def __init__(self, beta: np.ndarray, zeta: np.ndarray):
     """
     Parameters
     ----------
     beta : np.ndarray
         nt x mt matrix of unnormalized PDA association probabilities. Each row corresponds to a target, and the first column represents false alarms.
     """
+    assert beta.shape == zeta.shape
     self.beta = beta
+    self.zeta = zeta
     self.nt = beta.shape[0]
     self.mt = beta.shape[1] - 1
+
     self.msg_m2t = np.ones((self.nt, self.mt))
 
   def step(self) -> None:
@@ -67,10 +70,13 @@ class SPADA():
     Single step of the SPADA algorithm, using equations (30) and (31) from Meyer2018.
     """
     b0 = self.beta[:, 0]
+    z0 = self.zeta[:, 0]
     betas = self.beta[:, 1:]
+    zetas = self.zeta[:, 1:]
     self.msg_t2m = betas / \
       (b0 + np.sum(betas * self.msg_m2t, axis=1) - betas * self.msg_m2t)
-    self.msg_m2t = 1 / (1 + np.sum(self.msg_t2m, axis=0) - self.msg_t2m)
+    self.msg_m2t = zetas / \
+      (z0 + np.sum(zetas * self.msg_t2m, axis=0) - zetas * self.msg_t2m)
     
   @property
   def pa(self) -> np.ndarray:
@@ -97,8 +103,13 @@ class SPADA():
     return p
   
   @staticmethod
-  def g(pd: float, lz: np.ndarray, lambda_fa: float) -> np.ndarray:
-    return np.concatenate(([1 - pd], pd * lz / (lambda_fa + 1e-10)))
+  def g(pd: float, lz: np.ndarray) -> np.ndarray:
+    return np.concatenate(([1 - pd], pd * lz))
+  
+  @staticmethod
+  def h(lambda_fa: float, nt: int) -> np.ndarray:
+    return np.concatenate(([lambda_fa], np.ones(nt)))
+  
 
 if __name__ == '__main__':
   class SimpleTarget(Target):
@@ -111,7 +122,7 @@ if __name__ == '__main__':
   # Set up target scenario
   spacing = 5
   nt = 6
-  pd = 0.9
+  pd = 0.6
   targets = []
   xs, ys = np.meshgrid(np.arange(3)*spacing, np.arange(2)*spacing)
   xs, ys = xs.flatten(), ys.flatten()
@@ -137,18 +148,20 @@ if __name__ == '__main__':
 
   # TODO: The algorithm only works if I scale the betas by the false alarm density. Since this is a constant, it shouldn't matter
   g = np.empty((nt, mt+1))
+  h = np.empty((mt, nt+1))
   lambda_fa = 0.1 / (spacing*nt)**2
   for i in range(nt):
-    g[i] = SPADA.g(pd, lzs[i], lambda_fa)
-  spa_m = SPADA(beta=g)
+    g[i] = SPADA.g(pd, lzs[i])
+  for i in range(mt):
+    h[i] = SPADA.h(lambda_fa, nt)
+  spa_m = SPADA(beta=g, zeta=h)
     
-  for _ in range(2):
-    p = spa_w.step(psi=g[:, 1:])
+  for _ in range(10):
+    p = spa_w.step(psi=g[:, 1:]/lambda_fa)
     spa_m.step()
     pa = spa_m.pa
     pb = spa_m.pb
-    # assert np.allclose(p, pa.T)
-  print(p)
+  # print(p.T - pa)
   print(pa)
  
   
