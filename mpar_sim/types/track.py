@@ -15,6 +15,10 @@ class Track():
                id: Union[str, int] = None,
                filter=None,
                ) -> None:
+    if isinstance(history, np.ndarray):
+      history = [State(history)]
+    elif isinstance(history, State):
+      history = [history]
     self.history = history if history is not None else []
     self.id = id if id else str(uuid.uuid1())
     self.filter = filter
