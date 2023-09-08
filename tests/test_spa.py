@@ -73,22 +73,50 @@ def generate_measurements(paths, pd: float, mu_c: int, seed=None):
   return measurements
 
 
-def spada(Mn):
-  # TODO: Implement
-  # kappa = 1 should correspond to standard PDA
-  return np.ones(Mn+1)
+def spada(phi_ai: np.ndarray, L: int = 2):
+  """
+  TODO: Update documentation and argument names
+
+  Parameters
+  ----------
+  phi_ai : np.ndarray
+    I x M array of unnormalized association probabilities
+  L : int, optional
+      Number of message passing iterations to run, by default 2
+
+  Returns
+  -------
+  _type_
+      _description_
+  """
+  # Initialize message passing
+  msg_i2m = phi_ai[:, 1:] / \
+      (phi_ai[:, 0][:, np.newaxis] +
+       np.sum(phi_ai[:, 1:], axis=1, keepdims=True) - phi_ai[:, 1:])
+
+  for l in range(L):
+    msg_m2i = 1 / (1 + np.sum(msg_i2m, axis=0) - msg_i2m)
+    msg_i2m = phi_ai[:, 1:] / \
+        (phi_ai[:, 0][:, np.newaxis] + np.sum(msg_m2i * phi_ai[:, 1:],
+         axis=0, keepdims=True) - msg_m2i * phi_ai[:, 1:])
+
+  kappa = np.empty_like(phi_ai)
+  kappa[:, 0] = 1
+  kappa[:, 1:] = msg_i2m
+
+  return kappa
 
 
 def test_spa():
   # Parameters
   pd = 0.9
-  mu_c = 5
+  mu_c = 1
 
   seed = 0
   np.random.seed(seed)
 
   paths = generate_trajectories(seed=seed)
-  paths = [paths[0]]
+  # paths = [paths[1]]
   measurements = generate_measurements(paths, pd=pd, mu_c=mu_c, seed=seed)
   unordered_measurements = [m for mt in measurements for m in mt]
 
@@ -110,63 +138,95 @@ def test_spa():
   for i, current_measurements in enumerate(measurements):
     if len(current_measurements) == 0:
       continue
-      
+
     current_time = current_measurements[0].timestamp
     ms = [m.measurement for m in current_measurements]
     dt = current_time - last_update
 
     # SPA stuff
+    # TODO: Generalize to multi-target association
+    # TODO: Generalize to nonlinear models
     # Prediction step
     F = tm.matrix(dt)
     Q = tm.covar(dt)
-    x_prior = tracks[0].state
-    P_prior = tracks[0].covar
-    x_pred = F @ x_prior
-    P_pred = F @ P_prior @ F.T + Q
+
+    # Multi-traget implementation
+    # Predict step
+    x_pred = []
+    P_pred = []
+    for track in tracks:
+      x_prior = track.state
+      P_prior = track.covar
+      x_pred.append(F @ x_prior)
+      P_pred.append(F @ P_prior @ F.T + Q)
+    x_pred = np.array(x_pred)
+    P_pred = np.array(P_pred)
     # Gaussian mixture components
     H = mm.matrix()
     R = mm.covar()
     K = P_pred @ H.T @ np.linalg.inv(H @ P_pred @ H.T + R)
-    Mn = len(ms)
-    x, P = np.empty((Mn+1, x_prior.size)), np.empty((Mn+1, *P_prior.shape))
+    Mn, Nt = len(ms), len(tracks)
+    x = np.empty((Mn+1, Nt, x_pred.shape[1]))
+    P = np.empty((Mn+1, Nt, *P_pred.shape[1:]))
     for m in range(len(ms)):
-      x[m] = x_pred + K @ (ms[m] - H @ x_pred)
+      x[m] = x_pred + np.einsum('ijk, ki -> ij', K,
+                                (ms[m][:, None] - H @ x_pred.T))
       P[m] = P_pred - K @ H @ P_pred
     x[-1] = x_pred
     P[-1] = P_pred
-    # TODO: Data association probabilities
-    kappa = spada(Mn=Mn)
     # Gaussian mixture weights
-    lz = multivariate_normal.pdf(ms, mean=H@x_pred, cov=H@P_pred@H.T + R)
+    z_pred = H @ x_pred.T
+    Pz_pred = H @ P_pred @ H.T + R
+    lz = np.empty((Nt, Mn))
+    for i in range(Nt):
+      lz[i] = multivariate_normal.pdf(ms, mean=z_pred[:, i], cov=Pz_pred[i])
+    # TODO: This should be proportional to a target-specific gate volume
     Vc = (10 + 10) * (10 + 10)
-    w = np.empty((Mn+1))
-    w[:-1] = pd * lz * kappa[1:] / (mu_c / Vc)
-    w[-1] = (1 - pd) * kappa[0]
-    w /= np.sum(w)
+    lam_c = mu_c / Vc
+    # lam_c = 0.125
+    g_zn = np.append((1 - pd)*np.ones((Nt, 1)), pd * lz / lam_c, axis=1)
+    # Compute association weights
+    kappa = spada(phi_ai=g_zn, L=20)
+    w = np.empty((Nt, Mn+1))
+    w[:, :-1] = pd * lz * kappa[:, 1:] / (mu_c / Vc)
+    w[:, -1] = (1 - pd) * kappa[:, 0]
+    w /= np.sum(w, axis=1, keepdims=True)
     # Perform gaussian mixture with the weights and parameters above
-    x_post = np.dot(w, x)
-    # TODO: Do without a loop
-    P_post = np.zeros_like(P[0])
-    for m in range(Mn+1):
-      P_post += w[m] * (P[m] + x[m] @ x[m].T)
-    P_post -= x_post @ x_post.T
+    x_post = np.empty_like(x_pred)
+    P_post = np.empty_like(P_pred)
+    for i in range(Nt):
+      x_post[i] = np.dot(w[i], x[:, i, :])
+      for m in range(Mn+1):
+        P_post[i] += w[i, m] * (P[m, i] + np.outer(x[m, i], x[m, i]))
+      P_post[i] -= np.outer(x_post[i], x_post[i])
+      
+    # TODO: Something below is broken
+    # x_post = np.einsum('ij, jik -> ik', w, x)
+    # P_post = np.zeros_like(P_pred)
+    # for m in range(Mn+1):
+    #   outer = np.einsum('ij, ik -> ijk', x[m], x[m])
+    #   P_post += np.einsum('i, ijk -> jk', w[:, m], P[m] + outer)
+    # P_post -= np.einsum('ij, ik -> ijk', x_post, x_post)
 
     last_update = current_time
-    tracks[0].append(state=State(
-        state=x_post, covar=P_post, timestamp=current_time))
+    for i in range(Nt):
+      tracks[i].append(state=State(
+          state=x_post[i], covar=P_post[i], timestamp=current_time))
 
   true_states = np.array([[state.state for state in path] for path in paths])
   all_measurements = np.array(
       [m.measurement for m in unordered_measurements])
-  track_pos = np.array([state.state[[0, 2]] for state in tracks[0]])
+  t1_pos = np.array([state.state[[0, 2]] for state in tracks[0]])
   plt.figure()
   # Plot states
   plt.plot(true_states[0, :, 0], true_states[0, :, 2], '--', label='Target 1')
-  # plt.plot(true_states[1, :, 0], true_states[1, :, 2], '--', label='Target 2')
   # Plot measurements
   plt.plot(all_measurements[:, 0],
            all_measurements[:, 1], 'o', label='Measurements')
-  plt.plot(track_pos[:, 0], track_pos[:, 1], label='Track')
+  plt.plot(t1_pos[:, 0], t1_pos[:, 1], label='Track 1')
+  t2_pos = np.array([state.state[[0, 2]] for state in tracks[1]])
+  plt.plot(true_states[1, :, 0], true_states[1, :, 2], '--', label='Target 2')
+  plt.plot(t2_pos[:, 0], t2_pos[:, 1], label='Track 2')
   plt.grid()
   plt.legend()
   plt.show()
