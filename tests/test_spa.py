@@ -73,13 +73,13 @@ def generate_measurements(paths, pd: float, mu_c: int, seed=None):
   return measurements
 
 
-def spada(phi_ai: np.ndarray, L: int = 2):
+def spada(init_probs: np.ndarray, niter: int = 2):
   """
   TODO: Update documentation and argument names
 
   Parameters
   ----------
-  phi_ai : np.ndarray
+  init_probs : np.ndarray
     I x M array of unnormalized association probabilities
   L : int, optional
       Number of message passing iterations to run, by default 2
@@ -89,18 +89,19 @@ def spada(phi_ai: np.ndarray, L: int = 2):
   _type_
       _description_
   """
+  psi = init_probs
   # Initialize message passing
-  msg_i2m = phi_ai[:, 1:] / \
-      (phi_ai[:, 0][:, np.newaxis] +
-       np.sum(phi_ai[:, 1:], axis=1, keepdims=True) - phi_ai[:, 1:])
+  msg_i2m = psi[:, 1:] / \
+      (psi[:, 0][:, np.newaxis] +
+       np.sum(psi[:, 1:], axis=1, keepdims=True) - psi[:, 1:])
 
-  for l in range(L):
+  for _ in range(niter):
     msg_m2i = 1 / (1 + np.sum(msg_i2m, axis=0) - msg_i2m)
-    msg_i2m = phi_ai[:, 1:] / \
-        (phi_ai[:, 0][:, np.newaxis] + np.sum(msg_m2i * phi_ai[:, 1:],
-         axis=0, keepdims=True) - msg_m2i * phi_ai[:, 1:])
+    msg_i2m = psi[:, 1:] / \
+        (psi[:, 0][:, np.newaxis] + np.sum(msg_m2i * psi[:, 1:],
+         axis=0, keepdims=True) - msg_m2i * psi[:, 1:])
 
-  kappa = np.empty_like(phi_ai)
+  kappa = np.empty_like(psi)
   kappa[:, 0] = 1
   kappa[:, 1:] = msg_i2m
 
@@ -110,9 +111,9 @@ def spada(phi_ai: np.ndarray, L: int = 2):
 def test_spa():
   # Parameters
   pd = 0.9
-  mu_c = 1
+  mu_c = 3
 
-  seed = 0
+  seed = 1
   np.random.seed(seed)
 
   paths = generate_trajectories(seed=seed)
@@ -186,7 +187,7 @@ def test_spa():
     # lam_c = 0.125
     g_zn = np.append((1 - pd)*np.ones((Nt, 1)), pd * lz / lam_c, axis=1)
     # Compute association weights
-    kappa = spada(phi_ai=g_zn, L=20)
+    kappa = spada(init_probs=g_zn, niter=20)
     w = np.empty((Nt, Mn+1))
     w[:, :-1] = pd * lz * kappa[:, 1:] / (mu_c / Vc)
     w[:, -1] = (1 - pd) * kappa[:, 0]
