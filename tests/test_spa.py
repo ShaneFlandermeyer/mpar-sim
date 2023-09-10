@@ -8,13 +8,13 @@ from mpar_sim.models.transition import ConstantVelocity
 from mpar_sim.types import FalseDetection, Track, Trajectory, TrueDetection
 from mpar_sim.types.state import State
 from scipy.stats import multivariate_normal
-from mpar_sim.tracking.spa import spada
+from mpar_sim.tracking.spa import spada, TotalSPA
 from mpar_sim.tracking.gaussian import mix_gaussians
 
 
 def generate_trajectories(seed=None):
   # Test SPA methods on a simple crossing target scenario
-  n_steps = 50
+  n_steps = 100
   current_time = last_update = 0
   dt = 1
 
@@ -78,9 +78,9 @@ def generate_measurements(paths, pd: float, mu_c: int, seed=None):
 def test_spa():
   # Parameters
   pd = 0.9
-  mu_c = 3
+  mu_c = 5
 
-  seed = 1
+  seed = 0
   np.random.seed(seed)
 
   paths = generate_trajectories(seed=seed)
@@ -102,6 +102,7 @@ def test_spa():
     tracks.append(Track(history=init_state))
 
   # Perform track filtering + joint association
+  spa = TotalSPA()
   current_time = last_update = 0
   for i, current_measurements in enumerate(measurements):
     if len(current_measurements) == 0:
@@ -151,15 +152,7 @@ def test_spa():
     # TODO: This should be proportional to a target-specific gate volume
     Vc = (10 + 10) * (10 + 10)
     lam_c = mu_c / Vc
-    # lam_c = 0.125
-    g_zn = np.append((1 - pd)*np.ones((Nt, 1)), pd * lz / lam_c, axis=1)
-    # Compute association weights
-    kappa = spada(init_probs=g_zn, niter=20)
-    w = np.empty((Nt, Mn+1))
-    w[:, :-1] = pd * lz * kappa[:, 1:] / (mu_c / Vc)
-    w[:, -1] = (1 - pd) * kappa[:, 0]
-    w /= np.sum(w, axis=1, keepdims=True)
-    # w = list(w)
+    w = list(spa.weights(pd=pd, lz=lz, lam_c=lam_c, niter=10))
     # Perform gaussian mixture with the weights and parameters above
     x_post = np.empty_like(x_pred)
     P_post = np.zeros_like(P_pred)
@@ -191,6 +184,9 @@ def test_spa():
   plt.legend()
   plt.show()
 
+def test_spada():
+  pass
 
 if __name__ == '__main__':
   test_spa()
+  # test_spada()
