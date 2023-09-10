@@ -1,13 +1,15 @@
+from typing import List, Tuple
 import matplotlib.pyplot as plt
 import numpy as np
 import pytest
 
 from mpar_sim.models.measurement import LinearMeasurementModel
 from mpar_sim.models.transition import ConstantVelocity
-from mpar_sim.tracking import JPDATracker, KalmanFilter
 from mpar_sim.types import FalseDetection, Track, Trajectory, TrueDetection
 from mpar_sim.types.state import State
 from scipy.stats import multivariate_normal
+from mpar_sim.tracking.spa import spada
+from mpar_sim.tracking.gaussian import mix_gaussians
 
 
 def generate_trajectories(seed=None):
@@ -71,41 +73,6 @@ def generate_measurements(paths, pd: float, mu_c: int, seed=None):
         new_measurements.append(measurement)
     measurements.append(new_measurements)
   return measurements
-
-
-def spada(init_probs: np.ndarray, niter: int = 2):
-  """
-  TODO: Update documentation and argument names
-
-  Parameters
-  ----------
-  init_probs : np.ndarray
-    I x M array of unnormalized association probabilities
-  L : int, optional
-      Number of message passing iterations to run, by default 2
-
-  Returns
-  -------
-  _type_
-      _description_
-  """
-  psi = init_probs
-  # Initialize message passing
-  msg_i2m = psi[:, 1:] / \
-      (psi[:, 0][:, np.newaxis] +
-       np.sum(psi[:, 1:], axis=1, keepdims=True) - psi[:, 1:])
-
-  for _ in range(niter):
-    msg_m2i = 1 / (1 + np.sum(msg_i2m, axis=0) - msg_i2m)
-    msg_i2m = psi[:, 1:] / \
-        (psi[:, 0][:, np.newaxis] + np.sum(msg_m2i * psi[:, 1:],
-         axis=0, keepdims=True) - msg_m2i * psi[:, 1:])
-
-  kappa = np.empty_like(psi)
-  kappa[:, 0] = 1
-  kappa[:, 1:] = msg_i2m
-
-  return kappa
 
 
 def test_spa():
@@ -192,22 +159,14 @@ def test_spa():
     w[:, :-1] = pd * lz * kappa[:, 1:] / (mu_c / Vc)
     w[:, -1] = (1 - pd) * kappa[:, 0]
     w /= np.sum(w, axis=1, keepdims=True)
+    # w = list(w)
     # Perform gaussian mixture with the weights and parameters above
     x_post = np.empty_like(x_pred)
-    P_post = np.empty_like(P_pred)
+    P_post = np.zeros_like(P_pred)
     for i in range(Nt):
-      x_post[i] = np.dot(w[i], x[:, i, :])
-      for m in range(Mn+1):
-        P_post[i] += w[i, m] * (P[m, i] + np.outer(x[m, i], x[m, i]))
-      P_post[i] -= np.outer(x_post[i], x_post[i])
-      
-    # TODO: Something below is broken
-    # x_post = np.einsum('ij, jik -> ik', w, x)
-    # P_post = np.zeros_like(P_pred)
-    # for m in range(Mn+1):
-    #   outer = np.einsum('ij, ik -> ijk', x[m], x[m])
-    #   P_post += np.einsum('i, ijk -> jk', w[:, m], P[m] + outer)
-    # P_post -= np.einsum('ij, ik -> ijk', x_post, x_post)
+      x_post[i], P_post[i] = mix_gaussians(means=list(x[:, i, :]),
+                                           covars=list(P[:, i]),
+                                           weights=w[i])
 
     last_update = current_time
     for i in range(Nt):
