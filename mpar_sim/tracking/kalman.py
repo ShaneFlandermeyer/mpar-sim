@@ -28,7 +28,7 @@ class KalmanFilter():
   def update(self,
              measurement: np.ndarray,
              predicted_state: np.ndarray,
-             predicted_covar: np.ndarray) -> Tuple[np.ndarray]:
+             predicted_covar: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     return self.kf_update(
         x_pred=predicted_state,
         P_pred=predicted_covar,
@@ -43,7 +43,7 @@ class KalmanFilter():
       P: np.ndarray,
       F: np.ndarray,
       Q: np.ndarray,
-  ) -> Tuple[np.ndarray]:
+  ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Kalman predict step
 

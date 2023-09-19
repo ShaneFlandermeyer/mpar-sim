@@ -5,6 +5,8 @@ import pytest
 
 from mpar_sim.models.measurement import LinearMeasurementModel
 from mpar_sim.models.transition import ConstantVelocity
+from mpar_sim.tracking.kalman import KalmanFilter
+from mpar_sim.tracking.unscented_kalman import UnscentedKalmanFilter
 from mpar_sim.types import FalseDetection, Track, Trajectory, TrueDetection
 from mpar_sim.types.state import State
 from scipy.stats import multivariate_normal
@@ -14,7 +16,7 @@ from mpar_sim.tracking.gaussian import mix_gaussians
 
 def generate_trajectories(seed=None):
   # Test SPA methods on a simple crossing target scenario
-  n_steps = 100
+  n_steps = 200
   current_time = last_update = 0
   dt = 1
 
@@ -103,8 +105,16 @@ def test_spa():
 
   # Perform track filtering + joint association
   spa = TotalSPA()
+  kf = KalmanFilter(
+      transition_model=tm,
+      measurement_model=mm,
+  )
+  ukf = UnscentedKalmanFilter(
+      transition_model=tm,
+      measurement_model=mm,
+  )
   current_time = last_update = 0
-  for i, current_measurements in enumerate(measurements):
+  for iglobal, current_measurements in enumerate(measurements):
     if len(current_measurements) == 0:
       continue
 
@@ -112,59 +122,46 @@ def test_spa():
     ms = [m.measurement for m in current_measurements]
     dt = current_time - last_update
 
-    # SPA stuff
-    # TODO: Generalize to multi-target association
-    # TODO: Generalize to nonlinear models
-    # Prediction step
-    F = tm.matrix(dt)
-    Q = tm.covar(dt)
-
-    # Multi-traget implementation
-    # Predict step
-    x_pred = []
-    P_pred = []
-    for track in tracks:
-      x_prior = track.state
-      P_prior = track.covar
-      x_pred.append(F @ x_prior)
-      P_pred.append(F @ P_prior @ F.T + Q)
-    x_pred = np.array(x_pred)
-    P_pred = np.array(P_pred)
     # Gaussian mixture components
-    H = mm.matrix()
-    R = mm.covar()
-    K = P_pred @ H.T @ np.linalg.inv(H @ P_pred @ H.T + R)
     Mn, Nt = len(ms), len(tracks)
-    x = np.empty((Mn+1, Nt, x_pred.shape[1]))
-    P = np.empty((Mn+1, Nt, *P_pred.shape[1:]))
-    for m in range(len(ms)):
-      x[m] = x_pred + np.einsum('ijk, ki -> ij', K,
-                                (ms[m][:, None] - H @ x_pred.T))
-      P[m] = P_pred - K @ H @ P_pred
-    x[-1] = x_pred
-    P[-1] = P_pred
+    nx, nz = tm.ndim_state, mm.ndim_meas
+    
+    x_preds = []
+    P_preds = []
+    x = np.empty((Mn+1, Nt, nx))
+    P = np.empty((Mn+1, Nt, nx, nx))
+    z_pred = np.empty((Nt, nz))
+    S = np.empty((Nt, nz, nz))
+    for it in range(Nt):
+      x_pred, P_pred = ukf.predict(
+          dt=dt, state=tracks[it].state, covar=tracks[it].covar)
+      x_preds.append(x_pred), P_preds.append(P_pred)
+      for im in range(Mn):
+        x[im, it], P[im, it], S[it], _, z_pred[it] = ukf.update(
+            measurement=ms[im],
+            predicted_state=x_preds[it],
+            predicted_covar=P_preds[it])
+    x[-1] = np.array(x_preds)
+    P[-1] = np.array(P_preds)
     # Gaussian mixture weights
-    z_pred = H @ x_pred.T
-    Pz_pred = H @ P_pred @ H.T + R
     lz = np.empty((Nt, Mn))
-    for i in range(Nt):
-      lz[i] = multivariate_normal.pdf(ms, mean=z_pred[:, i], cov=Pz_pred[i])
+    for it in range(Nt):
+      lz[it] = multivariate_normal.pdf(ms, mean=z_pred[it], cov=S[it])
     # TODO: This should be proportional to a target-specific gate volume
     Vc = (10 + 10) * (10 + 10)
     lam_c = mu_c / Vc
     w = list(spa.weights(pd=pd, lz=lz, lam_c=lam_c, niter=10))
     # Perform gaussian mixture with the weights and parameters above
-    x_post = np.empty_like(x_pred)
-    P_post = np.zeros_like(P_pred)
-    for i in range(Nt):
-      x_post[i], P_post[i] = mix_gaussians(means=list(x[:, i, :]),
-                                           covars=list(P[:, i]),
-                                           weights=w[i])
+    x_post = np.empty_like(x_preds)
+    P_post = np.zeros_like(P_preds)
+    for it in range(Nt):
+      x_post[it], P_post[it] = mix_gaussians(means=list(x[:, it, :]),
+                                           covars=list(P[:, it]),
+                                           weights=w[it])
+      tracks[it].append(state=State(
+          state=x_post[it], covar=P_post[it], timestamp=current_time))
 
     last_update = current_time
-    for i in range(Nt):
-      tracks[i].append(state=State(
-          state=x_post[i], covar=P_post[i], timestamp=current_time))
 
   true_states = np.array([[state.state for state in path] for path in paths])
   all_measurements = np.array(
@@ -184,8 +181,10 @@ def test_spa():
   plt.legend()
   plt.show()
 
+
 def test_spada():
   pass
+
 
 if __name__ == '__main__':
   test_spa()
