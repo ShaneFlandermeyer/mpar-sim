@@ -5,9 +5,13 @@ from typing import List
 
 class Trajectory():
   def __init__(self,
-               states: List[np.ndarray] = None,
+               states: List[State] = None,
                id: List[np.ndarray] = None):
-    self.states = states if states else []
+    if isinstance(states, np.ndarray):
+      states = [State(states)]
+    elif isinstance(states, State):
+      states = [states]
+    self.states = states if states is not None else []
     self.id = id if id else str(uuid.uuid1())
     
   def append(self, state: State, **kwargs):

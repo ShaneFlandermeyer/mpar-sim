@@ -126,12 +126,12 @@ class PDAFilter():
     # Probability of no detection
     probs[0] = 1 - pd*pg
     # Probability of each detection from likelihood ratio
-    l = multivariate_normal.pdf(
+    lz = multivariate_normal.pdf(
         z,
         mean=z_pred,
         cov=S,
     )
-    l_ratio = l * pd / clutter_density
+    l_ratio = lz * pd / clutter_density
     probs[1:] = l_ratio
 
     # Normalize to sum to 1

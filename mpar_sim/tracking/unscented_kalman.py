@@ -13,11 +13,16 @@ class UnscentedKalmanFilter():
                measurement_model: MeasurementModel,
                state_residual_fn: callable = np.subtract,
                measurement_residual_fn: callable = np.subtract,
+               # Sigma point parameters
+               alpha: float = 0.5,
+               beta: float = 2,
                ):
     self.transition_model = transition_model
     self.measurement_model = measurement_model
     self.state_residual_fn = state_residual_fn
     self.measurement_residual_fn = measurement_residual_fn
+    self.alpha = alpha
+    self.beta = beta
 
   def predict(self, 
               dt: float,
@@ -28,8 +33,8 @@ class UnscentedKalmanFilter():
     self.sigmas, self.Wm, self.Wc = merwe_scaled_sigma_points(
         x=state,
         P=covar,
-        alpha=0.5,
-        beta=2,
+        alpha=self.alpha,
+        beta=self.beta,
         kappa=3-state.size,
     )
     # Transform points to the prediction space
@@ -55,10 +60,10 @@ class UnscentedKalmanFilter():
     ndim_measurement = measurement.size
     self.sigmas_h = np.zeros((n_sigma_points, ndim_measurement))
     for i in range(n_sigma_points):
-      self.sigmas_h[i] = self.measurement_model(self.sigmas_f[i])
+      self.sigmas_h[i] = self.measurement_model(self.sigmas_f[i], noise=False)
 
     # State update
-    return self._update(
+    return self.ukf_update(
         x_pred=predicted_state,
         P_pred=predicted_covar,
         z=measurement,
@@ -107,13 +112,12 @@ class UnscentedKalmanFilter():
 
     # Covariance computation
     y = residual_fn(sigmas, x[np.newaxis, :])
-    P = np.einsum('k, ki, kj->ij', Wc, y, y)
-    P += noise_covar
+    P = np.einsum('k, ki, kj->ij', Wc, y, y) + noise_covar
 
     return x, P
 
   @staticmethod
-  def _update(
+  def ukf_update(
       x_pred: np.ndarray,
       P_pred: np.ndarray,
       z: np.ndarray,
@@ -160,7 +164,7 @@ class UnscentedKalmanFilter():
     """
 
     # Compute the mean and covariance of the measurement prediction using the unscented transform
-    z_mean, S = UnscentedKalmanFilter.unscented_transform(
+    z_pred, S = UnscentedKalmanFilter.unscented_transform(
         sigmas=sigmas_h,
         Wm=Wm,
         Wc=Wc,
@@ -172,11 +176,11 @@ class UnscentedKalmanFilter():
     Pxz = np.einsum('k, ki, kj->ij',
                     Wc, 
                     state_residual_fn(sigmas_f, x_pred), 
-                    measurement_residual_fn(sigmas_h, z_mean))
+                    measurement_residual_fn(sigmas_h, z_pred))
 
     # Update the state vector and covariance
-    y = measurement_residual_fn(z, z_mean)
+    y = measurement_residual_fn(z, z_pred)
     K = Pxz @ np.linalg.inv(S)
     x_post = x_pred + K @ y
     P_post = P_pred - K @ S @ K.T
-    return x_post, P_post, S, K, z_mean
+    return x_post, P_post, S, K, z_pred
