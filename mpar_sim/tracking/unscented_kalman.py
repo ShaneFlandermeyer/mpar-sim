@@ -16,7 +16,6 @@ class UnscentedKalmanFilter():
                # Sigma point parameters
                alpha: float = 0.5,
                beta: float = 2,
-               kappa: float = 3,
                ):
     self.transition_model = transition_model
     self.measurement_model = measurement_model

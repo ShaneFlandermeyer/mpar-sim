@@ -105,10 +105,6 @@ def test_spa():
 
   # Perform track filtering + joint association
   spa = TotalSPA()
-  kf = KalmanFilter(
-      transition_model=tm,
-      measurement_model=mm,
-  )
   ukf = UnscentedKalmanFilter(
       transition_model=tm,
       measurement_model=mm,
