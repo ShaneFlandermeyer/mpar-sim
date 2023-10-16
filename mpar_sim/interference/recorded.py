@@ -17,7 +17,7 @@ class RecordedInterference(Interference):
     
     self.reset()
     
-  def step(self, time): 
+  def step(self, time = None): 
     self.start_ind = (self.start_ind + 1) % self.n_snapshots
     self.state = self.data[self.start_ind]
     return self.state
