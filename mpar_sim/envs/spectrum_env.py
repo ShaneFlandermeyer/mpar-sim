@@ -25,29 +25,52 @@ class SpectrumEnv(gym.Env):
     
     self.interference = RecordedInterference(
         "/home/shane/data/hocae_snaps_2_4_cleaned_10_0.dat", self.fft_size)
+    self.freq_axis = np.linspace(0, 1, self.fft_size)
     
     self.observation_space = gym.spaces.Box(low=0, high=1, 
-                                            shape=(self.pri,self.fft_size))
-    self.action_space = gym.spaces.Box(low=0, high=1, shape=(1,))
+                                            shape=(self.pri, self.fft_size))
+    self.action_space = gym.spaces.Box(low=0, high=1, shape=(2,))
   
   def reset(self, seed: int = None, options = None):
+    # Counters
+    self.pulse_count = 0
+    
     self.interference.reset()
     obs = np.zeros(self.observation_space.shape)
     for i in range(self.pri):
       obs[i] = self.interference.step()
     return obs
   
-  def step(self, action):
+  def step(self, action: np.ndarray):
     obs = np.zeros(self.observation_space.shape)
     for i in range(self.pri):
       obs[i] = self.interference.step()
+      
+    # TODO: Compute reward
+    start_freq = action[0]
+    stop_freq = max(action[1], start_freq)
+    bandwidth = stop_freq - start_freq
+    fc = start_freq + bandwidth / 2
+    spectrum = np.logical_and(
+      self.freq_axis >= start_freq, self.freq_axis <= stop_freq)
+    collision_bw = np.count_nonzero(spectrum == obs[0]) / self.fft_size
+    if collision_bw < 0.1:
+      reward = bandwidth
+    else:
+      reward = 0
     
-    # for isnapshot in range(self.pri):
-    #   obs[snapshot]  = self.interference.step()
+    self.pulse_count += 1
+    terminated = False
+    truncated = False
+    
+    done = terminated or truncated
+    info = {}
+    return obs, reward, done, info
+    
   
 if __name__ == '__main__':
-  env = gym.vector.SyncVectorEnv([lambda: SpectrumEnv()] * 4)
+  env = gym.vector.SyncVectorEnv([lambda: SpectrumEnv()])
   
   obs = env.reset()
-  plt.imshow(obs[0])
-  plt.show()
+  obs, reward, done, info = env.step(np.array([[0, 1]]))
+  print(obs.shape)
