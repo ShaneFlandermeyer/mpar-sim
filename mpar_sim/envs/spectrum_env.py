@@ -1,5 +1,5 @@
 from abc import ABCMeta
-import gym
+import gymnasium as gym
 from matplotlib import pyplot as plt
 import numpy as np
 from mpar_sim.interference.recorded import RecordedInterference
@@ -22,6 +22,7 @@ class SpectrumEnv(gym.Env):
     # Parameters
     self.fft_size = 1024
     self.pri = 10
+    self.max_collision = 0.05
     
     self.interference = RecordedInterference(
         "/home/shane/data/hocae_snaps_2_4_cleaned_10_0.dat", self.fft_size)
@@ -39,7 +40,7 @@ class SpectrumEnv(gym.Env):
     obs = np.zeros(self.observation_space.shape)
     for i in range(self.pri):
       obs[i] = self.interference.step()
-    return obs
+    return obs, {}
   
   def step(self, action: np.ndarray):
     obs = np.zeros(self.observation_space.shape)
@@ -54,7 +55,7 @@ class SpectrumEnv(gym.Env):
     spectrum = np.logical_and(
       self.freq_axis >= start_freq, self.freq_axis <= stop_freq)
     collision_bw = np.count_nonzero(spectrum == obs[0]) / self.fft_size
-    if collision_bw < 0.1:
+    if collision_bw < self.max_collision:
       reward = bandwidth
     else:
       reward = 0
@@ -63,14 +64,13 @@ class SpectrumEnv(gym.Env):
     terminated = False
     truncated = False
     
-    done = terminated or truncated
     info = {}
-    return obs, reward, done, info
+    return obs, reward, terminated, truncated, info
     
   
 if __name__ == '__main__':
   env = gym.vector.SyncVectorEnv([lambda: SpectrumEnv()])
   
-  obs = env.reset()
-  obs, reward, done, info = env.step(np.array([[0, 1]]))
+  obs, info = env.reset()
+  obs, reward, term, trunc, info = env.step(np.array([[0, 1]]))
   print(obs.shape)
