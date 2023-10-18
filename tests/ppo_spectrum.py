@@ -43,17 +43,19 @@ def parse_args():
       help="the user or org name of the model repository from the Hugging Face Hub")
 
   # Algorithm specific arguments
-  parser.add_argument("--total-timesteps", type=int, default=10_000_000,
+  parser.add_argument("--env-id", type=str, default="mpar_sim/SpectrumEnv",
+                      help="the id of the gym environment")
+  parser.add_argument("--total-timesteps", type=int, default=5_000_000,
       help="total timesteps of the experiments")
-  parser.add_argument("--learning-rate", type=float, default=3e-4,
+  parser.add_argument("--learning-rate", type=float, default=5e-4,
       help="the learning rate of the optimizer")
   parser.add_argument("--num-envs", type=int, default=20,
       help="the number of parallel game environments")
-  parser.add_argument("--num-steps", type=int, default=2048,
+  parser.add_argument("--num-steps", type=int, default=512,
       help="the number of steps to run in each environment per policy rollout")
   parser.add_argument("--anneal-lr", type=lambda x: bool(strtobool(x)), default=True, nargs="?", const=True,
       help="Toggle learning rate annealing for policy and value networks")
-  parser.add_argument("--gamma", type=float, default=0.99,
+  parser.add_argument("--gamma", type=float, default=0.,
       help="the discount factor gamma")
   parser.add_argument("--gae-lambda", type=float, default=0.95,
       help="the lambda for the general advantage estimation")
@@ -63,13 +65,13 @@ def parse_args():
       help="the K epochs to update the policy")
   parser.add_argument("--norm-adv", type=lambda x: bool(strtobool(x)), default=True, nargs="?", const=True,
       help="Toggles advantages normalization")
-  parser.add_argument("--clip-coef", type=float, default=0.2,
+  parser.add_argument("--clip-coef", type=float, default=0.25,
       help="the surrogate clipping coefficient")
   parser.add_argument("--clip-vloss", type=lambda x: bool(strtobool(x)), default=True, nargs="?", const=True,
       help="Toggles whether or not to use a clipped loss for the value function, as per the paper.")
   parser.add_argument("--ent-coef", type=float, default=0.0,
       help="coefficient of the entropy")
-  parser.add_argument("--vf-coef", type=float, default=0.5,
+  parser.add_argument("--vf-coef", type=float, default=1,
       help="coefficient of the value function")
   parser.add_argument("--max-grad-norm", type=float, default=0.5,
       help="the maximum norm for the gradient clipping")
@@ -82,16 +84,13 @@ def parse_args():
   return args
 
 
-def make_env(env_id, idx, capture_video, run_name, gamma):
+def make_env(env_id, idx, capture_video, run_name, gamma, seed):
   def thunk():
     if capture_video and idx == 0:
-      env = SpectrumEnv()
-      # env = gym.make(env_id, render_mode="rgb_array")
+      env = gym.make(env_id, render_mode="rgb_array", max_episode_steps=1000, disable_env_checker=True, seed=seed+idx)
       env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
     else:
-      env = SpectrumEnv()
-    # TODO: Remove flatten when you process with attention
-    env = gym.wrappers.TimeLimit(env, max_episode_steps=1000)
+      env = gym.make(env_id, max_episode_steps=1000, disable_env_checker=True, seed=seed+idx)
     env = gym.wrappers.RecordEpisodeStatistics(env)
     env = gym.wrappers.ClipAction(env)
     env = gym.wrappers.NormalizeReward(env, gamma=gamma)
@@ -102,54 +101,57 @@ def make_env(env_id, idx, capture_video, run_name, gamma):
   return thunk
 
 
-def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
+def layer_init(layer: nn.Module, std=np.sqrt(2), bias_const=0.0) -> nn.Module:
   torch.nn.init.orthogonal_(layer.weight, std)
   torch.nn.init.constant_(layer.bias, bias_const)
   return layer
 
+
 class PositionalEncoding(nn.Module):
 
-    def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 5000):
-        super().__init__()
-        self.dropout = nn.Dropout(p=dropout)
+  def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 5000):
+    super().__init__()
+    self.dropout = nn.Dropout(p=dropout)
 
-        position = torch.arange(max_len).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
-        pe = torch.zeros(max_len, 1, d_model)
-        pe[:, 0, 0::2] = torch.sin(position * div_term)
-        pe[:, 0, 1::2] = torch.cos(position * div_term)
-        self.register_buffer('pe', pe)
+    position = torch.arange(max_len).unsqueeze(1)
+    div_term = torch.exp(torch.arange(0, d_model, 2) *
+                         (-math.log(10000.0) / d_model))
+    pe = torch.zeros(max_len, 1, d_model)
+    pe[:, 0, 0::2] = torch.sin(position * div_term)
+    pe[:, 0, 1::2] = torch.cos(position * div_term)
+    self.register_buffer('pe', pe)
 
-    def forward(self, x: torch.tensor) -> torch.Tensor:
-        """
-        Arguments:
-            x: Tensor, shape ``[seq_len, batch_size, embedding_dim]``
-        """
-        x = x + self.pe[:x.size(0)]
-        return self.dropout(x)
+  def forward(self, x: torch.tensor) -> torch.Tensor:
+    """
+    Arguments:
+        x: Tensor, shape ``[seq_len, batch_size, embedding_dim]``
+    """
+    x = x + self.pe[:x.size(0)]
+    return self.dropout(x)
 
 
 class Agent(nn.Module):
   def __init__(self, envs):
     super().__init__()
-    self.critic_fc1 = layer_init(
-        nn.Linear(np.array(envs.single_observation_space.shape[-1]), 64))
-    self.critic_mha = nn.MultiheadAttention(64, 1, batch_first=True)
-    self.encoding = PositionalEncoding(64)
-    self.critic_fc2 = layer_init(nn.Linear(64, 1), std=1.0)
+    self.n_embed = 64
+    self.n_features = envs.single_observation_space.shape[-1]
+    self.n_actions = np.prod(envs.single_action_space.shape)
+    self.critic_fc1 = layer_init(nn.Linear(self.n_features, self.n_embed))
+    self.critic_mha = nn.MultiheadAttention(self.n_embed, 1, batch_first=True)
+    self.encoding = PositionalEncoding(self.n_embed, dropout=0)
+    self.critic_fc2 = layer_init(nn.Linear(self.n_embed, 1), std=1.0)
 
-    self.actor_fc1 = layer_init(
-        nn.Linear(np.array(envs.single_observation_space.shape[-1]), 64))
-    self.actor_mha = nn.MultiheadAttention(64, 1, batch_first=True)
+    self.actor_fc1 = layer_init(nn.Linear(self.n_features, self.n_embed))
+    self.actor_mha = nn.MultiheadAttention(self.n_embed, 1, batch_first=True)
     self.actor_fc2 = layer_init(
-        nn.Linear(64, np.prod(envs.single_action_space.shape)), std=1.0)
-    self.actor_logstd = nn.Parameter(torch.zeros(
-        1, np.prod(envs.single_action_space.shape)))
+        nn.Linear(self.n_embed, 2*self.n_actions), std=1.0)
+    # self.actor_logstd = nn.Parameter(torch.zeros(
+    #     1, np.prod(envs.single_action_space.shape)))
 
   def get_value(self, x):
     x = self.critic_fc1(x)
     x = nn.functional.elu(x)
-    # x = self.encoding(x)
+    x = self.encoding(x)
     x, _ = self.critic_mha(x, x, x, need_weights=False)
     x = nn.functional.elu(x)
     # Would it be better to make a layer for this?
@@ -160,19 +162,19 @@ class Agent(nn.Module):
   def get_mean(self, x):
     x = self.actor_fc1(x)
     x = nn.functional.elu(x)
-    # x = self.encoding(x)
+    x = self.encoding(x)
     x, _ = self.actor_mha(x, x, x, need_weights=False)
     x = nn.functional.elu(x)
     # Compress attention output to fc layer size
     x = x.sum(dim=1)
-    x = self.actor_fc2(x)
-
-    return x
+    mu, sigma = self.actor_fc2(x).chunk(2, dim=-1)
+    sigma = nn.functional.softplus(sigma)
+    return mu, sigma
 
   def get_action_and_value(self, x, action=None):
-    action_mean = self.get_mean(x)
-    action_logstd = self.actor_logstd.expand_as(action_mean)
-    action_std = torch.exp(action_logstd)
+    action_mean, action_std = self.get_mean(x)
+    # action_logstd = self.actor_logstd.expand_as(action_mean)
+    # action_std = torch.exp(action_logstd)
     probs = Normal(action_mean, action_std)
     if action is None:
       action = probs.sample()
@@ -181,7 +183,6 @@ class Agent(nn.Module):
 
 if __name__ == "__main__":
   args = parse_args()
-  args.env_id = "SpectrumEnv"
   run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{int(time.time())}"
   if args.track:
     import wandb
@@ -213,7 +214,7 @@ if __name__ == "__main__":
 
   # env setup
   envs = gym.vector.AsyncVectorEnv(
-      [make_env(args.env_id, i, args.capture_video, run_name, args.gamma)
+      [make_env(args.env_id, i, args.capture_video, run_name, args.gamma, args.seed)
        for i in range(args.num_envs)]
   )
   assert isinstance(envs.single_action_space,
@@ -275,12 +276,21 @@ if __name__ == "__main__":
         # Skip the envs that are not done
         if info is None:
           continue
+        # Repeat the print statement above, but set ep bandwidths to 3 digits after the decimal places in formatting
+        mean_bw = info['mean_bw']
+        mean_col = info['mean_collision_bw']
+        mean_widest = info['mean_widest_bw']
+        mean_bw_diff = info['mean_bw_diff']
         print(
-            f"global_step={global_step}, episodic_return={info['episode']['r']}")
+            f"global_step={global_step}, episodic_return={info['episode']['r'], }, bw={mean_bw:.3f}, col={mean_col:.3f}, widest={mean_widest:.3f}")
         writer.add_scalar("charts/episodic_return",
                           info["episode"]["r"], global_step)
         writer.add_scalar("charts/episodic_length",
                           info["episode"]["l"], global_step)
+        writer.add_scalar("charts/mean_bandwidth", mean_bw, global_step)
+        writer.add_scalar("charts/mean_collision_bw", mean_col, global_step)
+        writer.add_scalar("charts/mean_widest_bw", mean_widest, global_step)
+        writer.add_scalar("charts/mean_bw_diff", mean_bw_diff, global_step)
 
     # bootstrap value if not done
     with torch.no_grad():
@@ -334,7 +344,7 @@ if __name__ == "__main__":
           mb_advantages = (mb_advantages - mb_advantages.mean()
                            ) / (mb_advantages.std() + 1e-8)
 
-        # Policy loss
+        # Policy loss1
         pg_loss1 = -mb_advantages * ratio
         pg_loss2 = -mb_advantages * \
             torch.clamp(ratio, 1 - args.clip_coef, 1 + args.clip_coef)
