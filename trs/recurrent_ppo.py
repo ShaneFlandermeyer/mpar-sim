@@ -76,7 +76,7 @@ GAE_LAMBDA:           float = 0.95
 PPO_CLIP:             float = 0.25
 PPO_EPOCHS:           int = 10
 MAX_GRAD_NORM:        float = 1.
-ENTROPY_FACTOR:       float = 0.
+ENTROPY_FACTOR:       float = 0
 ACTOR_LEARNING_RATE:  float = 3e-4
 CRITIC_LEARNING_RATE: float = 3e-4
 RECURRENT_SEQ_LEN:    int = 1
@@ -84,8 +84,6 @@ RECURRENT_LAYERS:     int = 1
 ROLLOUT_STEPS:        int = 1024
 PARALLEL_ROLLOUTS:    int = 20
 PATIENCE:             int = 200
-TRAINABLE_STD_DEV:    bool = True
-INIT_LOG_STD_DEV:     float = 0.0
 
 # %% [markdown]
 # # Hyperparameters
@@ -113,12 +111,10 @@ class HyperParameters():
   parallel_rollouts:    int = PARALLEL_ROLLOUTS
   patience:             int = PATIENCE
   # Apply to continous action spaces only
-  trainable_std_dev:    bool = TRAINABLE_STD_DEV
-  init_log_std_dev:     float = INIT_LOG_STD_DEV
 
 
 hp = HyperParameters(batch_size=BATCH_SIZE, parallel_rollouts=PARALLEL_ROLLOUTS, recurrent_seq_len=RECURRENT_SEQ_LEN, rollout_steps=ROLLOUT_STEPS, patience=PATIENCE, entropy_factor=ENTROPY_FACTOR,
-                     init_log_std_dev=INIT_LOG_STD_DEV, trainable_std_dev=TRAINABLE_STD_DEV, min_reward=MIN_REWARD, hidden_size=HIDDEN_SIZE)
+min_reward=MIN_REWARD, hidden_size=HIDDEN_SIZE)
 
 
 # %%
@@ -252,9 +248,7 @@ def start_or_resume_from_checkpoint():
   obs_shape, action_dim, continuous_action_space = get_env_space()
   actor = Actor(obs_shape=obs_shape,
                 action_dim=action_dim,
-                continuous_action_space=continuous_action_space,
-                trainable_std_dev=hp.trainable_std_dev,
-                init_log_std_dev=hp.init_log_std_dev)
+                continuous_action_space=continuous_action_space)
   critic = Critic(obs_shape)
 
   actor_optimizer = optim.AdamW(actor.parameters(), lr=hp.actor_learning_rate)
@@ -429,46 +423,45 @@ class Critic(nn.Module):
     self.embed = layer_init(nn.Linear(self.obs_shape[1], self.n_embed))
     self.mha = nn.MultiheadAttention(self.n_embed, 1, batch_first=True)
     self.layernorm = nn.LayerNorm(self.n_embed)
-    self.out = layer_init(nn.Linear(self.n_embed, 1), std=1)
+    
 
-    self.layer_lstm = nn.LSTM(
-        obs_shape[1], hp.hidden_size, num_layers=hp.recurrent_layers)
-    self.layer_hidden = nn.Linear(hp.hidden_size, hp.hidden_size)
-    self.layer_value = nn.Linear(hp.hidden_size, 1)
+    self.lstm = nn.LSTM(self.n_embed, 
+                        self.n_embed, 
+                        num_layers=hp.recurrent_layers)
+    self.out = layer_init(nn.Linear(self.n_embed, 1), std=1)
+    
     self.hidden_cell = None
 
   def get_init_state(self, batch_size, device):
     self.hidden_cell = (torch.zeros(hp.recurrent_layers, batch_size, hp.hidden_size).to(device),
                         torch.zeros(hp.recurrent_layers, batch_size, hp.hidden_size).to(device))
 
-  def forward(self, state, terminal=None):
-    inp = state
+  def forward(self, state: torch.tensor, terminal: torch.tensor = None):
+    inp = state # TODO: Needed for debugging only
     seq_len, batch_size = state.shape[:2]
-
     state = state.reshape(seq_len, batch_size, *self.obs_shape)
-    # TODO: Have to remove this when the LSTM comes back
-    state = state[0]
-
-    # size(([1, 8, 10240]) -> torch.Size([8, 1])
-    # size([4, 1024, 10240]) -> torch.Size([1024, 1])
-    # device = state.device
-    # if self.hidden_cell is None or batch_size != self.hidden_cell[0].shape[1]:
-    #     self.get_init_state(batch_size, device)
-    # if terminal is not None:
-    #     self.hidden_cell = [value * (1. - terminal).reshape(1, batch_size, 1) for value in self.hidden_cell]
-    # _, self.hidden_cell = self.layer_lstm(state, self.hidden_cell)
-    # hidden_out = F.elu(self.layer_hidden(self.hidden_cell[0][-1]))
-    # value_out = self.layer_value(hidden_out)
-
+    
+    # Sub-PRI attention processing
     x = self.embed(state)
-    x = nn.functional.elu(x)
-    # Apply MHA to each batch
+    x = F.elu(x)
     x = x.reshape(-1, *x.shape[-2:])
     x = self.position_encoding(x)
     x, _ = self.mha(x, x, x, need_weights=False)
-    x = nn.functional.elu(x)
+    x = x.reshape(seq_len, batch_size, *x.shape[-2:])
+    x = F.elu(x)
     x = x.sum(dim=-2)
     x = self.layernorm(x)
+    
+    # Pulse-to-pulse recurrent processing
+    device = state.device
+    if self.hidden_cell is None or batch_size != self.hidden_cell[0].shape[1]:
+      self.get_init_state(batch_size, device)
+    if terminal is not None:
+      self.hidden_cell = [
+          value * (1.0 - terminal).reshape(1, batch_size, 1) for value in self.hidden_cell]
+    _, self.hidden_cell = self.lstm(x, self.hidden_cell)
+    x = F.elu(self.hidden_cell[0][-1])    
+    
     value_out = self.out(x)
     return value_out
 
@@ -735,9 +728,9 @@ def make_env(env_id, idx, gamma, seed):
     env = gym.wrappers.RecordEpisodeStatistics(env)
     env = gym.wrappers.FlattenObservation(env)
     env = gym.wrappers.ClipAction(env)
-    env = gym.wrappers.NormalizeReward(env, gamma=gamma)
-    env = gym.wrappers.TransformReward(
-        env, lambda reward: np.clip(reward, -10, 10))
+    # env = gym.wrappers.NormalizeReward(env, gamma=gamma)
+    # env = gym.wrappers.TransformReward(
+    #     env, lambda reward: np.clip(reward, -10, 10))
     return env
 
   return thunk

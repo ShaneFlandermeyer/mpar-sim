@@ -16,8 +16,9 @@ class SpectrumEnv(gym.Env):
     # Parameters
     self.fft_size = 1024
     self.pri = 10
-    self.max_collision = 0.03
+    self.max_collision = 0.01
     self.pulse_per_cpi = 256
+    # self.min_bw = 0.1
 
     self.interference = RecordedInterference(
         "/home/shane/data/hocae_snaps_2_4_cleaned_10_0.dat", self.fft_size, seed=seed)
@@ -64,7 +65,7 @@ class SpectrumEnv(gym.Env):
     widest = self._get_widest(obs[0])
     widest_bw = (widest[1] - widest[0]) / self.fft_size
     # TODO: Test the subtraction of the collision BW before pushing
-    reward = (bandwidth / widest_bw) if collision_bw <= self.max_collision else -1
+    reward = (bandwidth - widest_bw - collision_bw) if collision_bw <= self.max_collision else -widest_bw
 
     self.step_count += 1
     self.mean_bw = (self.mean_bw * (self.step_count - 1) + bandwidth) / self.step_count
