@@ -1,3 +1,4 @@
+from typing import Tuple
 from IPython.display import HTML
 from base64 import b64encode
 from dotmap import DotMap
@@ -355,52 +356,58 @@ class PositionalEncoding(nn.Module):
 
 
 class Actor(nn.Module):
-  def __init__(self, obs_shape, action_dim, continuous_action_space, trainable_std_dev, init_log_std_dev=None):
+  def __init__(self, 
+               obs_shape: Tuple[int], 
+               action_dim: int, 
+               continuous_action_space: bool):
     super().__init__()
     self.obs_shape = obs_shape
     self.action_dim = action_dim
     self.n_embed = hp.hidden_size
+    self.num_recurrent_layers = hp.recurrent_layers
     self.position_encoding = PositionalEncoding(self.n_embed)
 
     self.embed = layer_init(nn.Linear(self.obs_shape[1], self.n_embed))
     self.mha = nn.MultiheadAttention(self.n_embed, 1, batch_first=True)
     self.layernorm = nn.LayerNorm(self.n_embed)
+    self.lstm = nn.LSTM(input_size=self.n_embed, 
+                        hidden_size=self.n_embed,
+                        num_layers=hp.recurrent_layers)
     self.out = layer_init(nn.Linear(self.n_embed, 2*action_dim), std=0.01)
 
-    # self.lstm = nn.LSTM(self.obs_shape[1], hp.hidden_size, num_layers=hp.recurrent_layers)
     self.continuous_action_space = continuous_action_space
     self.hidden_cell = None
 
-  def get_init_state(self, batch_size, device):
+  def get_init_state(self, batch_size: int, device: torch.device):
     self.hidden_cell = (torch.zeros(hp.recurrent_layers, batch_size, hp.hidden_size).to(device),
                         torch.zeros(hp.recurrent_layers, batch_size, hp.hidden_size).to(device))
 
-  def forward(self, state, terminal=None):
+  def forward(self, state: torch.tensor, terminal: torch.tensor = None):
     seq_len, batch_size = state.shape[:2]
     state = state.reshape(seq_len, batch_size, *self.obs_shape)
+    # Sub-PRI attention processing
     x = self.embed(state)
-    x = nn.functional.elu(x)
-    # Reshape to 3D tensor
+    x = F.elu(x)
     x = x.reshape(-1, *x.shape[-2:])
     x = self.position_encoding(x)
     x, _ = self.mha(x, x, x, need_weights=False)
-    # Undo the reshape
-    x = x.reshape(seq_len, batch_size, *x.shape[-2:]).squeeze(0)
-    x = nn.functional.elu(x)
+    x = x.reshape(seq_len, batch_size, *x.shape[-2:])
+    x = F.elu(x)
     x = x.sum(dim=-2)
     x = self.layernorm(x)
-    policy_logits = self.out(x)
 
-    batch_size = state.shape[1]
+    # Pulse-to-pulse recurrent processing
     device = state.device
-    # if self.hidden_cell is None or batch_size != self.hidden_cell[0].shape[1]:
-    #     self.get_init_state(batch_size, device)
-    # if terminal is not None:
-    #     self.hidden_cell = [value * (1. - terminal).reshape(1, batch_size, 1) for value in self.hidden_cell]
-    # _, self.hidden_cell = self.lstm(state, self.hidden_cell)
-    # hidden_out = F.elu(self.layer_hidden(self.hidden_cell[0][-1]))
-    # policy_logits_out = self.layer_policy_logits(hidden_out)
-
+    if self.hidden_cell is None or batch_size != self.hidden_cell[0].shape[1]:
+      self.get_init_state(batch_size, device)
+    if terminal is not None:
+      self.hidden_cell = [
+          value * (1.0 - terminal).reshape(1, batch_size, 1) for value in self.hidden_cell]
+    _, self.hidden_cell = self.lstm(x, self.hidden_cell)
+    x = F.elu(self.hidden_cell[0][-1])
+    policy_logits = self.out(x)
+    
+    # Convert to action distribution
     if self.continuous_action_space:
       mu, sigma = torch.chunk(policy_logits, 2, dim=-1)
       sigma = nn.functional.softplus(sigma)
@@ -472,6 +479,8 @@ class Critic(nn.Module):
 # %%
 _MIN_REWARD_VALUES = torch.full([hp.parallel_rollouts], hp.min_reward)
 global_step = 0
+
+
 def gather_trajectories(input_data):
   """
   Gather policy trajectories from gym environment.
