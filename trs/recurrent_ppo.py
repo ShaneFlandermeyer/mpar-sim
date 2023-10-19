@@ -73,13 +73,13 @@ HIDDEN_SIZE:          float = 64
 BATCH_SIZE:           int = 512
 DISCOUNT:             float = 0.
 GAE_LAMBDA:           float = 0.95
-PPO_CLIP:             float = 0.25
+PPO_CLIP:             float = 0.2
 PPO_EPOCHS:           int = 10
 MAX_GRAD_NORM:        float = 1.
 ENTROPY_FACTOR:       float = 0
-ACTOR_LEARNING_RATE:  float = 3e-4
-CRITIC_LEARNING_RATE: float = 3e-4
-RECURRENT_SEQ_LEN:    int = 1
+ACTOR_LEARNING_RATE:  float = 2.5e-4
+CRITIC_LEARNING_RATE: float = 2.5e-4
+RECURRENT_SEQ_LEN:    int = 4
 RECURRENT_LAYERS:     int = 1
 ROLLOUT_STEPS:        int = 1024
 PARALLEL_ROLLOUTS:    int = 20
@@ -110,7 +110,6 @@ class HyperParameters():
   rollout_steps:        int = ROLLOUT_STEPS
   parallel_rollouts:    int = PARALLEL_ROLLOUTS
   patience:             int = PATIENCE
-  # Apply to continous action spaces only
 
 
 hp = HyperParameters(batch_size=BATCH_SIZE, parallel_rollouts=PARALLEL_ROLLOUTS, recurrent_seq_len=RECURRENT_SEQ_LEN, rollout_steps=ROLLOUT_STEPS, patience=PATIENCE, entropy_factor=ENTROPY_FACTOR,
@@ -335,17 +334,19 @@ class PositionalEncoding(nn.Module):
     position = torch.arange(max_len).unsqueeze(1)
     div_term = torch.exp(torch.arange(0, d_model, 2) *
                          (-math.log(10000.0) / d_model))
-    pe = torch.zeros(max_len, 1, d_model)
-    pe[:, 0, 0::2] = torch.sin(position * div_term)
-    pe[:, 0, 1::2] = torch.cos(position * div_term)
+    pe = torch.zeros(1, max_len, d_model)
+    pe[0, :, 0::2] = torch.sin(position * div_term)
+    pe[0, :, 1::2] = torch.cos(position * div_term)
     self.register_buffer('pe', pe)
 
   def forward(self, x: torch.tensor) -> torch.Tensor:
     """
     Arguments:
-        x: Tensor, shape ``[seq_len, batch_size, embedding_dim]``
+        x: Tensor, shape ``[batch_size, seq_len, embedding_dim]``
     """
-    x = x + self.pe[:x.size(0)]
+    inp = x
+    x = x + self.pe[:, :x.size(-2)]
+    assert x.shape == inp.shape
     return self.dropout(x)
 
 
@@ -359,7 +360,8 @@ class Actor(nn.Module):
     self.action_dim = action_dim
     self.n_embed = hp.hidden_size
     self.num_recurrent_layers = hp.recurrent_layers
-    self.position_encoding = PositionalEncoding(self.n_embed)
+    self.position_encoding = PositionalEncoding(self.n_embed, 
+                                                dropout=0, max_len=10_000)
 
     self.embed = layer_init(nn.Linear(self.obs_shape[1], self.n_embed))
     self.mha = nn.MultiheadAttention(self.n_embed, 1, batch_first=True)
@@ -381,14 +383,13 @@ class Actor(nn.Module):
     state = state.reshape(seq_len, batch_size, *self.obs_shape)
     # Sub-PRI attention processing
     x = self.embed(state)
-    x = F.elu(x)
-    x = x.reshape(-1, *x.shape[-2:])
+    x = F.elu(x).reshape(-1, *x.shape[-2:])
     x = self.position_encoding(x)
     x, _ = self.mha(x, x, x, need_weights=False)
-    x = x.reshape(seq_len, batch_size, *x.shape[-2:])
-    x = F.elu(x)
-    x = x.sum(dim=-2)
-    x = self.layernorm(x)
+    x = F.elu(x).reshape(seq_len, batch_size, *x.shape[-2:])
+    x = x.mean(dim=-2)
+    mha_out = x.reshape(seq_len, batch_size, -1)
+    
 
     # Pulse-to-pulse recurrent processing
     device = state.device
@@ -398,7 +399,10 @@ class Actor(nn.Module):
       self.hidden_cell = [
           value * (1.0 - terminal).reshape(1, batch_size, 1) for value in self.hidden_cell]
     _, self.hidden_cell = self.lstm(x, self.hidden_cell)
-    x = F.elu(self.hidden_cell[0][-1])
+    # Concatenate attenttion out and recurrent out
+    # TODO: Concat instead of add
+    x = F.elu(mha_out[-1] + self.hidden_cell[0][-1]) 
+    # x = torch.cat((mha_out[-1], self.hidden_cell[0][-1]), dim=-1)
     policy_logits = self.out(x)
     
     # Convert to action distribution
@@ -443,14 +447,12 @@ class Critic(nn.Module):
     
     # Sub-PRI attention processing
     x = self.embed(state)
-    x = F.elu(x)
-    x = x.reshape(-1, *x.shape[-2:])
+    x = F.elu(x).reshape(-1, *x.shape[-2:])
     x = self.position_encoding(x)
     x, _ = self.mha(x, x, x, need_weights=False)
-    x = x.reshape(seq_len, batch_size, *x.shape[-2:])
-    x = F.elu(x)
-    x = x.sum(dim=-2)
-    x = self.layernorm(x)
+    x = F.elu(x).reshape(seq_len, batch_size, *x.shape[-2:])
+    x = x.mean(dim=-2)
+    mha_out = x.reshape(seq_len, batch_size, -1)
     
     # Pulse-to-pulse recurrent processing
     device = state.device
@@ -460,7 +462,9 @@ class Critic(nn.Module):
       self.hidden_cell = [
           value * (1.0 - terminal).reshape(1, batch_size, 1) for value in self.hidden_cell]
     _, self.hidden_cell = self.lstm(x, self.hidden_cell)
-    x = F.elu(self.hidden_cell[0][-1])    
+    # TODO: Concat instead of add
+    x = F.elu(mha_out[-1] + self.hidden_cell[0][-1]) 
+    # x = torch.cat((mha_out[-1], self.hidden_cell[0][-1]), dim=-1)
     
     value_out = self.out(x)
     return value_out
@@ -548,25 +552,36 @@ def gather_trajectories(input_data):
       if "final_info" not in infos:
         continue
 
+      mean_bws = []
+      mean_cols = []
+      mean_widests = []
+      mean_bw_diffs = []
       for info in infos["final_info"]:
         # Skip the envs that are not done
         if info is None:
           continue
-        # Repeat the print statement above, but set ep bandwidths to 3 digits after the decimal places in formatting
-        mean_bw = info['mean_bw']
-        mean_col = info['mean_collision_bw']
-        mean_widest = info['mean_widest_bw']
-        mean_bw_diff = info['mean_bw_diff']
-        print(
-            f"global_step={global_step}, episodic_return={info['episode']['r'], }, bw={mean_bw:.3f}, col={mean_col:.3f}, widest={mean_widest:.3f}")
+        
         writer.add_scalar("charts/episodic_return",
                           info["episode"]["r"], global_step)
         writer.add_scalar("charts/episodic_length",
                           info["episode"]["l"], global_step)
-        writer.add_scalar("charts/mean_bandwidth", mean_bw, global_step)
-        writer.add_scalar("charts/mean_collision_bw", mean_col, global_step)
-        writer.add_scalar("charts/mean_widest_bw", mean_widest, global_step)
-        writer.add_scalar("charts/mean_bw_diff", mean_bw_diff, global_step)
+        
+        mean_bws.append(info["mean_bw"])
+        mean_cols.append(info["mean_collision_bw"])
+        mean_widests.append(info["mean_widest_bw"])
+        mean_bw_diffs.append(info["mean_bw_diff"])
+        
+      if len(mean_bws) > 0:
+        avg_mean_bw = np.mean(mean_bws)
+        avg_mean_col = np.mean(mean_cols)
+        avg_mean_widest = np.mean(mean_widests)
+        avg_mean_bw_diff = np.mean(mean_bw_diffs)
+        writer.add_scalar("charts/mean_bandwidth", avg_mean_bw, global_step)
+        writer.add_scalar("charts/mean_collision_bw", avg_mean_col, global_step)
+        writer.add_scalar("charts/mean_widest_bw", avg_mean_widest, global_step)
+        writer.add_scalar("charts/mean_bw_diff", avg_mean_bw_diff, global_step)
+        print(
+              f"global_step={global_step}, episodic_return={info['episode']['r'], }, bw={avg_mean_bw:.3f}, col={avg_mean_col:.3f}, widest={avg_mean_widest:.3f}")
 
     # Compute final value to allow for incomplete episodes.
     state = torch.tensor(obsv, dtype=torch.float32)
