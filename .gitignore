@@ -133,3 +133,5 @@ lightning_logs/
 .vscode/
 videos/
 runs/
+logs/
+checkpoints/

@@ -17,19 +17,19 @@ class SpectrumEnv(gym.Env):
     self.fft_size = 1024
     self.pri = 10
     self.max_collision = 0.03
+    self.pulse_per_cpi = 256
 
     self.interference = RecordedInterference(
         "/home/shane/data/hocae_snaps_2_4_cleaned_10_0.dat", self.fft_size, seed=seed)
-    # self.interference = SingleToneInterference(bandwidth=0.6, duration=10, duty_cycle=0.4, channel_bw=1, fft_size=self.fft_size, start_freq=0.2)
     self.freq_axis = np.linspace(0, 1, self.fft_size)
 
     self.observation_space = gym.spaces.Box(low=0, high=1,
-                                            shape=(self.pri, self.fft_size))
+                                            shape=(self.pri, self.fft_size,))
     self.action_space = gym.spaces.Box(low=0, high=1, shape=(2,))
 
   def reset(self, seed: int = None, options=None):
     # Counters
-    self.pulse_count = 0
+    self.step_count = 0
     self.time = 0
     # Metrics
     self.mean_bw = 0
@@ -38,18 +38,17 @@ class SpectrumEnv(gym.Env):
     self.mean_bw_diff = 0
 
     self.interference.reset()
-    obs = np.zeros(self.observation_space.shape)
+    obs = np.zeros((self.pri, self.fft_size), dtype=np.float32)
     for i in range(self.pri):
       obs[i] = self.interference.step(self.time)
+      
     return obs, {}
 
   def step(self, action: np.ndarray):
-    obs = np.zeros(self.observation_space.shape)
+    obs = np.zeros((self.pri, self.fft_size), dtype=np.float32)
     for i in range(self.pri):
       obs[i] = self.interference.step(self.time)
-      self.time += 1
       
-    
     # TODO: Compute reward
     start_freq = action[0]
     stop_freq = np.clip(action[1], start_freq, 1)
@@ -67,11 +66,11 @@ class SpectrumEnv(gym.Env):
     # TODO: Test the subtraction of the collision BW before pushing
     reward = (bandwidth / widest_bw) if collision_bw <= self.max_collision else -1
 
-    self.pulse_count += 1
-    self.mean_bw = (self.mean_bw * (self.pulse_count - 1) + bandwidth) / self.pulse_count
-    self.mean_collision_bw = (self.mean_collision_bw * (self.pulse_count - 1) + collision_bw) / self.pulse_count
-    self.mean_widest_bw = (self.mean_widest_bw * (self.pulse_count - 1) + widest_bw) / self.pulse_count
-    self.mean_bw_diff = (self.mean_bw_diff * (self.pulse_count - 1) + (bandwidth - widest_bw)) / self.pulse_count
+    self.step_count += 1
+    self.mean_bw = (self.mean_bw * (self.step_count - 1) + bandwidth) / self.step_count
+    self.mean_collision_bw = (self.mean_collision_bw * (self.step_count - 1) + collision_bw) / self.step_count
+    self.mean_widest_bw = (self.mean_widest_bw * (self.step_count - 1) + widest_bw) / self.step_count
+    self.mean_bw_diff = (self.mean_bw_diff * (self.step_count - 1) + (bandwidth - widest_bw)) / self.step_count
 
     terminated = False
     truncated = False
