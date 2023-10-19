@@ -327,7 +327,7 @@ def layer_init(layer: nn.Module, std=np.sqrt(2), bias_const=0.0) -> nn.Module:
 
 class PositionalEncoding(nn.Module):
 
-  def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 5000):
+  def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 10_000):
     super().__init__()
     self.dropout = nn.Dropout(p=dropout)
 
@@ -361,7 +361,7 @@ class Actor(nn.Module):
     self.n_embed = hp.hidden_size
     self.num_recurrent_layers = hp.recurrent_layers
     self.position_encoding = PositionalEncoding(self.n_embed, 
-                                                dropout=0, max_len=10_000)
+                                                dropout=0., max_len=10_000)
 
     self.embed = layer_init(nn.Linear(self.obs_shape[1], self.n_embed))
     self.mha = nn.MultiheadAttention(self.n_embed, 1, batch_first=True)
@@ -399,10 +399,9 @@ class Actor(nn.Module):
       self.hidden_cell = [
           value * (1.0 - terminal).reshape(1, batch_size, 1) for value in self.hidden_cell]
     _, self.hidden_cell = self.lstm(x, self.hidden_cell)
-    # Concatenate attenttion out and recurrent out
-    # TODO: Concat instead of add
+    
+    # Skip path from MHA to the output
     x = F.elu(mha_out[-1] + self.hidden_cell[0][-1]) 
-    # x = torch.cat((mha_out[-1], self.hidden_cell[0][-1]), dim=-1)
     policy_logits = self.out(x)
     
     # Convert to action distribution
@@ -422,7 +421,8 @@ class Critic(nn.Module):
     super().__init__()
     self.obs_shape = obs_shape
     self.n_embed = hp.hidden_size
-    self.position_encoding = PositionalEncoding(self.n_embed)
+    self.position_encoding = PositionalEncoding(self.n_embed, 
+                                                dropout=0., max_len=10_000)
 
     self.embed = layer_init(nn.Linear(self.obs_shape[1], self.n_embed))
     self.mha = nn.MultiheadAttention(self.n_embed, 1, batch_first=True)
@@ -462,9 +462,9 @@ class Critic(nn.Module):
       self.hidden_cell = [
           value * (1.0 - terminal).reshape(1, batch_size, 1) for value in self.hidden_cell]
     _, self.hidden_cell = self.lstm(x, self.hidden_cell)
-    # TODO: Concat instead of add
+    
+    # Skip path from MHA to the output
     x = F.elu(mha_out[-1] + self.hidden_cell[0][-1]) 
-    # x = torch.cat((mha_out[-1], self.hidden_cell[0][-1]), dim=-1)
     
     value_out = self.out(x)
     return value_out
