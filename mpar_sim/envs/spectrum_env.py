@@ -15,20 +15,27 @@ class SpectrumEnv(gym.Env):
   """
   metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 30}
 
-  def __init__(self, render_mode = None, seed: int = None):
+  def __init__(self, 
+               render_mode = None, 
+               nfft: int = 1024,
+               pri: int = 10,
+               max_collision: float = 0.013,
+               n_pulse_cpi: int = 256,
+               seed: int = np.random.randint(0, 2**32 - 1)):
     # Parameters
-    self.fft_size = 1024
-    self.pri = 10
-    self.max_collision = 0.01
-    self.pulse_per_cpi = 256
-    # self.min_bw = 0.1
+    self.nfft = nfft
+    self.pri = pri
+    self.max_collision = max_collision
+    self.n_pulse_cpi = n_pulse_cpi
+    
+    self.np_random = np.random.RandomState(seed)
 
     self.interference = RecordedInterference(
-        "/home/shane/data/hocae_snaps_2_4_cleaned_10_0.dat", self.fft_size, seed=seed)
-    self.freq_axis = np.linspace(0, 1, self.fft_size)
+        "/home/shane/data/hocae_snaps_2_4_cleaned_10_0.dat", self.nfft, seed=seed)
+    self.freq_axis = np.linspace(0, 1, self.nfft)
 
     self.observation_space = gym.spaces.Box(low=0, high=1,
-                                            shape=(self.pri, self.fft_size,))
+                                            shape=(self.pri, self.nfft,))
     self.action_space = gym.spaces.Box(low=0, high=1, shape=(2,))
     
     assert render_mode is None or render_mode in self.metadata["render_modes"]
@@ -47,18 +54,17 @@ class SpectrumEnv(gym.Env):
     self.collisions = []
     self.widests = []
     self.bw_diffs = []
-    # TODO: Applying random shift
-    self.num_shift = np.random.randint(0, self.fft_size)
+    self.num_shift = self.np_random.randint(0, self.nfft)
     
     # Store last N observations
     self.history_len = 512
     self.history = {
-        "radar": deque([np.zeros(self.fft_size, dtype=np.uint8) for _ in range(self.history_len)], maxlen=self.history_len),
-        "interference": deque([np.zeros(self.fft_size, dtype=np.uint8) for _ in range(self.history_len)], maxlen=self.history_len),
+        "radar": deque([np.zeros(self.nfft, dtype=np.uint8) for _ in range(self.history_len)], maxlen=self.history_len),
+        "interference": deque([np.zeros(self.nfft, dtype=np.uint8) for _ in range(self.history_len)], maxlen=self.history_len),
     }
 
     self.interference.reset()
-    obs = np.zeros((self.pri, self.fft_size), dtype=np.float32)
+    obs = np.zeros((self.pri, self.nfft), dtype=np.float32)
     for i in range(self.pri):
       obs[i] = self.interference.step(self.time)
     obs = np.roll(obs, self.num_shift, axis=1)
@@ -66,31 +72,32 @@ class SpectrumEnv(gym.Env):
     if self.render_mode == "human":
         for i in range(self.pri):
           self.history["interference"].append(obs[i])
-          self.history["radar"].append(np.zeros(self.fft_size, dtype=np.uint8))
+          self.history["radar"].append(np.zeros(self.nfft, dtype=np.uint8))
         self._render_frame()
         
     return obs, {}
 
   def step(self, action: np.ndarray):
-    # TODO: Compute reward
+    # Compute radar spectrum
     start_freq = action[0]
     stop_freq = np.clip(action[1], start_freq, 1)
     bandwidth = stop_freq - start_freq
     fc = start_freq + bandwidth / 2
     spectrum = np.logical_and(
         self.freq_axis > start_freq, self.freq_axis < stop_freq)
-    obs = np.zeros((self.pri, self.fft_size), dtype=np.float32)
+    
+    obs = np.zeros((self.pri, self.nfft), dtype=np.float32)
     for i in range(self.pri):
       obs[i] = self.interference.step(self.time)
     obs = np.roll(obs, self.num_shift, axis=1)
     
     collision_bw = np.count_nonzero(
       np.logical_and(spectrum == 1, obs[0] == 1)
-    ) / self.fft_size
+    ) / self.nfft
 
     # Compute max bandwidth from contiguous zeros in obs[0]
     widest = self._get_widest(obs[0])
-    widest_bw = (widest[1] - widest[0]) / self.fft_size
+    widest_bw = (widest[1] - widest[0]) / self.nfft
     reward = (bandwidth - widest_bw - collision_bw) if collision_bw <= self.max_collision else (0 - widest_bw - collision_bw)
 
     self.step_count += 1
@@ -114,7 +121,7 @@ class SpectrumEnv(gym.Env):
         if i == 0:
           self.history["radar"].append(spectrum)
         else:
-          self.history["radar"].append(np.zeros(self.fft_size, dtype=np.uint8))
+          self.history["radar"].append(np.zeros(self.nfft, dtype=np.uint8))
       self._render_frame()
         
     return obs, reward, terminated, truncated, info
@@ -181,11 +188,17 @@ class SpectrumEnv(gym.Env):
 
       
 if __name__ == '__main__':
-  env = gym.vector.SyncVectorEnv([lambda: SpectrumEnv()])
+  env = SpectrumEnv()
 
+  obses = []
   obs, info = env.reset()
-  obs, reward, term, trunc, info = env.step(np.array([[0, 1]]))
-
-  plt.imshow(obs[0])
+  # obs, reward, term, trunc, info = env.step(np.array([[0, 1]]))
+  obses.append(obs)
+  for i in range(100):
+    obs, reward, term, trunc, info = env.step(np.array([0, 1]))
+    obses.append(obs)
+    # env.render()
+  history = np.concatenate(obses)
+  plt.imshow(history)
   plt.savefig('./test.png')
   # plt.show()

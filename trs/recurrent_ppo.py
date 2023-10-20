@@ -20,6 +20,7 @@ import gymnasium as gym
 from torch import distributions
 from torch import nn
 import torch
+from mpar_sim.wrappers.squash_action import SquashAction
 WORKSPACE_PATH = "/home/shane/src/mpar-sim/trs"
 
 
@@ -49,7 +50,8 @@ ASYNCHRONOUS_ENVIRONMENT = True
 # Force using CPU for gathering trajectories.
 FORCE_CPU_GATHER = False
 
-RANDOM_SEED = 0
+RANDOM_SEED = np.random.randint(0, 2**32 - 1)
+# RANDOM_SEED = 1
 # Set random seed for consistant runs.
 torch.random.manual_seed(RANDOM_SEED)
 np.random.seed(RANDOM_SEED)
@@ -64,14 +66,14 @@ GATHER_DEVICE = "cuda" if torch.cuda.is_available() and not FORCE_CPU_GATHER els
 # %%
 # Environment parameters
 ENV = "mpar_sim/SpectrumEnv"
-EXPERIMENT_NAME = "SpectrumEnv" + f"_{time.strftime('%Y%m%d_%H%M%S')}"
+EXPERIMENT_NAME = "SpectrumEnv" + f"_{time.strftime('%Y%m%d_%H%M%S')}" + f"_{RANDOM_SEED}"
 
 # Default Hyperparameters
 SCALE_REWARD:         float = 1
 MIN_REWARD:           float = -1.
 HIDDEN_SIZE:          float = 64
-BATCH_SIZE:           int = 512
-DISCOUNT:             float = 0.
+BATCH_SIZE:           int = 256
+DISCOUNT:             float = 0.8
 GAE_LAMBDA:           float = 0.95
 PPO_CLIP:             float = 0.2
 PPO_EPOCHS:           int = 10
@@ -83,7 +85,7 @@ RECURRENT_SEQ_LEN:    int = 4
 RECURRENT_LAYERS:     int = 1
 ROLLOUT_STEPS:        int = 1024
 PARALLEL_ROLLOUTS:    int = 20
-PATIENCE:             int = 200
+PATIENCE:             int = 50
 
 # %% [markdown]
 # # Hyperparameters
@@ -312,7 +314,7 @@ class StopConditions():
   """
   best_reward: float = -1e6
   fail_to_improve_count: int = 0
-  max_iterations: int = 1000000
+  max_iterations: int = 100
 # %% [markdown]
 # # Recurrent Models
 
@@ -581,7 +583,7 @@ def gather_trajectories(input_data):
         writer.add_scalar("charts/mean_widest_bw", avg_mean_widest, global_step)
         writer.add_scalar("charts/mean_bw_diff", avg_mean_bw_diff, global_step)
         print(
-              f"global_step={global_step}, episodic_return={info['episode']['r'], }, bw={avg_mean_bw:.3f}, col={avg_mean_col:.3f}, widest={avg_mean_widest:.3f}")
+              f"global_step={global_step}, bw={avg_mean_bw:.3f}, col={avg_mean_col:.3f}, widest={avg_mean_widest:.3f}")
 
     # Compute final value to allow for incomplete episodes.
     state = torch.tensor(obsv, dtype=torch.float32)
@@ -742,10 +744,11 @@ def make_env(env_id, idx, gamma, seed):
     env = gym.make(env_id, max_episode_steps=1000, seed=seed+idx)
     env = gym.wrappers.RecordEpisodeStatistics(env)
     env = gym.wrappers.FlattenObservation(env)
-    env = gym.wrappers.ClipAction(env)
-    # env = gym.wrappers.NormalizeReward(env, gamma=gamma)
-    # env = gym.wrappers.TransformReward(
-    #     env, lambda reward: np.clip(reward, -10, 10))
+    env = SquashAction(env)
+    # env = gym.wrappers.ClipAction(env)
+    env = gym.wrappers.NormalizeReward(env, gamma=gamma)
+    env = gym.wrappers.TransformReward(
+        env, lambda reward: np.clip(reward, -10, 10))
     return env
 
   return thunk

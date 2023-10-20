@@ -32,6 +32,7 @@ from base64 import b64encode
 from IPython.display import HTML
 from typing import Tuple
 import mpar_sim.envs
+from mpar_sim.wrappers.squash_action import SquashAction
 
 # %%
 
@@ -297,7 +298,8 @@ def visualize_policy(actor):
     env = gym.make(ENV, render_mode='human')
     env = gym.wrappers.RecordEpisodeStatistics(env)
     env = gym.wrappers.FlattenObservation(env)
-    env = gym.wrappers.ClipAction(env)
+    env = SquashAction(env)
+    # env = gym.wrappers.ClipAction(env)
     # env.render_mode = "human"
     # env = gym.wrappers.Monitor(env, f"{WORKSPACE_PATH}/videos", force=True)
     observation, _ = env.reset()
@@ -352,7 +354,7 @@ EXPERIMENT_NAME = "SpectrumEnv_20231019_174456"
 BASE_CHECKPOINT_PATH = f"{WORKSPACE_PATH}/checkpoints/{EXPERIMENT_NAME}/"
 
 # %%
-actor, critic, actor_optimizer, critic_optimizer, iteration, stop_conditions = load_from_checkpoint(10)
+actor, critic, actor_optimizer, critic_optimizer, iteration, stop_conditions = load_from_checkpoint(130)
 
 
 
