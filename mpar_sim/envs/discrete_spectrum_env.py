@@ -9,20 +9,37 @@ from mpar_sim.interference.recorded import RecordedInterference
 from mpar_sim.interference.single_tone import SingleToneInterference
 from collections import deque
 
-class SpectrumEnv(gym.Env):
+def create_table(n_action_bins: int):
+  n_actions = n_action_bins*(n_action_bins+1)//2
+  action_table = np.zeros((n_actions, 2))
+  action_index = 0
+  for i in range(1, n_action_bins+1):
+    x = np.zeros(n_action_bins)
+    x[:i] = 1
+    for j in range(n_action_bins-(i-1)):
+      xr = np.roll(x, j)
+      start = np.argmax(xr)
+      stop = start + i
+      action_table[action_index] = np.array([start, stop]) / n_action_bins
+      action_index += 1
+  return action_table
+
+
+class DiscreteSpectrumEnv(gym.Env):
   """
   This is a modified version of the environment I created for the original paper submission. Here, 
   """
   metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 30}
 
-  def __init__(self, 
-               render_mode = None, 
+  def __init__(self,
+               render_mode=None,
                nfft: int = 1024,
+               n_action_bins: int = 5,
                pri: int = 10,
                max_collision: float = 0.005,
                n_pulse_cpi: int = 256,
-               dataset: str = "/home/shane/data/hocae_snaps_2_4_cleaned_10_0.dat",
-               order='C',
+               dataset: str = "/home/shane/data/HOCAE_Snaps_bool.dat",
+               order: str = 'F',
                seed: int = np.random.randint(0, 2**32 - 1)):
     # Parameters
     self.nfft = nfft
@@ -30,11 +47,14 @@ class SpectrumEnv(gym.Env):
     self.max_collision = max_collision
     self.n_pulse_cpi = n_pulse_cpi
     self.dataset = dataset
-    
+    # Compute action array
+    self.action_table = create_table(n_action_bins)
+        
+
     self.np_random = np.random.RandomState(seed)
 
     self.interference = RecordedInterference(
-        filename=dataset, order=order, fft_size=self.nfft, seed=seed)
+      filename=dataset, fft_size=self.nfft, order=order, seed=seed)
     self.interference.data[:, nfft//2] = 0
     self.interference.data[:, 100:105] = 0
     self.interference.data[:, -105:-100] = 0
@@ -42,8 +62,8 @@ class SpectrumEnv(gym.Env):
 
     self.observation_space = gym.spaces.Box(low=0, high=1,
                                             shape=(self.pri, self.nfft,))
-    self.action_space = gym.spaces.Box(low=0, high=1, shape=(2,))
-    
+    self.action_space = gym.spaces.Discrete(self.action_table.shape[0])
+
     assert render_mode is None or render_mode in self.metadata["render_modes"]
     self.render_mode = render_mode
     # Pygame setup
@@ -60,8 +80,8 @@ class SpectrumEnv(gym.Env):
     self.collisions = []
     self.widests = []
     self.bw_diffs = []
-    self.num_shift = self.np_random.randint(0, self.nfft)
-    
+    self.n_shift = self.np_random.randint(0, self.nfft)
+
     # Store last N observations
     self.history_len = 512
     self.history = {
@@ -73,17 +93,18 @@ class SpectrumEnv(gym.Env):
     obs = np.zeros((self.pri, self.nfft), dtype=np.float32)
     for i in range(self.pri):
       obs[i] = self.interference.step(self.time)
-    obs = np.roll(obs, self.num_shift, axis=1)
-    
+    obs = np.roll(obs, self.n_shift, axis=1)
+
     if self.render_mode == "human":
-        for i in range(self.pri):
-          self.history["interference"].append(obs[i])
-          self.history["radar"].append(np.zeros(self.nfft, dtype=np.uint8))
-        self._render_frame()
-        
+      for i in range(self.pri):
+        self.history["interference"].append(obs[i])
+        self.history["radar"].append(np.zeros(self.nfft, dtype=np.uint8))
+      self._render_frame()
+
     return obs, {}
 
   def step(self, action: np.ndarray):
+    action = self.action_table[action]
     # Compute radar spectrum
     start_freq = action[0]
     stop_freq = np.clip(action[1], start_freq, 1)
@@ -91,20 +112,21 @@ class SpectrumEnv(gym.Env):
     fc = start_freq + bandwidth / 2
     spectrum = np.logical_and(
         self.freq_axis > start_freq, self.freq_axis < stop_freq)
-    
+
     obs = np.zeros((self.pri, self.nfft), dtype=np.float32)
     for i in range(self.pri):
       obs[i] = self.interference.step(self.time)
-    obs = np.roll(obs, self.num_shift, axis=1)
-    
+    obs = np.roll(obs, self.n_shift, axis=1)
+
     collision_bw = np.count_nonzero(
-      np.logical_and(spectrum == 1, obs[0] == 1)
+        np.logical_and(spectrum == 1, obs[0] == 1)
     ) / self.nfft
 
     # Compute max bandwidth from contiguous zeros in obs[0]
     widest = self._get_widest(obs[0])
     widest_bw = (widest[1] - widest[0]) / self.nfft
-    reward = (bandwidth - widest_bw - collision_bw) if collision_bw <= self.max_collision else (0 - widest_bw - collision_bw)
+    reward = (bandwidth - widest_bw -
+              collision_bw) if collision_bw <= self.max_collision else (0 - widest_bw - collision_bw)
 
     self.step_count += 1
     self.bandwidths.append(bandwidth)
@@ -120,7 +142,7 @@ class SpectrumEnv(gym.Env):
         'mean_widest_bw': np.mean(self.widests),
         'mean_bw_diff': np.mean(self.bw_diffs),
     }
-    
+
     if self.render_mode == "human":
       for i in range(self.pri):
         self.history["interference"].append(obs[i])
@@ -129,9 +151,9 @@ class SpectrumEnv(gym.Env):
         else:
           self.history["radar"].append(np.zeros(self.nfft, dtype=np.uint8))
       self._render_frame()
-        
+
     return obs, reward, terminated, truncated, info
-  
+    
   def _get_widest(self, spectrum: np.ndarray):
     # Group consecutive bins by value
     gap_widths = np.array([[x[0], len(list(x[1]))]
@@ -160,7 +182,7 @@ class SpectrumEnv(gym.Env):
   def close(self):
     if self.render_mode == "human":
       pygame.quit()
-      
+
   def _render_frame(self):
     if self.window is None and self.render_mode == "human":
       pygame.init()
@@ -192,19 +214,31 @@ class SpectrumEnv(gym.Env):
     else:
       return pixels
 
-      
+
 if __name__ == '__main__':
-  env = SpectrumEnv()
+  env = DiscreteSpectrumEnv(n_action_bins=5, dataset="/home/shane/data/HOCAE_Snaps_bool.dat", order='F', seed=0)
 
   obses = []
   obs, info = env.reset()
   # obs, reward, term, trunc, info = env.step(np.array([[0, 1]]))
   obses.append(obs)
   for i in range(100):
-    obs, reward, term, trunc, info = env.step(np.array([0, 1]))
+    obs, reward, term, trunc, info = env.step(0)
     obses.append(obs)
     # env.render()
   history = np.concatenate(obses)
   plt.imshow(history)
-  plt.savefig('./test.png')
+  plt.savefig('./test1.png')
+  
+  obses = []
+  obs, info = env.reset()
+  # obs, reward, term, trunc, info = env.step(np.array([[0, 1]]))
+  obses.append(obs)
+  for i in range(100):
+    obs, reward, term, trunc, info = env.step(0)
+    obses.append(obs)
+    # env.render()
+  history = np.concatenate(obses)
+  plt.imshow(history)
+  plt.savefig('./test2.png')
   # plt.show()

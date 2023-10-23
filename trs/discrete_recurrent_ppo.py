@@ -21,7 +21,7 @@ from torch import distributions
 from torch import nn
 import torch
 from mpar_sim.wrappers.squash_action import SquashAction
-from mpar_sim.wrappers.first_n import TakeFirstN
+import mpar_sim.envs
 WORKSPACE_PATH = "/home/shane/src/mpar-sim/trs"
 
 
@@ -66,23 +66,20 @@ GATHER_DEVICE = "cuda" if torch.cuda.is_available() and not FORCE_CPU_GATHER els
 
 # %%
 # Environment parameters
-ENV = "mpar_sim/SpectrumEnv"
+ENV = "mpar_sim/DiscreteSpectrumEnv"
 ENV_KWARGS = dict(
     dataset="/home/shane/data/HOCAE_Snaps_bool.dat",
     pri=10,
     order="F",
 )
-# TODO: Reset this to 10
-TAKE_FIRST_N = 10
-# ENV_KWARGS = {"dataset": "/home/shane/data/HOCAE_Snaps_bool.dat", "order": "F"}
-EXPERIMENT_NAME = "SpectrumEnv" + f"_{time.strftime('%Y%m%d_%H%M%S')}" + f"_{RANDOM_SEED}"
+EXPERIMENT_NAME = "DiscreteSpectrumEnv" + f"_{time.strftime('%Y%m%d_%H%M%S')}" + f"_{RANDOM_SEED}"
 
 # Default Hyperparameters
 SCALE_REWARD:         float = 1
 MIN_REWARD:           float = -1.
 HIDDEN_SIZE:          float = 64
 BATCH_SIZE:           int = 256
-DISCOUNT:             float = 0.
+DISCOUNT:             float = 0.9
 GAE_LAMBDA:           float = 0.95
 PPO_CLIP:             float = 0.2
 PPO_EPOCHS:           int = 10
@@ -168,7 +165,7 @@ def compute_advantages(rewards, values, discount, gae_lambda):
 
 # %%
 _INVALID_TAG_CHARACTERS = re.compile(r"[^-/\w\.]")
-BASE_CHECKPOINT_PATH = f"{WORKSPACE_PATH}/checkpoints/continuous_ppo/{EXPERIMENT_NAME}/"
+BASE_CHECKPOINT_PATH = f"{WORKSPACE_PATH}/checkpoints/discrete_ppo/{EXPERIMENT_NAME}/"
 
 
 def save_parameters(writer, tag, model, batch_idx):
@@ -199,8 +196,7 @@ def get_env_space():
   """
   Return obsvervation dimensions, action dimensions and whether or not action space is continuous.
   """
-  env = gym.make(ENV, **ENV_KWARGS)
-  env = TakeFirstN(env, TAKE_FIRST_N)
+  env = gym.make(ENV, max_episode_steps=256, **ENV_KWARGS)
   # NOTE: This should in general be done with the assignment below, but this env is a little weird.
   obs_shape = env.observation_space.shape
   continuous_action_space = type(env.action_space) is gym.spaces.box.Box
@@ -381,7 +377,7 @@ class Actor(nn.Module):
     self.lstm = nn.LSTM(input_size=self.n_embed, 
                         hidden_size=self.n_embed,
                         num_layers=hp.recurrent_layers)
-    self.out = layer_init(nn.Linear(self.n_embed, 2*action_dim), std=0.01)
+    self.out = layer_init(nn.Linear(self.n_embed, action_dim), std=0.01)
 
     self.continuous_action_space = continuous_action_space
     self.hidden_cell = None
@@ -417,13 +413,7 @@ class Actor(nn.Module):
     policy_logits = self.out(x)
     
     # Convert to action distribution
-    if self.continuous_action_space:
-      mu, sigma = torch.chunk(policy_logits, 2, dim=-1)
-      sigma = nn.functional.softplus(sigma)
-      policy_dist = torch.distributions.multivariate_normal.MultivariateNormal(
-          mu.to("cpu"), torch.diag_embed(sigma).to("cpu"))
-    else:
-      policy_dist = distributions.Categorical(
+    policy_dist = distributions.Categorical(
           F.softmax(policy_logits, dim=1).to("cpu"))
     return policy_dist
 
@@ -751,11 +741,11 @@ class TrajectoryDataset():
 
 def make_env(env_id, idx, gamma, seed):
   def thunk():
-    env = gym.make(env_id, max_episode_steps=256, seed=seed+idx, **ENV_KWARGS)
-    env = TakeFirstN(env, TAKE_FIRST_N)
+    env = gym.make(env_id, max_episode_steps=256,  **ENV_KWARGS)
+    # env = gym.wrappers.RecordVideo(env, f"videos/{EXPERIMENT_NAME}")
     env = gym.wrappers.RecordEpisodeStatistics(env)
     env = gym.wrappers.FlattenObservation(env)
-    env = SquashAction(env)
+    # env = SquashAction(env)
     # env = gym.wrappers.ClipAction(env)
     env = gym.wrappers.NormalizeReward(env, gamma=gamma)
     env = gym.wrappers.TransformReward(
@@ -887,8 +877,7 @@ def train_model(actor, critic, actor_optimizer, critic_optimizer, iteration, sto
 # from mpar_sim.envs import SpectrumEnv
 # gym.envs.register(id='SpectrumEnv', entry_point=SpectrumEnv)
 if __name__ == '__main__':
-  import mpar_sim.envs
-  writer = SummaryWriter(log_dir=f"{WORKSPACE_PATH}/logs/ppo_continuous/{EXPERIMENT_NAME}")
+  writer = SummaryWriter(log_dir=f"{WORKSPACE_PATH}/logs/discrete_ppo/{EXPERIMENT_NAME}")
   actor, critic, actor_optimizer, critic_optimizer, iteration, stop_conditions = start_or_resume_from_checkpoint()
   score = train_model(actor, critic, actor_optimizer,
                       critic_optimizer, iteration, stop_conditions)
