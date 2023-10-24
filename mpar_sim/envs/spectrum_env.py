@@ -59,7 +59,12 @@ class SpectrumEnv(gym.Env):
     self.bandwidths = []
     self.collisions = []
     self.widests = []
-    self.bw_diffs = []
+    self.missed_bandwidths = []
+    self.cpi_bandwidths = []
+    self.cpi_center_freqs = []
+    self.bandwidth_diffs = []
+    self.center_freq_diffs = []
+    
     self.num_shift = self.np_random.randint(0, self.nfft)
     
     # Store last N observations
@@ -110,16 +115,27 @@ class SpectrumEnv(gym.Env):
     self.bandwidths.append(bandwidth)
     self.collisions.append(collision_bw)
     self.widests.append(widest_bw)
-    self.bw_diffs.append(bandwidth - widest_bw)
+    self.missed_bandwidths.append(widest_bw - bandwidth)
+    self.cpi_bandwidths.append(bandwidth)
+    self.cpi_center_freqs.append(fc)
+    self.bandwidth_diffs.append(abs(bandwidth - np.mean(self.cpi_bandwidths)))
+    self.center_freq_diffs.append(abs(fc - np.mean(self.cpi_center_freqs)))
 
-    terminated = False
-    truncated = False
     info = {
         'mean_bw': np.mean(self.bandwidths),
         'mean_collision_bw': np.mean(self.collisions),
         'mean_widest_bw': np.mean(self.widests),
-        'mean_bw_diff': np.mean(self.bw_diffs),
+        'mean_missed_bw': np.mean(self.missed_bandwidths),
+        'mean_bw_diff': np.mean(self.bandwidth_diffs),
+        'mean_fc_diff': np.mean(self.center_freq_diffs),
     }
+    
+    # Measure the bandwidth difference between pulses
+    if self.step_count % self.n_pulse_cpi == 0:
+      self.cpi_bandwidths.clear()
+      self.cpi_center_freqs.clear()
+      self.bandwidth_diffs.clear()
+      self.center_freq_diffs.clear()
     
     if self.render_mode == "human":
       for i in range(self.pri):
@@ -130,6 +146,8 @@ class SpectrumEnv(gym.Env):
           self.history["radar"].append(np.zeros(self.nfft, dtype=np.uint8))
       self._render_frame()
         
+    terminated = False
+    truncated = False
     return obs, reward, terminated, truncated, info
   
   def _get_widest(self, spectrum: np.ndarray):

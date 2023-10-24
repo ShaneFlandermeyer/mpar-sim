@@ -1,4 +1,4 @@
-from typing import Tuple
+from typing import Dict, Tuple
 from IPython.display import HTML
 from base64 import b64encode
 from dotmap import DotMap
@@ -75,14 +75,15 @@ ENV_KWARGS = dict(
 # TODO: Reset this to 10
 TAKE_FIRST_N = 10
 # ENV_KWARGS = {"dataset": "/home/shane/data/HOCAE_Snaps_bool.dat", "order": "F"}
-EXPERIMENT_NAME = "SpectrumEnv" + f"_{time.strftime('%Y%m%d_%H%M%S')}" + f"_{RANDOM_SEED}"
+EXPERIMENT_NAME = "SpectrumEnv" + \
+    f"_{time.strftime('%Y%m%d_%H%M%S')}" + f"_{RANDOM_SEED}"
 
 # Default Hyperparameters
 SCALE_REWARD:         float = 1
 MIN_REWARD:           float = -1.
 HIDDEN_SIZE:          float = 64
 BATCH_SIZE:           int = 256
-DISCOUNT:             float = 0.
+DISCOUNT:             float = 0.25
 GAE_LAMBDA:           float = 0.95
 PPO_CLIP:             float = 0.2
 PPO_EPOCHS:           int = 10
@@ -124,7 +125,7 @@ class HyperParameters():
 
 
 hp = HyperParameters(batch_size=BATCH_SIZE, parallel_rollouts=PARALLEL_ROLLOUTS, recurrent_seq_len=RECURRENT_SEQ_LEN, rollout_steps=ROLLOUT_STEPS, patience=PATIENCE, entropy_factor=ENTROPY_FACTOR,
-min_reward=MIN_REWARD, hidden_size=HIDDEN_SIZE)
+                     min_reward=MIN_REWARD, hidden_size=HIDDEN_SIZE)
 
 
 # %%
@@ -168,7 +169,7 @@ def compute_advantages(rewards, values, discount, gae_lambda):
 
 # %%
 _INVALID_TAG_CHARACTERS = re.compile(r"[^-/\w\.]")
-BASE_CHECKPOINT_PATH = f"{WORKSPACE_PATH}/checkpoints/continuous_ppo/{EXPERIMENT_NAME}/"
+BASE_CHECKPOINT_PATH = f"{WORKSPACE_PATH}/checkpoints/ppo_continuous/{EXPERIMENT_NAME}/"
 
 
 def save_parameters(writer, tag, model, batch_idx):
@@ -193,6 +194,47 @@ def save_parameters(writer, tag, model, batch_idx):
     else:
       writer.add_scalar("{}_{}{}".format(
           tag, k, shape_formatted), v.data, batch_idx)
+
+
+def log_metrics(infos: Dict, writer: SummaryWriter, step: int):
+  mean_bws = []
+  mean_cols = []
+  mean_widests = []
+  mean_missed_bws = []
+  mean_bw_diffs = []
+  mean_fc_diffs = []
+  for info in infos["final_info"]:
+    # Skip the envs that are not done
+    if info is None:
+      continue
+
+    writer.add_scalar("charts/episodic_return",
+                      info["episode"]["r"], step)
+    writer.add_scalar("charts/episodic_length",
+                      info["episode"]["l"], step)
+
+    mean_bws.append(info["mean_bw"])
+    mean_cols.append(info["mean_collision_bw"])
+    mean_widests.append(info["mean_widest_bw"])
+    mean_missed_bws.append(info["mean_missed_bw"])
+    mean_bw_diffs.append(info["mean_bw_diff"])
+    mean_fc_diffs.append(info["mean_fc_diff"])
+
+  if len(mean_bws) > 0:
+    avg_mean_bw = np.mean(mean_bws)
+    avg_mean_col = np.mean(mean_cols)
+    avg_mean_widest = np.mean(mean_widests)
+    avg_mean_missed_bw = np.mean(mean_missed_bws)
+    avg_mean_bw_diff = np.mean(mean_bw_diffs)
+    avg_mean_fc_diff = np.mean(mean_fc_diffs)
+    writer.add_scalar("charts/mean_bandwidth", avg_mean_bw, step)
+    writer.add_scalar("charts/mean_collision_bw", avg_mean_col, step)
+    writer.add_scalar("charts/mean_widest_bw", avg_mean_widest, step)
+    writer.add_scalar("charts/mean_missed_bw", avg_mean_missed_bw, step)
+    writer.add_scalar("charts/mean_bw_diff", avg_mean_bw_diff, step)
+    writer.add_scalar("charts/mean_fc_diff", avg_mean_fc_diff, step)
+    print(
+        f"global_step={step}, bw={avg_mean_bw:.3f}, col={avg_mean_col:.3f}, widest={avg_mean_widest:.3f}")
 
 
 def get_env_space():
@@ -363,22 +405,22 @@ class PositionalEncoding(nn.Module):
 
 
 class Actor(nn.Module):
-  def __init__(self, 
-               obs_shape: Tuple[int], 
-               action_dim: int, 
+  def __init__(self,
+               obs_shape: Tuple[int],
+               action_dim: int,
                continuous_action_space: bool):
     super().__init__()
     self.obs_shape = obs_shape
     self.action_dim = action_dim
     self.n_embed = hp.hidden_size
     self.num_recurrent_layers = hp.recurrent_layers
-    self.position_encoding = PositionalEncoding(self.n_embed, 
+    self.position_encoding = PositionalEncoding(self.n_embed,
                                                 dropout=0., max_len=10_000)
 
     self.embed = layer_init(nn.Linear(self.obs_shape[1], self.n_embed))
     self.mha = nn.MultiheadAttention(self.n_embed, 1, batch_first=True)
     self.layernorm = nn.LayerNorm(self.n_embed)
-    self.lstm = nn.LSTM(input_size=self.n_embed, 
+    self.lstm = nn.LSTM(input_size=self.n_embed,
                         hidden_size=self.n_embed,
                         num_layers=hp.recurrent_layers)
     self.out = layer_init(nn.Linear(self.n_embed, 2*action_dim), std=0.01)
@@ -401,7 +443,6 @@ class Actor(nn.Module):
     x = F.elu(x).reshape(seq_len, batch_size, *x.shape[-2:])
     x = x.mean(dim=-2)
     mha_out = x.reshape(seq_len, batch_size, -1)
-    
 
     # Pulse-to-pulse recurrent processing
     device = state.device
@@ -411,11 +452,11 @@ class Actor(nn.Module):
       self.hidden_cell = [
           value * (1.0 - terminal).reshape(1, batch_size, 1) for value in self.hidden_cell]
     _, self.hidden_cell = self.lstm(x, self.hidden_cell)
-    
+
     # Skip path from MHA to the output
-    x = F.elu(mha_out[-1] + self.hidden_cell[0][-1]) 
+    x = F.elu(mha_out[-1] + self.hidden_cell[0][-1])
     policy_logits = self.out(x)
-    
+
     # Convert to action distribution
     if self.continuous_action_space:
       mu, sigma = torch.chunk(policy_logits, 2, dim=-1)
@@ -433,19 +474,18 @@ class Critic(nn.Module):
     super().__init__()
     self.obs_shape = obs_shape
     self.n_embed = hp.hidden_size
-    self.position_encoding = PositionalEncoding(self.n_embed, 
+    self.position_encoding = PositionalEncoding(self.n_embed,
                                                 dropout=0., max_len=10_000)
 
     self.embed = layer_init(nn.Linear(self.obs_shape[1], self.n_embed))
     self.mha = nn.MultiheadAttention(self.n_embed, 1, batch_first=True)
     self.layernorm = nn.LayerNorm(self.n_embed)
-    
 
-    self.lstm = nn.LSTM(self.n_embed, 
-                        self.n_embed, 
+    self.lstm = nn.LSTM(self.n_embed,
+                        self.n_embed,
                         num_layers=hp.recurrent_layers)
     self.out = layer_init(nn.Linear(self.n_embed, 1), std=1)
-    
+
     self.hidden_cell = None
 
   def get_init_state(self, batch_size, device):
@@ -453,10 +493,10 @@ class Critic(nn.Module):
                         torch.zeros(hp.recurrent_layers, batch_size, hp.hidden_size).to(device))
 
   def forward(self, state: torch.tensor, terminal: torch.tensor = None):
-    inp = state # TODO: Needed for debugging only
+    inp = state  # TODO: Needed for debugging only
     seq_len, batch_size = state.shape[:2]
     state = state.reshape(seq_len, batch_size, *self.obs_shape)
-    
+
     # Sub-PRI attention processing
     x = self.embed(state)
     x = F.elu(x).reshape(-1, *x.shape[-2:])
@@ -465,7 +505,7 @@ class Critic(nn.Module):
     x = F.elu(x).reshape(seq_len, batch_size, *x.shape[-2:])
     x = x.mean(dim=-2)
     mha_out = x.reshape(seq_len, batch_size, -1)
-    
+
     # Pulse-to-pulse recurrent processing
     device = state.device
     if self.hidden_cell is None or batch_size != self.hidden_cell[0].shape[1]:
@@ -474,10 +514,10 @@ class Critic(nn.Module):
       self.hidden_cell = [
           value * (1.0 - terminal).reshape(1, batch_size, 1) for value in self.hidden_cell]
     _, self.hidden_cell = self.lstm(x, self.hidden_cell)
-    
+
     # Skip path from MHA to the output
-    x = F.elu(mha_out[-1] + self.hidden_cell[0][-1]) 
-    
+    x = F.elu(mha_out[-1] + self.hidden_cell[0][-1])
+
     value_out = self.out(x)
     return value_out
 
@@ -560,40 +600,10 @@ def gather_trajectories(input_data):
       trajectory_data["terminals"].append(terminal)
       global_step += PARALLEL_ROLLOUTS
 
-      # TODO: Print metrics
       if "final_info" not in infos:
         continue
 
-      mean_bws = []
-      mean_cols = []
-      mean_widests = []
-      mean_bw_diffs = []
-      for info in infos["final_info"]:
-        # Skip the envs that are not done
-        if info is None:
-          continue
-        
-        writer.add_scalar("charts/episodic_return",
-                          info["episode"]["r"], global_step)
-        writer.add_scalar("charts/episodic_length",
-                          info["episode"]["l"], global_step)
-        
-        mean_bws.append(info["mean_bw"])
-        mean_cols.append(info["mean_collision_bw"])
-        mean_widests.append(info["mean_widest_bw"])
-        mean_bw_diffs.append(info["mean_bw_diff"])
-        
-      if len(mean_bws) > 0:
-        avg_mean_bw = np.mean(mean_bws)
-        avg_mean_col = np.mean(mean_cols)
-        avg_mean_widest = np.mean(mean_widests)
-        avg_mean_bw_diff = np.mean(mean_bw_diffs)
-        writer.add_scalar("charts/mean_bandwidth", avg_mean_bw, global_step)
-        writer.add_scalar("charts/mean_collision_bw", avg_mean_col, global_step)
-        writer.add_scalar("charts/mean_widest_bw", avg_mean_widest, global_step)
-        writer.add_scalar("charts/mean_bw_diff", avg_mean_bw_diff, global_step)
-        print(
-              f"global_step={global_step}, bw={avg_mean_bw:.3f}, col={avg_mean_col:.3f}, widest={avg_mean_widest:.3f}")
+      log_metrics(infos, writer, global_step)
 
     # Compute final value to allow for incomplete episodes.
     state = torch.tensor(obsv, dtype=torch.float32)
@@ -888,7 +898,8 @@ def train_model(actor, critic, actor_optimizer, critic_optimizer, iteration, sto
 # gym.envs.register(id='SpectrumEnv', entry_point=SpectrumEnv)
 if __name__ == '__main__':
   import mpar_sim.envs
-  writer = SummaryWriter(log_dir=f"{WORKSPACE_PATH}/logs/ppo_continuous/{EXPERIMENT_NAME}")
+  writer = SummaryWriter(
+      log_dir=f"{WORKSPACE_PATH}/logs/ppo_continuous/{EXPERIMENT_NAME}")
   actor, critic, actor_optimizer, critic_optimizer, iteration, stop_conditions = start_or_resume_from_checkpoint()
   score = train_model(actor, critic, actor_optimizer,
                       critic_optimizer, iteration, stop_conditions)

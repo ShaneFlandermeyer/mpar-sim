@@ -1,4 +1,4 @@
-from typing import Tuple
+from typing import Dict, Tuple
 from IPython.display import HTML
 from base64 import b64encode
 from dotmap import DotMap
@@ -191,6 +191,45 @@ def save_parameters(writer, tag, model, batch_idx):
       writer.add_scalar("{}_{}{}".format(
           tag, k, shape_formatted), v.data, batch_idx)
 
+def log_metrics(infos: Dict, writer: SummaryWriter, step: int):
+  mean_bws = []
+  mean_cols = []
+  mean_widests = []
+  mean_missed_bws = []
+  mean_bw_diffs = []
+  mean_fc_diffs = []
+  for info in infos["final_info"]:
+    # Skip the envs that are not done
+    if info is None:
+      continue
+
+    writer.add_scalar("charts/episodic_return",
+                      info["episode"]["r"], step)
+    writer.add_scalar("charts/episodic_length",
+                      info["episode"]["l"], step)
+
+    mean_bws.append(info["mean_bw"])
+    mean_cols.append(info["mean_collision_bw"])
+    mean_widests.append(info["mean_widest_bw"])
+    mean_missed_bws.append(info["mean_missed_bw"])
+    mean_bw_diffs.append(info["mean_bw_diff"])
+    mean_fc_diffs.append(info["mean_fc_diff"])
+
+  if len(mean_bws) > 0:
+    avg_mean_bw = np.mean(mean_bws)
+    avg_mean_col = np.mean(mean_cols)
+    avg_mean_widest = np.mean(mean_widests)
+    avg_mean_missed_bw = np.mean(mean_missed_bws)
+    avg_mean_bw_diff = np.mean(mean_bw_diffs)
+    avg_mean_fc_diff = np.mean(mean_fc_diffs)
+    writer.add_scalar("charts/mean_bandwidth", avg_mean_bw, step)
+    writer.add_scalar("charts/mean_collision_bw", avg_mean_col, step)
+    writer.add_scalar("charts/mean_widest_bw", avg_mean_widest, step)
+    writer.add_scalar("charts/mean_missed_bw", avg_mean_missed_bw, step)
+    writer.add_scalar("charts/mean_bw_diff", avg_mean_bw_diff, step)
+    writer.add_scalar("charts/mean_fc_diff", avg_mean_fc_diff, step)
+    print(
+        f"global_step={step}, bw={avg_mean_bw:.3f}, col={avg_mean_col:.3f}, widest={avg_mean_widest:.3f}")
 
 def get_env_space():
   """
@@ -554,36 +593,7 @@ def gather_trajectories(input_data):
       if "final_info" not in infos:
         continue
 
-      mean_bws = []
-      mean_cols = []
-      mean_widests = []
-      mean_bw_diffs = []
-      for info in infos["final_info"]:
-        # Skip the envs that are not done
-        if info is None:
-          continue
-        
-        writer.add_scalar("charts/episodic_return",
-                          info["episode"]["r"], global_step)
-        writer.add_scalar("charts/episodic_length",
-                          info["episode"]["l"], global_step)
-        
-        mean_bws.append(info["mean_bw"])
-        mean_cols.append(info["mean_collision_bw"])
-        mean_widests.append(info["mean_widest_bw"])
-        mean_bw_diffs.append(info["mean_bw_diff"])
-        
-      if len(mean_bws) > 0:
-        avg_mean_bw = np.mean(mean_bws)
-        avg_mean_col = np.mean(mean_cols)
-        avg_mean_widest = np.mean(mean_widests)
-        avg_mean_bw_diff = np.mean(mean_bw_diffs)
-        writer.add_scalar("charts/mean_bandwidth", avg_mean_bw, global_step)
-        writer.add_scalar("charts/mean_collision_bw", avg_mean_col, global_step)
-        writer.add_scalar("charts/mean_widest_bw", avg_mean_widest, global_step)
-        writer.add_scalar("charts/mean_bw_diff", avg_mean_bw_diff, global_step)
-        print(
-              f"global_step={global_step}, bw={avg_mean_bw:.3f}, col={avg_mean_col:.3f}, widest={avg_mean_widest:.3f}")
+      log_metrics(infos, writer, global_step)
 
     # Compute final value to allow for incomplete episodes.
     state = torch.tensor(obsv, dtype=torch.float32)
@@ -877,7 +887,7 @@ def train_model(actor, critic, actor_optimizer, critic_optimizer, iteration, sto
 # from mpar_sim.envs import SpectrumEnv
 # gym.envs.register(id='SpectrumEnv', entry_point=SpectrumEnv)
 if __name__ == '__main__':
-  writer = SummaryWriter(log_dir=f"{WORKSPACE_PATH}/logs/discrete_ppo/{EXPERIMENT_NAME}")
+  writer = SummaryWriter(log_dir=f"{WORKSPACE_PATH}/logs/ppo_discrete/{EXPERIMENT_NAME}")
   actor, critic, actor_optimizer, critic_optimizer, iteration, stop_conditions = start_or_resume_from_checkpoint()
   score = train_model(actor, critic, actor_optimizer,
                       critic_optimizer, iteration, stop_conditions)
