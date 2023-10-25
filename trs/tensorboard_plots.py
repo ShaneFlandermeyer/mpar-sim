@@ -18,18 +18,29 @@ if __name__ == "__main__":
   fc_diff_key = 'charts/mean_fc_diff'
   reward_key = 'charts/episodic_return'
 
-  log_dirs = ["/home/shane/src/mpar-sim/trs/logs/ppo_continuous",
-              "/home/shane/src/mpar-sim/trs/logs/ddqn/mpar_sim"]
+  log_dirs = ["/home/shane/src/mpar-sim/trs/logs/ppo_continuous/2_64_experiment1",
+              "/home/shane/src/mpar-sim/trs/logs/ddqn/2_64_experiment1/mpar_sim"]
   labels = ["PPO", "DDQN"]
 
+  # 2.4 GHz
+  # saa_metrics = {
+  #     bw_key: 0.4703232515099628*100e6,
+  #     col_key: 0.005276336570344859*100e6,
+  #     widest_key: 0.4707711982752102*100e6,
+  #     missed_key: 0.0004479467652508627*100e6,
+  #     bw_diff_key: 0.12139015498523904*100e6,
+  #     fc_diff_key: 0.15262375715231874*100e6,
+  # }
+  # 2.64 GHz
   saa_metrics = {
-      bw_key: 0.4703232515099628*100e6,
-      col_key: 0.005276336570344859*100e6,
-      widest_key: 0.4707711982752102*100e6,
-      missed_key: 0.0004479467652508627*100e6,
-      bw_diff_key: 0.12139015498523904*100e6,
-      fc_diff_key: 0.15262375715231874*100e6,
+      bw_key: 0.7975037796151643*100e6,
+      col_key: 0.001532964793895967*100e6,
+      widest_key: 0.7973797337374875*100e6,
+      missed_key: -0.00012404587768131316*100e6,
+      bw_diff_key: 0.20490902698742156*100e6,
+      fc_diff_key: 0.07528457495416599*100e6,
   }
+  
   color_cycle = ['#1f77b4', '#d62728']
 
   fig, axes = plt.subplots(2, 3)
@@ -76,6 +87,7 @@ if __name__ == "__main__":
     ax.set_ylabel('Episodic Reward', fontsize=14, fontweight='bold')
     ax.set_title('(a) Mean episode reward')
     ax.legend()
+    ax.set_ylim(-300, 0)
 
     ax = axes[0, 1]
     ax.plot(step_axis/1e6, bws.mean(axis=1)/1e6, color=color_cycle[idir], label=labels[idir])

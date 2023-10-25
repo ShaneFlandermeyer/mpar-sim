@@ -68,14 +68,14 @@ GATHER_DEVICE = "cuda" if torch.cuda.is_available() and not FORCE_CPU_GATHER els
 # Environment parameters
 ENV = "mpar_sim/SpectrumEnv"
 ENV_KWARGS = dict(
-    dataset="/home/shane/data/HOCAE_Snaps_bool.dat",
+    dataset="/home/shane/data/hocae_snaps_2_64ghz.dat",
     pri=10,
     order="F",
-    collision_weight=30,
+    collision_weight=50,
     # max_collision=0.005,
 )
 TAKE_FIRST_N = 10
-EXPERIMENT_NAME = "SpectrumEnv" + \
+EXPERIMENT_NAME = "2_64_experiment2/SpectrumEnv" + \
     f"_{time.strftime('%Y%m%d_%H%M%S')}" + f"_{RANDOM_SEED}"
 
 # Default Hyperparameters
@@ -302,7 +302,7 @@ def start_or_resume_from_checkpoint():
   actor = Actor(obs_shape=obs_shape,
                 action_dim=action_dim,
                 continuous_action_space=continuous_action_space)
-  critic = Critic(obs_shape)
+  critic = Critic(obs_shape=obs_shape, action_dim=action_dim)
 
   actor_optimizer = optim.AdamW(actor.parameters(), lr=hp.actor_learning_rate)
   critic_optimizer = optim.AdamW(
@@ -408,7 +408,7 @@ class Actor(nn.Module):
   def __init__(self,
                obs_shape: Tuple[int],
                action_dim: int,
-               continuous_action_space: bool):
+               continuous_action_space: bool,):
     super().__init__()
     self.obs_shape = obs_shape
     self.action_dim = action_dim
@@ -420,7 +420,7 @@ class Actor(nn.Module):
     self.embed = layer_init(nn.Linear(self.obs_shape[1], self.n_embed))
     self.mha = nn.MultiheadAttention(self.n_embed, 1, batch_first=True)
     self.layernorm = nn.LayerNorm(self.n_embed)
-    self.lstm = nn.LSTM(input_size=self.n_embed,
+    self.lstm = nn.LSTM(input_size=self.n_embed+action_dim,
                         hidden_size=self.n_embed,
                         num_layers=hp.recurrent_layers)
     self.out = layer_init(nn.Linear(self.n_embed, 2*action_dim), std=0.01)
@@ -432,7 +432,10 @@ class Actor(nn.Module):
     self.hidden_cell = (torch.zeros(hp.recurrent_layers, batch_size, hp.hidden_size).to(device),
                         torch.zeros(hp.recurrent_layers, batch_size, hp.hidden_size).to(device))
 
-  def forward(self, state: torch.tensor, terminal: torch.tensor = None):
+  def forward(self, 
+              state: torch.tensor,
+              prev_action: torch.tensor, 
+              terminal: torch.tensor = None):
     seq_len, batch_size = state.shape[:2]
     state = state.reshape(seq_len, batch_size, *self.obs_shape)
     # Sub-PRI attention processing
@@ -445,12 +448,15 @@ class Actor(nn.Module):
     mha_out = x.reshape(seq_len, batch_size, -1)
 
     # Pulse-to-pulse recurrent processing
+    # TODO: Add previous action to lstm input
     device = state.device
     if self.hidden_cell is None or batch_size != self.hidden_cell[0].shape[1]:
       self.get_init_state(batch_size, device)
     if terminal is not None:
       self.hidden_cell = [
           value * (1.0 - terminal).reshape(1, batch_size, 1) for value in self.hidden_cell]
+    # Add previous action to lstm input
+    x = torch.cat((x, prev_action), dim=-1)
     _, self.hidden_cell = self.lstm(x, self.hidden_cell)
 
     # Skip path from MHA to the output
@@ -470,9 +476,10 @@ class Actor(nn.Module):
 
 
 class Critic(nn.Module):
-  def __init__(self, obs_shape):
+  def __init__(self, obs_shape, action_dim):
     super().__init__()
     self.obs_shape = obs_shape
+    self.action_dim = action_dim
     self.n_embed = hp.hidden_size
     self.position_encoding = PositionalEncoding(self.n_embed,
                                                 dropout=0.1, max_len=10_000)
@@ -481,7 +488,7 @@ class Critic(nn.Module):
     self.mha = nn.MultiheadAttention(self.n_embed, 1, batch_first=True)
     self.layernorm = nn.LayerNorm(self.n_embed)
 
-    self.lstm = nn.LSTM(self.n_embed,
+    self.lstm = nn.LSTM(self.n_embed+action_dim,
                         self.n_embed,
                         num_layers=hp.recurrent_layers)
     self.out = layer_init(nn.Linear(self.n_embed, 1), std=1)
@@ -492,7 +499,10 @@ class Critic(nn.Module):
     self.hidden_cell = (torch.zeros(hp.recurrent_layers, batch_size, hp.hidden_size).to(device),
                         torch.zeros(hp.recurrent_layers, batch_size, hp.hidden_size).to(device))
 
-  def forward(self, state: torch.tensor, terminal: torch.tensor = None):
+  def forward(self, 
+              state: torch.tensor,
+              prev_action: torch.tensor, 
+              terminal: torch.tensor = None):
     inp = state  # TODO: Needed for debugging only
     seq_len, batch_size = state.shape[:2]
     state = state.reshape(seq_len, batch_size, *self.obs_shape)
@@ -513,6 +523,7 @@ class Critic(nn.Module):
     if terminal is not None:
       self.hidden_cell = [
           value * (1.0 - terminal).reshape(1, batch_size, 1) for value in self.hidden_cell]
+    x = torch.cat((x, prev_action), dim=-1)
     _, self.hidden_cell = self.lstm(x, self.hidden_cell)
 
     # Skip path from MHA to the output
@@ -553,7 +564,10 @@ def gather_trajectories(input_data):
                      "actor_hidden_states": [],
                      "actor_cell_states": [],
                      "critic_hidden_states": [],
-                     "critic_cell_states": []}
+                     "critic_cell_states": [],
+                     "prev_actions": [],
+                    #  "pulse_indices": [],
+                     }
   terminal = torch.ones(hp.parallel_rollouts)
 
   with torch.no_grad():
@@ -572,21 +586,32 @@ def gather_trajectories(input_data):
       trajectory_data["critic_cell_states"].append(
           critic.hidden_cell[1].squeeze(0).cpu())
 
+      # Get previous action
+      if i == 0:
+        prev_action = torch.zeros(hp.parallel_rollouts, actor.action_dim)
+      else:
+        prev_action = trajectory_data["actions"][-1]
+      # TODO: Add previous action to actor forward()
       # Choose next action
       state = torch.tensor(obsv, dtype=torch.float32)
-      value = critic(state.unsqueeze(0).to(
-          GATHER_DEVICE), terminal.to(GATHER_DEVICE))
-      action_dist = actor(state.unsqueeze(0).to(
-          GATHER_DEVICE), terminal.to(GATHER_DEVICE))
+      value = critic(
+        state.unsqueeze(0).to(GATHER_DEVICE),
+        prev_action.unsqueeze(0).to(GATHER_DEVICE), 
+        terminal.to(GATHER_DEVICE))
+      action_dist = actor(
+        state.unsqueeze(0).to(GATHER_DEVICE), 
+        prev_action.unsqueeze(0).to(GATHER_DEVICE),
+        terminal.to(GATHER_DEVICE))
       action = action_dist.sample().reshape(hp.parallel_rollouts, -1)
       if not actor.continuous_action_space:
         action = action.squeeze(1)
       trajectory_data["states"].append(state)
       trajectory_data["values"].append(value.squeeze(1).cpu())
       trajectory_data["actions"].append(action.cpu())
+      trajectory_data["prev_actions"].append(prev_action.cpu())
       trajectory_data["action_probabilities"].append(
           action_dist.log_prob(action).cpu())
-      # TODO: Add previous action and current pulse index to state
+      
 
       # Step environment
       action_np = action.cpu().numpy()
@@ -608,8 +633,9 @@ def gather_trajectories(input_data):
 
     # Compute final value to allow for incomplete episodes.
     state = torch.tensor(obsv, dtype=torch.float32)
-    value = critic(state.unsqueeze(0).to(
-        GATHER_DEVICE), terminal.to(GATHER_DEVICE))
+    value = critic(state=state.unsqueeze(0).to(GATHER_DEVICE), 
+                   prev_action=prev_action.unsqueeze(0).to(GATHER_DEVICE),
+                   terminal=terminal.to(GATHER_DEVICE))
     # Future value for terminal episodes is 0.
     trajectory_data["values"].append(value.squeeze(1).cpu() * (1 - terminal))
 
@@ -698,7 +724,7 @@ def pad_and_compute_returns(trajectory_episodes, len_episodes):
 
 
 @dataclass
-class TrajectorBatch():
+class TrajectoryBatch():
   """
   Dataclass for storing data batch.
   """
@@ -712,6 +738,9 @@ class TrajectorBatch():
   actor_cell_states: torch.tensor
   critic_hidden_states: torch.tensor
   critic_cell_states: torch.tensor
+  # TODO: Add logic for this
+  prev_actions: torch.tensor
+  # pulse_indices: torch.tensor
 
 # %%
 
@@ -752,8 +781,8 @@ class TrajectoryDataset():
       series_idx = np.linspace(
           seq_idx, seq_idx + self.batch_len - 1, num=self.batch_len, dtype=np.int64)
       self.batch_count += 1
-      return TrajectorBatch(**{key: value[eps_idx, series_idx]for key, value
-                               in self.trajectories.items() if key in TrajectorBatch.__dataclass_fields__.keys()},
+      return TrajectoryBatch(**{key: value[eps_idx, series_idx]for key, value
+                               in self.trajectories.items() if key in TrajectoryBatch.__dataclass_fields__.keys()},
                             batch_size=actual_batch_size)
 
 # %% [markdown]
@@ -783,7 +812,7 @@ def train_model(actor, critic, actor_optimizer, critic_optimizer, iteration, sto
     # Vector environment manages multiple instances of the environment.
     # A key difference between this and the standard gym environment is it automatically resets.
     # Therefore when the done flag is active in the done vector the corresponding state is the first new state.
-  env = gym.vector.SyncVectorEnv(
+  env = gym.vector.AsyncVectorEnv(
       [make_env(ENV, i, DISCOUNT, RANDOM_SEED) for i in range(hp.parallel_rollouts)])
   while iteration < stop_conditions.max_iterations:
 
@@ -834,7 +863,7 @@ def train_model(actor, critic, actor_optimizer, critic_optimizer, iteration, sto
 
         # Update actor
         actor_optimizer.zero_grad()
-        action_dist = actor(batch.states)
+        action_dist = actor(state=batch.states, prev_action=batch.prev_actions)
         # Action dist runs on cpu as a workaround to CUDA illegal memory access.
         action_probabilities = action_dist.log_prob(
             batch.actions[-1, :].to("cpu")).to(TRAIN_DEVICE)
@@ -856,7 +885,7 @@ def train_model(actor, critic, actor_optimizer, critic_optimizer, iteration, sto
         critic_optimizer.zero_grad()
         critic.hidden_cell = (
             batch.critic_hidden_states[:1], batch.critic_cell_states[:1])
-        values = critic(batch.states)
+        values = critic(state=batch.states, prev_action=batch.prev_actions)
         critic_loss = F.mse_loss(
             batch.discounted_returns[-1, :], values.squeeze(1))
         torch.nn.utils.clip_grad.clip_grad_norm_(

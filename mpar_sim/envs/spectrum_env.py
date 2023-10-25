@@ -247,7 +247,18 @@ class SpectrumEnv(gym.Env):
       
 if __name__ == '__main__':
   # Computing SAA metrics. Don't need any kwargs
-  env = SpectrumEnv()
+#   ENV_KWARGS = dict(
+#     dataset="/home/shane/data/hocae_snaps_2_64ghz.dat",
+#     pri=10,
+#     order="F",
+#     collision_weight=30,
+#     # max_collision=0.005,
+# )
+  env = SpectrumEnv(dataset="/home/shane/data/hocae_snaps_2_64ghz.dat",
+    pri=10,
+    order="F",
+    collision_weight=30,
+  )
 
   obses = []
   obs, info = env.reset()

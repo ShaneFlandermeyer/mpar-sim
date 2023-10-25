@@ -18,10 +18,10 @@ from mpar_sim.wrappers.first_n import TakeFirstN
 from mpar_sim.wrappers.last_n import TakeLastN
 
 ENV_KWARGS = dict(
-    dataset="/home/shane/data/HOCAE_Snaps_bool.dat",
+    dataset="/home/shane/data/hocae_snaps_2_64ghz.dat",
     pri=10,
     order="F",
-    collision_weight=30,
+    collision_weight=50,
     n_action_bins=10,
 )
 
@@ -31,7 +31,7 @@ def parse_args():
   parser = argparse.ArgumentParser()
   parser.add_argument("--exp-name", type=str, default=os.path.basename(__file__).rstrip(".py"),
       help="the name of this experiment")
-  parser.add_argument("--logdir", type=str, default="trs/logs/ddqn",)
+  parser.add_argument("--logdir", type=str, default="trs/logs/ddqn/2_64_experiment1",)
   parser.add_argument("--seed", type=int, default=np.random.randint(0, 2**32 - 1),
       help="seed of the experiment")
   parser.add_argument("--torch-deterministic", type=lambda x: bool(strtobool(x)), default=True, nargs="?", const=True,
