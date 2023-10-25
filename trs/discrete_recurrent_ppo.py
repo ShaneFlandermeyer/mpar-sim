@@ -66,11 +66,13 @@ GATHER_DEVICE = "cuda" if torch.cuda.is_available() and not FORCE_CPU_GATHER els
 
 # %%
 # Environment parameters
-ENV = "mpar_sim/DiscreteSpectrumEnv"
+ENV = "mpar_sim/SpectrumEnv"
 ENV_KWARGS = dict(
     dataset="/home/shane/data/HOCAE_Snaps_bool.dat",
     pri=10,
     order="F",
+    collision_weight=30,
+    n_action_bins=10,
 )
 EXPERIMENT_NAME = "DiscreteSpectrumEnv" + f"_{time.strftime('%Y%m%d_%H%M%S')}" + f"_{RANDOM_SEED}"
 

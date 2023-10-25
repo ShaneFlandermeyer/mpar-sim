@@ -11,7 +11,10 @@ from collections import deque
 
 class SpectrumEnv(gym.Env):
   """
-  This is a modified version of the environment I created for the original paper submission. Here, 
+  This is a modified version of the environment I created for the original paper submission. 
+  
+  # TODO: Merge discrete and continuous envs
+  # TODO: Remove max bandwidth term in reward function?
   """
   metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 30}
 
@@ -19,7 +22,9 @@ class SpectrumEnv(gym.Env):
                render_mode = None, 
                nfft: int = 1024,
                pri: int = 10,
-               max_collision: float = 0.005,
+               collision_weight: float = 1,
+               n_action_bins: int = None,
+              #  max_collision: float = 0.005,
                n_pulse_cpi: int = 256,
                dataset: str = "/home/shane/data/hocae_snaps_2_4_cleaned_10_0.dat",
                order='C',
@@ -27,9 +32,10 @@ class SpectrumEnv(gym.Env):
     # Parameters
     self.nfft = nfft
     self.pri = pri
-    self.max_collision = max_collision
+    # self.max_collision = max_collision
     self.n_pulse_cpi = n_pulse_cpi
     self.dataset = dataset
+    self.collision_weight = collision_weight
     
     self.np_random = np.random.RandomState(seed)
 
@@ -42,7 +48,13 @@ class SpectrumEnv(gym.Env):
 
     self.observation_space = gym.spaces.Box(low=0, high=1,
                                             shape=(self.pri, self.nfft,))
-    self.action_space = gym.spaces.Box(low=0, high=1, shape=(2,))
+    if n_action_bins is not None:
+      self.action_table = self._create_action_table(n_action_bins)
+      self.action_space = gym.spaces.Discrete(self.action_table.shape[0])
+      self.discrete_actions = True
+    else:
+      self.action_space = gym.spaces.Box(low=0, high=1, shape=(2,))
+      self.discrete_actions = False
     
     assert render_mode is None or render_mode in self.metadata["render_modes"]
     self.render_mode = render_mode
@@ -89,12 +101,14 @@ class SpectrumEnv(gym.Env):
     return obs, {}
 
   def step(self, action: np.ndarray):
+    if self.discrete_actions:
+      action = self.action_table[action]
     # Compute radar spectrum
     start_freq = action[0]
     stop_freq = np.clip(action[1], start_freq, 1)
-    bandwidth = stop_freq - start_freq
-    fc = start_freq + bandwidth / 2
-    spectrum = np.logical_and(
+    radar_bw = stop_freq - start_freq
+    fc = start_freq + radar_bw / 2
+    radar_spectrum = np.logical_and(
         self.freq_axis > start_freq, self.freq_axis < stop_freq)
     
     obs = np.zeros((self.pri, self.nfft), dtype=np.float32)
@@ -103,22 +117,23 @@ class SpectrumEnv(gym.Env):
     obs = np.roll(obs, self.num_shift, axis=1)
     
     collision_bw = np.count_nonzero(
-      np.logical_and(spectrum == 1, obs[0] == 1)
+      np.logical_and(radar_spectrum == 1, obs[0] == 1)
     ) / self.nfft
 
     # Compute max bandwidth from contiguous zeros in obs[0]
-    widest = self._get_widest(obs[0])
-    widest_bw = (widest[1] - widest[0]) / self.nfft
-    reward = (bandwidth - widest_bw - collision_bw) if collision_bw <= self.max_collision else (0 - widest_bw - collision_bw)
+    widest_start, widest_stop = self._get_widest(obs[0])
+    widest_bw = (widest_stop - widest_start) / self.nfft
+    reward = (radar_bw - widest_bw) - self.collision_weight*collision_bw 
+    # if collision_bw <= self.max_collision else (0 - widest_bw) - self.collision_weight*collision_bw
 
     self.step_count += 1
-    self.bandwidths.append(bandwidth)
+    self.bandwidths.append(radar_bw)
     self.collisions.append(collision_bw)
     self.widests.append(widest_bw)
-    self.missed_bandwidths.append(widest_bw - bandwidth)
-    self.cpi_bandwidths.append(bandwidth)
+    self.missed_bandwidths.append(widest_bw - radar_bw)
+    self.cpi_bandwidths.append(radar_bw)
     self.cpi_center_freqs.append(fc)
-    self.bandwidth_diffs.append(abs(bandwidth - np.mean(self.cpi_bandwidths)))
+    self.bandwidth_diffs.append(abs(radar_bw - np.mean(self.cpi_bandwidths)))
     self.center_freq_diffs.append(abs(fc - np.mean(self.cpi_center_freqs)))
 
     info = {
@@ -128,9 +143,11 @@ class SpectrumEnv(gym.Env):
         'mean_missed_bw': np.mean(self.missed_bandwidths),
         'mean_bw_diff': np.mean(self.bandwidth_diffs),
         'mean_fc_diff': np.mean(self.center_freq_diffs),
+        'pulse_index': (self.step_count % self.n_pulse_cpi) / self.n_pulse_cpi,
     }
     
     # Measure the bandwidth difference between pulses
+    # TODO: Remove this and handle in reset()
     if self.step_count % self.n_pulse_cpi == 0:
       self.cpi_bandwidths.clear()
       self.cpi_center_freqs.clear()
@@ -141,7 +158,7 @@ class SpectrumEnv(gym.Env):
       for i in range(self.pri):
         self.history["interference"].append(obs[i])
         if i == 0:
-          self.history["radar"].append(spectrum)
+          self.history["radar"].append(radar_spectrum)
         else:
           self.history["radar"].append(np.zeros(self.nfft, dtype=np.uint8))
       self._render_frame()
@@ -149,27 +166,6 @@ class SpectrumEnv(gym.Env):
     terminated = False
     truncated = False
     return obs, reward, terminated, truncated, info
-  
-  def _get_widest(self, spectrum: np.ndarray):
-    # Group consecutive bins by value
-    gap_widths = np.array([[x[0], len(list(x[1]))]
-                           for x in itertools.groupby(spectrum)])
-    vals = gap_widths[:, 0]
-    widths = gap_widths[:, 1]
-    starts = np.cumsum(widths) - widths
-
-    # Compute the start frequency and width of the widest gap (in bins)
-    open = (vals == 0)
-    if not np.any(open):
-      return np.array([0, 0])
-    istart_widest = np.argmax(widths[open])
-    widest_start = starts[open][istart_widest]
-    widest_bw = widths[open][istart_widest]
-    widest_stop = widest_start + widest_bw
-
-    widest_start = widest_start
-    widest_stop = widest_stop
-    return np.array([widest_start, widest_stop])
 
   def render(self):
     if self.render_mode == "rgb_array":
@@ -209,20 +205,74 @@ class SpectrumEnv(gym.Env):
       self.clock.tick(self.metadata["render_fps"])
     else:
       return pixels
+    
+  @staticmethod
+  def _get_widest(spectrum: np.ndarray):
+    # Group consecutive bins by value
+    gap_widths = np.array([[x[0], len(list(x[1]))]
+                           for x in itertools.groupby(spectrum)])
+    vals = gap_widths[:, 0]
+    widths = gap_widths[:, 1]
+    starts = np.cumsum(widths) - widths
+
+    # Compute the start frequency and width of the widest gap (in bins)
+    open = (vals == 0)
+    if not np.any(open):
+      return np.array([0, 0])
+    istart_widest = np.argmax(widths[open])
+    widest_start = starts[open][istart_widest]
+    widest_bw = widths[open][istart_widest]
+    widest_stop = widest_start + widest_bw
+
+    widest_start = widest_start
+    widest_stop = widest_stop
+    return widest_start, widest_stop
+  
+  @staticmethod
+  def _create_action_table(n_action_bins: int):
+    n_actions = n_action_bins*(n_action_bins+1)//2
+    action_table = np.zeros((n_actions, 2))
+    action_index = 0
+    for i in range(1, n_action_bins+1):
+      x = np.zeros(n_action_bins)
+      x[:i] = 1
+      for j in range(n_action_bins-(i-1)):
+        xr = np.roll(x, j)
+        start = np.argmax(xr)
+        stop = start + i
+        action_table[action_index] = np.array([start, stop]) / n_action_bins
+        action_index += 1
+    return action_table
 
       
 if __name__ == '__main__':
+  # Computing SAA metrics. Don't need any kwargs
   env = SpectrumEnv()
 
   obses = []
   obs, info = env.reset()
-  # obs, reward, term, trunc, info = env.step(np.array([[0, 1]]))
-  obses.append(obs)
-  for i in range(100):
-    obs, reward, term, trunc, info = env.step(np.array([0, 1]))
-    obses.append(obs)
-    # env.render()
-  history = np.concatenate(obses)
-  plt.imshow(history)
-  plt.savefig('./test.png')
-  # plt.show()
+  
+  metrics = dict(
+    mean_bw=0,
+    mean_collision_bw=0,
+    mean_widest_bw=0,
+    mean_missed_bw=0,
+    mean_bw_diff=0,
+    mean_fc_diff=0,
+  )
+  nsteps = 100_000
+  for i in range(nsteps):
+    start, stop = env._get_widest(obs[-1])
+    action = np.array([start, stop]) / 1024
+    obs, reward, term, trunc, info = env.step(action)
+    for key in metrics.keys():
+      metrics[key] += info[key]
+      
+    if i % 256 == 0:
+      ob, info = env.reset()
+      print(i)
+      
+  for key in metrics.keys():
+    metrics[key] /= nsteps
+    print(key, metrics[key])
+    

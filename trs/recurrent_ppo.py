@@ -71,10 +71,10 @@ ENV_KWARGS = dict(
     dataset="/home/shane/data/HOCAE_Snaps_bool.dat",
     pri=10,
     order="F",
+    collision_weight=30,
+    # max_collision=0.005,
 )
-# TODO: Reset this to 10
 TAKE_FIRST_N = 10
-# ENV_KWARGS = {"dataset": "/home/shane/data/HOCAE_Snaps_bool.dat", "order": "F"}
 EXPERIMENT_NAME = "SpectrumEnv" + \
     f"_{time.strftime('%Y%m%d_%H%M%S')}" + f"_{RANDOM_SEED}"
 
@@ -83,7 +83,7 @@ SCALE_REWARD:         float = 1
 MIN_REWARD:           float = -1.
 HIDDEN_SIZE:          float = 64
 BATCH_SIZE:           int = 256
-DISCOUNT:             float = 0.25
+DISCOUNT:             float = 0.7
 GAE_LAMBDA:           float = 0.95
 PPO_CLIP:             float = 0.2
 PPO_EPOCHS:           int = 10
@@ -208,11 +208,6 @@ def log_metrics(infos: Dict, writer: SummaryWriter, step: int):
     if info is None:
       continue
 
-    writer.add_scalar("charts/episodic_return",
-                      info["episode"]["r"], step)
-    writer.add_scalar("charts/episodic_length",
-                      info["episode"]["l"], step)
-
     mean_bws.append(info["mean_bw"])
     mean_cols.append(info["mean_collision_bw"])
     mean_widests.append(info["mean_widest_bw"])
@@ -224,6 +219,7 @@ def log_metrics(infos: Dict, writer: SummaryWriter, step: int):
     avg_mean_bw = np.mean(mean_bws)
     avg_mean_col = np.mean(mean_cols)
     avg_mean_widest = np.mean(mean_widests)
+    # avg_mean_missed_bw = abs(avg_mean_bw - avg_mean_widest)
     avg_mean_missed_bw = np.mean(mean_missed_bws)
     avg_mean_bw_diff = np.mean(mean_bw_diffs)
     avg_mean_fc_diff = np.mean(mean_fc_diffs)
@@ -233,6 +229,10 @@ def log_metrics(infos: Dict, writer: SummaryWriter, step: int):
     writer.add_scalar("charts/mean_missed_bw", avg_mean_missed_bw, step)
     writer.add_scalar("charts/mean_bw_diff", avg_mean_bw_diff, step)
     writer.add_scalar("charts/mean_fc_diff", avg_mean_fc_diff, step)
+    writer.add_scalar("charts/episodic_return",
+                          infos['final_info'][0]["episode"]["r"], step)
+    writer.add_scalar("charts/episodic_length",
+                          infos['final_info'][0]["episode"]["l"], step)
     print(
         f"global_step={step}, bw={avg_mean_bw:.3f}, col={avg_mean_col:.3f}, widest={avg_mean_widest:.3f}")
 
@@ -366,7 +366,7 @@ class StopConditions():
   """
   best_reward: float = -1e6
   fail_to_improve_count: int = 0
-  max_iterations: int = 100
+  max_iterations: int = 101
 # %% [markdown]
 # # Recurrent Models
 
@@ -415,7 +415,7 @@ class Actor(nn.Module):
     self.n_embed = hp.hidden_size
     self.num_recurrent_layers = hp.recurrent_layers
     self.position_encoding = PositionalEncoding(self.n_embed,
-                                                dropout=0., max_len=10_000)
+                                                dropout=0.1, max_len=10_000)
 
     self.embed = layer_init(nn.Linear(self.obs_shape[1], self.n_embed))
     self.mha = nn.MultiheadAttention(self.n_embed, 1, batch_first=True)
@@ -475,7 +475,7 @@ class Critic(nn.Module):
     self.obs_shape = obs_shape
     self.n_embed = hp.hidden_size
     self.position_encoding = PositionalEncoding(self.n_embed,
-                                                dropout=0., max_len=10_000)
+                                                dropout=0.1, max_len=10_000)
 
     self.embed = layer_init(nn.Linear(self.obs_shape[1], self.n_embed))
     self.mha = nn.MultiheadAttention(self.n_embed, 1, batch_first=True)
@@ -586,6 +586,7 @@ def gather_trajectories(input_data):
       trajectory_data["actions"].append(action.cpu())
       trajectory_data["action_probabilities"].append(
           action_dist.log_prob(action).cpu())
+      # TODO: Add previous action and current pulse index to state
 
       # Step environment
       action_np = action.cpu().numpy()
@@ -782,7 +783,7 @@ def train_model(actor, critic, actor_optimizer, critic_optimizer, iteration, sto
     # Vector environment manages multiple instances of the environment.
     # A key difference between this and the standard gym environment is it automatically resets.
     # Therefore when the done flag is active in the done vector the corresponding state is the first new state.
-  env = gym.vector.AsyncVectorEnv(
+  env = gym.vector.SyncVectorEnv(
       [make_env(ENV, i, DISCOUNT, RANDOM_SEED) for i in range(hp.parallel_rollouts)])
   while iteration < stop_conditions.max_iterations:
 
