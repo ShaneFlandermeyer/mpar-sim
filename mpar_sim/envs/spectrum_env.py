@@ -9,34 +9,36 @@ from mpar_sim.interference.recorded import RecordedInterference
 from mpar_sim.interference.single_tone import SingleToneInterference
 from collections import deque
 
+
 class SpectrumEnv(gym.Env):
   """
   This is a modified version of the environment I created for the original paper submission. 
-  
-  # TODO: Merge discrete and continuous envs
-  # TODO: Remove max bandwidth term in reward function?
+
   """
   metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 30}
 
-  def __init__(self, 
-               render_mode = None, 
+  def __init__(self,
+               render_mode=None,
                nfft: int = 1024,
                pri: int = 10,
-               collision_weight: float = 1,
                n_action_bins: int = None,
-              #  max_collision: float = 0.005,
                n_pulse_cpi: int = 256,
                dataset: str = "/home/shane/data/hocae_snaps_2_4_cleaned_10_0.dat",
                order='C',
+               # Reward hyperparameters
+               collision_weight: float = 1,
+               adapt_weight_bw: float = 0,
+               adapt_weight_fc: float = 0,
                seed: int = np.random.randint(0, 2**32 - 1)):
     # Parameters
     self.nfft = nfft
     self.pri = pri
-    # self.max_collision = max_collision
     self.n_pulse_cpi = n_pulse_cpi
     self.dataset = dataset
     self.collision_weight = collision_weight
-    
+    self.adapt_weight_bw = adapt_weight_bw
+    self.adapt_weight_fc = adapt_weight_fc
+
     self.np_random = np.random.RandomState(seed)
 
     self.interference = RecordedInterference(
@@ -48,14 +50,17 @@ class SpectrumEnv(gym.Env):
 
     self.observation_space = gym.spaces.Box(low=0, high=1,
                                             shape=(self.pri, self.nfft,))
+    self.min_bandwidth = 0.
     if n_action_bins is not None:
       self.action_table = self._create_action_table(n_action_bins)
       self.action_space = gym.spaces.Discrete(self.action_table.shape[0])
       self.discrete_actions = True
     else:
-      self.action_space = gym.spaces.Box(low=0, high=1, shape=(2,))
+      self.action_space = gym.spaces.Box(low=np.array([0, 0]),
+                                         high=np.array([1, 1]),
+          shape=(2,))
       self.discrete_actions = False
-    
+
     assert render_mode is None or render_mode in self.metadata["render_modes"]
     self.render_mode = render_mode
     # Pygame setup
@@ -76,9 +81,11 @@ class SpectrumEnv(gym.Env):
     self.cpi_center_freqs = []
     self.bandwidth_diffs = []
     self.center_freq_diffs = []
-    
+
     self.num_shift = self.np_random.randint(0, self.nfft)
-    
+    # TODO: Remove
+    self.num_shift = 0
+
     # Store last N observations
     self.history_len = 512
     self.history = {
@@ -91,13 +98,13 @@ class SpectrumEnv(gym.Env):
     for i in range(self.pri):
       obs[i] = self.interference.step(self.time)
     obs = np.roll(obs, self.num_shift, axis=1)
-    
+
     if self.render_mode == "human":
-        for i in range(self.pri):
-          self.history["interference"].append(obs[i])
-          self.history["radar"].append(np.zeros(self.nfft, dtype=np.uint8))
-        self._render_frame()
-        
+      for i in range(self.pri):
+        self.history["interference"].append(obs[i])
+        self.history["radar"].append(np.zeros(self.nfft, dtype=np.uint8))
+      self._render_frame()
+
     return obs, {}
 
   def step(self, action: np.ndarray):
@@ -105,26 +112,32 @@ class SpectrumEnv(gym.Env):
       action = self.action_table[action]
     # Compute radar spectrum
     start_freq = action[0]
-    stop_freq = np.clip(action[1], start_freq, 1)
+    stop_freq = np.clip(action[1], action[0], 1)
     radar_bw = stop_freq - start_freq
     fc = start_freq + radar_bw / 2
     radar_spectrum = np.logical_and(
         self.freq_axis > start_freq, self.freq_axis < stop_freq)
-    
+
     obs = np.zeros((self.pri, self.nfft), dtype=np.float32)
     for i in range(self.pri):
       obs[i] = self.interference.step(self.time)
     obs = np.roll(obs, self.num_shift, axis=1)
-    
+
     collision_bw = np.count_nonzero(
-      np.logical_and(radar_spectrum == 1, obs[0] == 1)
+        np.logical_and(radar_spectrum == 1, obs[0] == 1)
     ) / self.nfft
 
     # Compute max bandwidth from contiguous zeros in obs[0]
     widest_start, widest_stop = self._get_widest(obs[0])
     widest_bw = (widest_stop - widest_start) / self.nfft
-    reward = (radar_bw - widest_bw) - self.collision_weight*collision_bw 
-    # if collision_bw <= self.max_collision else (0 - widest_bw) - self.collision_weight*collision_bw
+    spectrum_reward = (radar_bw - widest_bw) - \
+        self.collision_weight*collision_bw
+    if self.step_count == 0:
+      adapt_penalty = 0
+    else:
+      adapt_penalty = self.adapt_weight_bw * abs(radar_bw - np.mean(
+          self.cpi_bandwidths)) + self.adapt_weight_fc * abs(fc - np.mean(self.cpi_center_freqs))
+    reward = np.clip(spectrum_reward, -1, None) - np.clip(adapt_penalty, -1, None)
 
     self.step_count += 1
     self.bandwidths.append(radar_bw)
@@ -144,16 +157,10 @@ class SpectrumEnv(gym.Env):
         'mean_bw_diff': np.mean(self.bandwidth_diffs),
         'mean_fc_diff': np.mean(self.center_freq_diffs),
         'pulse_index': (self.step_count % self.n_pulse_cpi) / self.n_pulse_cpi,
+        'start_freq': start_freq,
+        'stop_freq': stop_freq,
     }
-    
-    # Measure the bandwidth difference between pulses
-    # TODO: Remove this and handle in reset()
-    if self.step_count % self.n_pulse_cpi == 0:
-      self.cpi_bandwidths.clear()
-      self.cpi_center_freqs.clear()
-      self.bandwidth_diffs.clear()
-      self.center_freq_diffs.clear()
-    
+
     if self.render_mode == "human":
       for i in range(self.pri):
         self.history["interference"].append(obs[i])
@@ -162,8 +169,8 @@ class SpectrumEnv(gym.Env):
         else:
           self.history["radar"].append(np.zeros(self.nfft, dtype=np.uint8))
       self._render_frame()
-        
-    terminated = False
+
+    terminated = self.step_count >= self.n_pulse_cpi
     truncated = False
     return obs, reward, terminated, truncated, info
 
@@ -174,8 +181,9 @@ class SpectrumEnv(gym.Env):
   def close(self):
     if self.render_mode == "human":
       pygame.quit()
-      
+
   def _render_frame(self):
+    # return # TODO
     if self.window is None and self.render_mode == "human":
       pygame.init()
       pygame.display.init()
@@ -205,7 +213,7 @@ class SpectrumEnv(gym.Env):
       self.clock.tick(self.metadata["render_fps"])
     else:
       return pixels
-    
+
   @staticmethod
   def _get_widest(spectrum: np.ndarray):
     # Group consecutive bins by value
@@ -227,7 +235,7 @@ class SpectrumEnv(gym.Env):
     widest_start = widest_start
     widest_stop = widest_stop
     return widest_start, widest_stop
-  
+
   @staticmethod
   def _create_action_table(n_action_bins: int):
     n_actions = n_action_bins*(n_action_bins+1)//2
@@ -244,32 +252,32 @@ class SpectrumEnv(gym.Env):
         action_index += 1
     return action_table
 
-      
+
 if __name__ == '__main__':
   # Computing SAA metrics. Don't need any kwargs
-#   ENV_KWARGS = dict(
-#     dataset="/home/shane/data/hocae_snaps_2_64ghz.dat",
-#     pri=10,
-#     order="F",
-#     collision_weight=30,
-#     # max_collision=0.005,
-# )
-  env = SpectrumEnv(dataset="/home/shane/data/hocae_snaps_2_64ghz.dat",
-    pri=10,
-    order="F",
-    collision_weight=30,
-  )
+  #   ENV_KWARGS = dict(
+  #     dataset="/home/shane/data/hocae_snaps_2_64ghz.dat",
+  #     pri=10,
+  #     order="F",
+  #     collision_weight=30,
+  #     # max_collision=0.005,
+  # )
+  env = SpectrumEnv(dataset="/home/shane/data/hocae_snaps_2_64_cleaned_10_0.dat",
+                    pri=10,
+                    order="C",
+                    collision_weight=30,
+                    )
 
   obses = []
   obs, info = env.reset()
-  
+
   metrics = dict(
-    mean_bw=0,
-    mean_collision_bw=0,
-    mean_widest_bw=0,
-    mean_missed_bw=0,
-    mean_bw_diff=0,
-    mean_fc_diff=0,
+      mean_bw=0,
+      mean_collision_bw=0,
+      mean_widest_bw=0,
+      mean_missed_bw=0,
+      mean_bw_diff=0,
+      mean_fc_diff=0,
   )
   nsteps = 100_000
   for i in range(nsteps):
@@ -278,12 +286,11 @@ if __name__ == '__main__':
     obs, reward, term, trunc, info = env.step(action)
     for key in metrics.keys():
       metrics[key] += info[key]
-      
+
     if i % 256 == 0:
       ob, info = env.reset()
       print(i)
-      
+
   for key in metrics.keys():
     metrics[key] /= nsteps
     print(key, metrics[key])
-    

@@ -18,10 +18,11 @@ from mpar_sim.wrappers.first_n import TakeFirstN
 from mpar_sim.wrappers.last_n import TakeLastN
 
 ENV_KWARGS = dict(
-    dataset="/home/shane/data/hocae_snaps_2_64ghz.dat",
+    # dataset="/home/shane/data/hocae_snaps_2_4_cleaned_10_0.dat",
+    dataset="/home/shane/data/hocae_snaps_2_64_cleaned_10_0.dat",
     pri=10,
-    order="F",
-    collision_weight=50,
+    order="C",
+    collision_weight=40,
     n_action_bins=10,
 )
 
@@ -92,12 +93,11 @@ def parse_args():
 def make_env(env_id, seed, idx, capture_video, run_name):
   def thunk():
     if capture_video and idx == 0:
-      env = gym.make(env_id, max_episode_steps=256,
-                     render_mode="rgb_array", seed=seed+idx, **ENV_KWARGS)
+      env = gym.make(env_id, render_mode="rgb_array",
+                     seed=seed+idx, **ENV_KWARGS)
       env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
     else:
-      env = gym.make(env_id, max_episode_steps=256,
-                     seed=seed+idx, **ENV_KWARGS)
+      env = gym.make(env_id, seed=seed+idx, **ENV_KWARGS)
     env = TakeLastN(env, 1)
     # env = TakeFirstN(env, 8)
     env = gym.wrappers.FlattenObservation(env)
