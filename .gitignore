@@ -131,3 +131,5 @@ dmypy.json
 lightning_logs/
 .history/
 .vscode/
+logs/
+checkpoints/
